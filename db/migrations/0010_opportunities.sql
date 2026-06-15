@@ -16,9 +16,9 @@ SELECT
   l.price,
   l.square_meters,
   round((l.price::numeric / NULLIF(l.square_meters,0)), 0)   AS price_sqm,
-  round(m.median_price_sqm, 0)                              AS zone_median_sqm,
+  round(m.median_price_sqm::numeric, 0)                     AS zone_median_sqm,
   -- % por debajo de la mediana de la zona (0.20 = 20% más barato)
-  round(1 - (l.price::numeric / NULLIF(l.square_meters,0)) / NULLIF(m.median_price_sqm,0), 3)
+  round((1 - (l.price::numeric / NULLIF(l.square_meters,0)) / NULLIF(m.median_price_sqm::numeric,0))::numeric, 3)
                                                             AS discount_ratio,
   l.advertiser_type,
   l.zone_id,
@@ -27,7 +27,7 @@ SELECT
   l.bedrooms,
   l.bathrooms,
   l.first_seen_at,
-  round(EXTRACT(EPOCH FROM (now() - l.first_seen_at))/86400.0, 0) AS days_on_market,
+  round((EXTRACT(EPOCH FROM (now() - l.first_seen_at))/86400.0)::numeric, 0) AS days_on_market,
   (SELECT count(*) FROM listing_changes c
      WHERE c.listing_id = l.id AND c.change_type = 'price_down')  AS price_drops,
   l.latitude, l.longitude,
