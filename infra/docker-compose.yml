@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# casafari-mio · stack del VPS (Hetzner CX33 · IP 204.168.174.0)
+# Infra: solo VPS + proxies. Sin Supabase, sin Vercel.
+# Arranque: `docker compose --env-file ../.env up -d postgres redis`
+# (app y caddy se activan cuando el código de la plataforma esté construido)
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: casafari-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: casafari
+      POSTGRES_USER: casafari
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
+    # Tuning para ~8 GB de RAM (CX33). Ajustar si el plan cambia de máquina.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=5GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_connections=60"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db/migrations:/migrations:ro       # aplicar con: psql -f /migrations/0001..., en orden
+      - ../db/etl:/etl:ro
+    ports:
+      - "127.0.0.1:5432:5432"                  # solo localhost; no exponer Postgres a internet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casafari"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: casafari-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  # ── App (Node/Next, self-host). Descomentar cuando exista el código. ─────────
+  # app:
+  #   build: ..
+  #   container_name: casafari-app
+  #   restart: unless-stopped
+  #   env_file: ../.env
+  #   depends_on:
+  #     postgres: { condition: service_healthy }
+  #   ports:
+  #     - "127.0.0.1:3000:3000"
+
+  # ── Caddy: reverse proxy + TLS automático. Sirve la URL pública. ─────────────
+  # caddy:
+  #   image: caddy:2
+  #   container_name: casafari-caddy
+  #   restart: unless-stopped
+  #   ports: ["80:80", "443:443"]
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddydata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  # caddydata:
