@@ -35,7 +35,6 @@ CREATE INDEX IF NOT EXISTS idx_zones_level       ON zones(level);
 CREATE INDEX IF NOT EXISTS idx_zones_scrape      ON zones(is_scrape_target) WHERE is_scrape_target;
 CREATE INDEX IF NOT EXISTS idx_zones_boundary    ON zones USING gist(boundary);
 
-ALTER TABLE zones ENABLE ROW LEVEL SECURITY;  -- acceso por service_role (backend)
 
 -- ─── Seed: zonas de prueba iniciales ────────────────────────────────────────
 -- Municipios (nodos raíz)

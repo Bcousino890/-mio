@@ -54,7 +54,7 @@ A medida que se construya la plataforma nueva, el código vivirá en la **raíz*
 |---|---|
 | **Mercado inicial** | Madrid (venta + alquiler) |
 | **Zonas de arranque** | Barrio Salamanca, Almagro, Ibiza (capital) + Pozuelo y La Moraleja (municipios) |
-| **Stack** | TypeScript + Supabase/Postgres + **PostGIS** (extensión). Reutiliza scrapers/detector de smartbc. |
+| **Stack** | TypeScript + **Postgres self-hosted (VPS) + PostGIS**. Sin Supabase ni Vercel. Reutiliza scrapers/detector de smartbc. |
 | **Infra** | 1× Hetzner CX43 (8 vCPU / 16 GB / 160 GB) |
 | **Proxies** | Geonode residential (empezar con trial 10 GB) |
 | **IA** | OpenRouter solo como *fallback* (<€30/mes; objetivo real €2-8). Cero IA en el camino principal. |

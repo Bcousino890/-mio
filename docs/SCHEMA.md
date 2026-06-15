@@ -1,7 +1,7 @@
 # Esquema de datos — casafari-mio
 
-Modelo de la plataforma nueva (Supabase/Postgres + PostGIS). Migraciones en
-[`supabase/migrations/`](../supabase/migrations). SRID canónico: **4326 (WGS84)**.
+Modelo de la plataforma nueva (**Postgres self-hosted en VPS** + PostGIS; **sin Supabase**). Migraciones en
+[`db/migrations/`](../db/migrations). SRID canónico: **4326 (WGS84)**.
 
 ## Mapa de capas
 
@@ -46,11 +46,11 @@ Modelo de la plataforma nueva (Supabase/Postgres + PostGIS). Migraciones en
 2. **`listings` guarda TODO el mercado** (no solo particulares, como hacía smartbc). Imprescindible para comparables, AVM y exclusivas rotas.
 3. **Retención total.** Los anuncios retirados se marcan `is_active=false` + `taken_down_at`; jamás se borran.
 4. **Geometría 4326 en todo.** La cartografía INSPIRE (origen 25830) se reproyecta en la importación (`ogr2ogr -t_srs EPSG:4326`). Sin `ST_Transform` por consulta. `listings.geom`/`property.geom` son columnas GENERADAS desde lat/lng.
-5. **RLS activado** en todas las tablas; acceso desde el backend con `service_role`. Las políticas de lectura por usuario se añadirán con el modelo de auth.
+5. **Sin RLS / sin Supabase.** Postgres self-hosted en el VPS; el control de acceso lo hace el backend propio (Node), que conecta con su rol. No se usan `service_role`/PostgREST/Auth de Supabase.
 
 ## Importar los 2500 legacy
 
-Ver [`supabase/etl/import_legacy_particulares.sql`](../supabase/etl/import_legacy_particulares.sql).
+Ver [`db/etl/import_legacy_particulares.sql`](../db/etl/import_legacy_particulares.sql).
 Resumen: `pg_dump` de las tablas `particulares*` del VPS viejo → `pg_restore` en
 la BD nueva (no colisiona, los nombres no existen) → ejecutar el ETL (mapea a
 `listings` + `listing_changes` + `listing_price_history`, preservando histórico)

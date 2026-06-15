@@ -46,5 +46,3 @@ CREATE INDEX IF NOT EXISTS idx_listing_changes_listing ON listing_changes(listin
 CREATE INDEX IF NOT EXISTS idx_listing_changes_type    ON listing_changes(change_type);
 CREATE INDEX IF NOT EXISTS idx_listing_changes_at      ON listing_changes(changed_at DESC);
 
-ALTER TABLE listing_price_history ENABLE ROW LEVEL SECURITY;
-ALTER TABLE listing_changes       ENABLE ROW LEVEL SECURITY;

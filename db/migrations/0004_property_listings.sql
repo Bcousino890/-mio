@@ -110,5 +110,3 @@ CREATE INDEX IF NOT EXISTS idx_listings_portal      ON listings(portal);
 -- Fallback de dedup por texto (cuando no hay RC): trigram sobre descripción.
 CREATE INDEX IF NOT EXISTS idx_listings_desc_trgm   ON listings USING gin(description gin_trgm_ops);
 
-ALTER TABLE property ENABLE ROW LEVEL SECURITY;
-ALTER TABLE listings ENABLE ROW LEVEL SECURITY;

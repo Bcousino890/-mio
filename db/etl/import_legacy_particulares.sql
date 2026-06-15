@@ -14,7 +14,7 @@
 --   pg_restore --no-owner --no-privileges -d "$NEW_DB_URL" casafari_legacy.dump
 --
 --   # 3) Ejecutar ESTE script:
---   psql "$NEW_DB_URL" -f supabase/etl/import_legacy_particulares.sql
+--   psql "$NEW_DB_URL" -f db/etl/import_legacy_particulares.sql
 --
 --   # 4) Verificar y, si todo OK, limpiar las tablas legacy:
 --   #   DROP TABLE particulares_changes, particulares_contacts, particulares;

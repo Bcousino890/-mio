@@ -4,7 +4,7 @@
 -- PostGIS    : geometría (parcelas catastrales, puntos de anuncios, PIP).
 -- pg_trgm    : fuzzy text matching (dedup de fallback por título/dirección).
 -- unaccent   : normalización de texto (zonas, direcciones).
--- pgcrypto   : gen_random_uuid() (Supabase ya lo trae, idempotente).
+-- pgcrypto   : gen_random_uuid() (idempotente).
 --
 -- NOTA: SRID canónico del proyecto = 4326 (WGS84). La cartografía INSPIRE
 -- (origen 25830) se reproyecta a 4326 EN LA IMPORTACIÓN (ogr2ogr -t_srs).

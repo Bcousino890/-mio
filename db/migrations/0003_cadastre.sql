@@ -52,6 +52,3 @@ CREATE TABLE IF NOT EXISTS cat_cache (
 
 CREATE INDEX IF NOT EXISTS idx_cat_cache_service ON cat_cache(service);
 
-ALTER TABLE cadastre_parcel ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cadastre_unit   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cat_cache       ENABLE ROW LEVEL SECURITY;

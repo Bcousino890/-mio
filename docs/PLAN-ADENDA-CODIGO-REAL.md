@@ -2,7 +2,7 @@
 
 **v1.0 · 2026-06-15 · tras auditar `smartbc-main`**
 
-Esta adenda corrige el plan maestro con lo que **realmente ya existe** en tu código, y redefine lo que falta. El plan maestro asumía Python/Scrapy/FastAPI desde cero; la realidad es **Next.js 15 + TypeScript + Supabase (Postgres self-hosted)** con scrapers en TS ya funcionando. **No se reescribe nada: se amplía.**
+Esta adenda corrige el plan maestro con lo que **realmente ya existe** en tu código, y redefine lo que falta. El plan maestro asumía Python/Scrapy/FastAPI desde cero; la realidad es **Next.js 15 + TypeScript + Postgres self-hosted** con scrapers en TS ya funcionando (smartbc usaba Supabase self-hosted; la plataforma nueva NO usa Supabase ni Vercel — solo VPS + proxies). **No se reescribe nada: se amplía.**
 
 ---
 
@@ -73,7 +73,7 @@ El cron (`route.ts:29-31`) scrapea toda la provincia pero **descarta los profesi
                    │                                              │
                    ▼                                              ▼
    ┌──────────────────────────────────────────────────────────────────────────────────┐
-   │ Supabase Postgres (self-hosted) + AÑADIR EXTENSIÓN PostGIS                          │
+   │ Postgres self-hosted en VPS + PostGIS (sin Supabase)                                │
    │  EXISTE: particulares · particulares_changes · properties · agency_feeds · ...      │
    │  NUEVO:  listings (market-wide) · property_canonical(rc20 UNIQUE) ·                 │
    │          listing_price_history · cadastre_parcel(geom) · cadastre_unit · cat_cache  │
@@ -86,7 +86,7 @@ El cron (`route.ts:29-31`) scrapea toda la provincia pero **descarta los profesi
    └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Decisión de stack [REVISADA]:** seguir en **TypeScript/Node** para el motor RC y la API (reusa tus scrapers, detector y tipos). PostGIS se añade a tu Postgres de Supabase (es una extensión). **No Python/Scrapy** salvo que un cuello de botang lo exija — evita mantener dos ecosistemas.
+**Decisión de stack [REVISADA]:** seguir en **TypeScript/Node** para el motor RC y la API (reusa tus scrapers, detector y tipos). PostGIS se añade a tu Postgres self-hosted (es una extensión). **No Python/Scrapy** salvo que un cuello de botella lo exija — evita mantener dos ecosistemas. **Infra: solo VPS (Hetzner) + proxies (Geonode); sin Supabase ni Vercel.**
 
 ---
 
