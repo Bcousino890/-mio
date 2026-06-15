@@ -1,8 +1,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # casafari-mio · stack del VPS (Hetzner CX33 · IP 204.168.174.0)
 # Infra: solo VPS + proxies. Sin Supabase, sin Vercel.
-# Arranque: `docker compose --env-file ../.env up -d postgres redis`
-# (app y caddy se activan cuando el código de la plataforma esté construido)
+# ⚠️ El CX33 es COMPARTIDO (ya corre zinto-v2, zinto-crm, powerchat, nginx:80/443).
+#    Por eso: proyecto aislado, puertos no estándar (5433/6380, solo localhost),
+#    y memoria conservadora para ser buen vecino.
+# Arranque: `docker compose -p casafari --env-file ../.env up -d postgres redis`
+# (app y caddy se activan cuando el código de la plataforma esté construido;
+#  la URL pública irá por el nginx existente, NO por un Caddy en 80/443)
 # ─────────────────────────────────────────────────────────────────────────────
 services:
   postgres:
@@ -14,24 +18,25 @@ services:
       POSTGRES_USER: casafari
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
     # Tuning para ~8 GB de RAM (CX33). Ajustar si el plan cambia de máquina.
+    # Tuning conservador: el CX33 es COMPARTIDO con otros stacks de producción.
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=2GB"
+      - "shared_buffers=1GB"
       - "-c"
-      - "effective_cache_size=5GB"
+      - "effective_cache_size=2GB"
       - "-c"
-      - "work_mem=32MB"
+      - "work_mem=24MB"
       - "-c"
-      - "maintenance_work_mem=512MB"
+      - "maintenance_work_mem=256MB"
       - "-c"
-      - "max_connections=60"
+      - "max_connections=40"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../db/migrations:/migrations:ro       # aplicar con: psql -f /migrations/0001..., en orden
       - ../db/etl:/etl:ro
     ports:
-      - "127.0.0.1:5432:5432"                  # solo localhost; no exponer Postgres a internet
+      - "127.0.0.1:5433:5432"                  # 5433 en host (5432 lo usan otros stacks); solo localhost
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U casafari"]
       interval: 10s
@@ -42,11 +47,11 @@ services:
     image: redis:7-alpine
     container_name: casafari-redis
     restart: unless-stopped
-    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
     volumes:
       - redisdata:/data
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379"                  # 6380 en host (6379 lo usan otros stacks)
 
   # ── App (Node/Next, self-host). Descomentar cuando exista el código. ─────────
   # app:
