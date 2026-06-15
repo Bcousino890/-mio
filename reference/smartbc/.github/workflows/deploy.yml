@@ -1,0 +1,56 @@
+name: Deploy to VPS (manual)
+
+# AUTO-DEPLOY: lo hace el VPS por sí mismo con un cron cada 5 min
+# (/opt/vps-autodeploy.sh hace git fetch + reset + build + pm2 restart +
+# migraciones). Ver scripts/vps-autodeploy.sh. Por eso este workflow YA NO se
+# dispara con push: solo queda como botón MANUAL desde la pestaña Actions, por
+# si algún día se quiere forzar un deploy desde GitHub.
+#
+# Para usarlo hace falta el secret VPS_SSH_KEY (clave privada autorizada en el
+# VPS). El cron NO lo necesita.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+env:
+  VPS_HOST: 178.105.176.3
+  VPS_USER: root
+  VPS_PATH: /opt/smartbc-app
+  PM2_APP: smartbc-portal
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar clave SSH
+        run: |
+          if [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
+            echo "::error::Falta el secret VPS_SSH_KEY (solo necesario para el deploy manual)."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Subir código al VPS (rsync)
+        run: |
+          rsync -az \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.next' \
+            --exclude '.env.local' \
+            --exclude 'tsconfig.tsbuildinfo' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            ./ "$VPS_USER@$VPS_HOST:$VPS_PATH/"
+
+      - name: Build + restart + migraciones en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" \
+            "cd $VPS_PATH && npm install && npm run build && pm2 restart $PM2_APP && bash scripts/apply-migrations.sh"

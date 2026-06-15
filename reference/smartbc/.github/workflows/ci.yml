@@ -1,0 +1,32 @@
+name: CI
+
+# Comprueba cada PR (y cada push a main) ANTES de que el código roto llegue a
+# producción. Caza justo lo que nos ha tumbado deploys: errores de TypeScript,
+# dependencias sin instalar, y migraciones inválidas. Corre en GitHub (no toca
+# el VPS) y NO necesita secrets.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: TypeScript (compila el proyecto entero)
+        run: npx tsc --noEmit
+
+      - name: Migraciones (sin errores que rompan el deploy)
+        run: python3 scripts/lint-migrations.py

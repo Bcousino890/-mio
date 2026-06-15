@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# build / output
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# env / secrets
+.env*
+!.env.example
+*.pem
+*.key
+*credentials*
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Claude Code / agent session state
+.claude/
+**/.claude/worktrees/
+
+# misc
+coverage/
+*.local
