@@ -144,6 +144,25 @@ export function parseDetailPage(html, external_id) {
                 html.match(/id="headerMap"[\s\S]{0,200}?<li[^>]*>([^<]+)</)
   const address = addrM ? decode(addrM[1]) : (title ?? null)
 
+  // Tipo de inmueble (de "Alquiler de piso en …" / "Venta de ático …")
+  const typeM = (title ?? '').match(/(?:de|del)\s+(piso|ático|atico|estudio|dúplex|duplex|chalet|casa|local|garaje|loft|apartamento)/i)
+  const property_type = typeM ? typeM[1].toLowerCase().replace('atico', 'ático').replace('duplex', 'dúplex') : 'piso'
+
+  // "Anuncio actualizado el DD de MONTH" → días en mercado
+  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
+  let days_on_market = null
+  const upM = html.match(/actualizado el (\d{1,2}) de ([a-záéí]+)(?:\s+de\s+(\d{4}))?/i)
+  if (upM) {
+    const day = Number(upM[1])
+    const mon = MESES.indexOf(upM[2].toLowerCase())
+    if (mon >= 0) {
+      const now = new Date()
+      const year = upM[3] ? Number(upM[3]) : (mon > now.getMonth() ? now.getFullYear() - 1 : now.getFullYear())
+      const d = new Date(Date.UTC(year, mon, day))
+      days_on_market = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000))
+    }
+  }
+
   return {
     external_id,
     portal: 'idealista',
@@ -151,9 +170,11 @@ export function parseDetailPage(html, external_id) {
     source_url: `https://www.idealista.com/inmueble/${external_id}/`,
     operation,
     title, price, square_meters, bedrooms, bathrooms,
+    property_type,
     latitude, longitude,
     blur_radius_m: 180,
     address,
+    days_on_market,
     advertiser_name, advertiser_type,
     description,
     features,

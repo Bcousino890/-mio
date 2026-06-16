@@ -314,6 +314,28 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 />
               </div>
             </div>
+
+            {/* Características del anuncio (scrapeadas) */}
+            {l.features && l.features.length > 0 && (
+              <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Características del anuncio</h3>
+                <div className="flex flex-wrap gap-2">
+                  {l.features.map((f, i) => (
+                    <span key={i} className="text-[11px] text-slate-300 bg-[#151b2b] border border-[#1e2130] px-2.5 py-1 rounded-lg">
+                      {f}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Descripción (scrapeada) */}
+            {l.description && (
+              <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Descripción</h3>
+                <p className="text-sm text-slate-400 leading-relaxed whitespace-pre-line">{l.description}</p>
+              </div>
+            )}
             </div>
           )}
 

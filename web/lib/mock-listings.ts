@@ -58,6 +58,8 @@ export type Listing = {
   rc_status: 'none' | 'rc14' | 'rc20'
   exact_address?: string
   badge?: ListingBadge
+  description?: string
+  features?: string[]
   priceHistory: PriceEvent[]
   sources: Source[]
 }
@@ -320,4 +322,12 @@ function normalizeListings(listings: Listing[]): Listing[] {
   }))
 }
 
-export const mockListings: Listing[] = normalizeListings(rawListings)
+// Datos REALES scrapeados de Idealista (empezando por Goya). Si el fichero está
+// vacío se cae a los datos de ejemplo para no romper la UI en desarrollo.
+import goyaData from './listings-goya.json'
+
+const realListings = goyaData as unknown as Listing[]
+
+export const mockListings: Listing[] = normalizeListings(
+  realListings.length > 0 ? realListings : rawListings,
+)

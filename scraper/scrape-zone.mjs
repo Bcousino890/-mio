@@ -19,8 +19,10 @@
 //   --dry-run       no escribe en BD; imprime el JSON parseado
 //   --no-proxy      ignora el proxy aunque esté configurado
 // ─────────────────────────────────────────────────────────────────────────────
+import { writeFileSync } from 'node:fs'
 import { fetchHtml, SLEEP } from './lib/fetch.mjs'
 import { parseListPage, parseDetailPage, parseTotalCount } from './lib/parse.mjs'
+import { toAppListing } from './lib/to-listing.mjs'
 
 function arg(name, def = undefined) {
   const i = process.argv.indexOf(`--${name}`)
@@ -35,6 +37,7 @@ const MAX_PAGES = Number(arg('max-pages', 60))
 const LIMIT = arg('limit') ? Number(arg('limit')) : Infinity
 const DRY = !!arg('dry-run')
 const USE_PROXY = !arg('no-proxy')
+const EMIT_APP = arg('emit-app')   // ruta donde volcar el JSON con tipo Listing[]
 
 if (!ZONE) {
   console.error('✗ Falta --zone (p.ej. madrid/barrio-de-salamanca/goya)')
@@ -146,6 +149,13 @@ async function main() {
       console.error(`    ✓ [${i + 1}/${items.length}] ${detail.external_id} · ${detail.price ?? '?'} € · ${detail.square_meters ?? '?'} m² · ${detail.photos.length} fotos · ${detail.latitude ? 'geo✓' : 'geo✗'}`)
     }
     await jitter()
+  }
+
+  if (EMIT_APP) {
+    const listings = rows.map((r) => toAppListing(r, { zoneSlug: ZONE }))
+    writeFileSync(EMIT_APP, JSON.stringify(listings, null, 2))
+    console.error(`✅ ${listings.length} anuncios escritos en ${EMIT_APP} (tipo Listing[])`)
+    return
   }
 
   if (DRY) {
