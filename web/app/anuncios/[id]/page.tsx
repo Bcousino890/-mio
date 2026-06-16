@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
+const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
 
 function fmt(n: number) { return n.toLocaleString('es-ES') }
 
@@ -253,6 +254,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
 
           {/* DETALLES */}
           {tab === 'detalles' && (
+            <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Características</h3>
@@ -293,6 +295,25 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* Mapa de ubicación */}
+            <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#1a1f2e]">
+                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Ubicación</h3>
+                <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <MapPin size={12} className="text-blue-400" />
+                  {l.exact_address ?? l.zone_name}
+                </span>
+              </div>
+              <div className="h-72">
+                <DetailMap
+                  latitude={l.latitude}
+                  longitude={l.longitude}
+                  exact={!!l.exact_address}
+                />
+              </div>
+            </div>
             </div>
           )}
 
