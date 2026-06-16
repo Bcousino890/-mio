@@ -7,7 +7,7 @@
 # nuevo (aditivo) y conecta la app a la red compartida. zintoleads intacto.
 #
 #   Postgres → 127.0.0.1:5433    Redis → 127.0.0.1:6380    App → 127.0.0.1:3000
-#   Dominio público → http://204-168-174-0.nip.io  (vía nginx compartido)
+#   Dominio público → http://crm.cremme.es  (vía nginx compartido)
 #
 # Overrides opcionales (export antes de ejecutar):
 #   SHARED_NGINX=infrastructure-nginx-1
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DOMAIN="204-168-174-0.nip.io"
+DOMAIN="crm.cremme.es"
 APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
 
@@ -86,10 +86,15 @@ else
   fail "Config inválida — revertida"
 fi
 
+# ── 6.5 TLS (Let's Encrypt — manual http-01 vía docker cp, no toca zinto) ────
+log "[6.5/7] Configurando HTTPS para $DOMAIN..."
+DOMAIN="$DOMAIN" SHARED_NGINX="$SHARED_NGINX" bash "$REPO_DIR/infra/ensure-tls.sh" \
+  || warn "TLS no configurado — sigue funcionando en http"
+
 # ── 7. Fin ───────────────────────────────────────────────────────────────────
 log "[7/7] ✅ Bootstrap completado"
 echo ""
-echo "  🌐  http://$DOMAIN"
+echo "  🌐  https://$DOMAIN"
 echo "  📦  docker ps | grep casafari"
 echo "  📜  $COMPOSE logs -f app"
 echo ""
