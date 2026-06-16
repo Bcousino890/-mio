@@ -122,11 +122,30 @@ export function parseDetailPage(html, external_id) {
   // El CDN sirve cada imagen en .jpg y .webp; deduplicamos por el id numérico
   // del fichero y nos quedamos con una sola URL (.jpg) por foto.
   const byImageId = new Map()
+  const byFloorPlanId = new Map()
   for (const m of html.matchAll(/https:\/\/img\d*\.idealista\.com\/blur\/[^\s"']+?\/(\d+)\.(?:jpg|webp)/g)) {
+    // Idealista marca los planos con la palabra "plano" en la URL del contenedor
+    const context = html.slice(Math.max(0, m.index - 300), m.index)
+    const isFloorPlan = /plano|floor.?plan/i.test(context)
     const url = m[0].replace(/\/blur\/[^/]+\//, '/blur/WEB_DETAIL_TOP-L-L/').replace(/\.webp$/, '.jpg')
-    if (!byImageId.has(m[1])) byImageId.set(m[1], url)
+    if (isFloorPlan) {
+      if (!byFloorPlanId.has(m[1])) byFloorPlanId.set(m[1], url)
+    } else {
+      if (!byImageId.has(m[1])) byImageId.set(m[1], url)
+    }
   }
   const photos = [...byImageId.values()].slice(0, 40)
+  const floor_plans = [...byFloorPlanId.values()].slice(0, 5)
+
+  // Vídeos (YouTube embeds o URLs directas de vídeo en la ficha)
+  const videoIds = new Set()
+  const videos = []
+  for (const m of html.matchAll(/(?:youtube\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/g)) {
+    if (!videoIds.has(m[1])) {
+      videoIds.add(m[1])
+      videos.push(`https://www.youtube.com/embed/${m[1]}`)
+    }
+  }
 
   // Anunciante
   const advM = html.match(/class="professional-name"[^>]*>\s*<[^>]*>\s*([^<]+)/) ||
@@ -179,5 +198,7 @@ export function parseDetailPage(html, external_id) {
     description,
     features,
     photos,
+    floor_plans,
+    videos,
   }
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
+import ThemeProvider from '@/components/ThemeProvider'
 
 export const metadata: Metadata = {
   title: 'Casafari Mio · Madrid',
@@ -9,15 +10,17 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className="h-full">
+    <html lang="es" className="h-full" data-theme="dark">
       <body className="h-full overflow-hidden">
-        <Sidebar />
-        <main
-          style={{ marginLeft: 'var(--sidebar-w)' }}
-          className="h-full bg-[#0a0d14]"
-        >
-          {children}
-        </main>
+        <ThemeProvider>
+          <Sidebar />
+          <main
+            style={{ marginLeft: 'var(--sidebar-w)', background: 'var(--c-bg)' }}
+            className="h-full"
+          >
+            {children}
+          </main>
+        </ThemeProvider>
       </body>
     </html>
   )

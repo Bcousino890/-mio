@@ -62,6 +62,8 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
     badge,
     description: row.description ?? undefined,
     features: row.features ?? [],
+    floor_plans: row.floor_plans ?? [],
+    videos: row.videos ?? [],
     priceHistory: [
       { date: listedDate, price, event: 'listed' },
     ],

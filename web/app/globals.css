@@ -2,16 +2,70 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme variables ──────────────────────────────────────────── */
 :root {
   --sidebar-w: 220px;
+
+  /* Backgrounds */
+  --c-bg:          #0a0d14;
+  --c-bg-deep:     #05070d;
+  --c-card:        #0d1117;
+  --c-surface:     #151b2b;
+  --c-hover:       #0f1520;
+  --c-border:      #1a1f2e;
+  --c-border-card: #1e2130;
+  --c-active:      #1e2a45;
+  --c-sidebar-bg:  #0f1117;
+
+  /* Text */
+  --c-text-1: #e2e8f0;
+  --c-text-2: #94a3b8;
+  --c-text-3: #64748b;
+  --c-text-4: #475569;
+  --c-text-5: #2d3a4f;
 }
 
+[data-theme="light"] {
+  /* Backgrounds */
+  --c-bg:          #f1f5f9;
+  --c-bg-deep:     #e8edf5;
+  --c-card:        #ffffff;
+  --c-surface:     #f8fafc;
+  --c-hover:       #f1f5f9;
+  --c-border:      #e2e8f0;
+  --c-border-card: #e2e8f0;
+  --c-active:      #dbeafe;
+  --c-sidebar-bg:  #1e293b;
+
+  /* Text */
+  --c-text-1: #0f172a;
+  --c-text-2: #334155;
+  --c-text-3: #64748b;
+  --c-text-4: #94a3b8;
+  --c-text-5: #cbd5e1;
+}
+
+/* ── Base styles ─────────────────────────────────────────────── */
 body {
-  @apply bg-[#0a0d14] text-slate-100;
+  background: var(--c-bg);
+  color: var(--c-text-1);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-/* Scrollbar dark */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #0f1117; }
-::-webkit-scrollbar-thumb { background: #2d3447; border-radius: 3px; }
+/* ── Tailwind slate text overrides for light theme ───────────── */
+[data-theme="light"] .text-slate-100,
+[data-theme="light"] .text-slate-200,
+[data-theme="light"] .text-white        { color: var(--c-text-1) !important; }
+[data-theme="light"] .text-slate-300,
+[data-theme="light"] .text-slate-400    { color: var(--c-text-2) !important; }
+[data-theme="light"] .text-slate-500,
+[data-theme="light"] .text-slate-600    { color: var(--c-text-3) !important; }
+[data-theme="light"] .text-slate-700    { color: var(--c-text-4) !important; }
+
+/* Dividers */
+[data-theme="light"] .divide-\[\#1a1f2e\] > * + * { border-color: var(--c-border) !important; }
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--c-bg); }
+::-webkit-scrollbar-thumb { background: var(--c-border-card); border-radius: 3px; }

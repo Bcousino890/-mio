@@ -52,10 +52,10 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
         active
           ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/10'
           : 'ring-1 ring-white/5'
-      } bg-[#0d1017]`}
+      } bg-[var(--c-card)]`}
     >
       {/* ── Photo area ── */}
-      <div className="relative h-44 bg-[#141924] overflow-hidden">
+      <div className="relative h-44 bg-[var(--c-card)] overflow-hidden">
         {l.photos.length > 0 ? (
           <img
             src={l.photos[photoIdx]}

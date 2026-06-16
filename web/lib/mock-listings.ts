@@ -60,6 +60,8 @@ export type Listing = {
   badge?: ListingBadge
   description?: string
   features?: string[]
+  floor_plans?: string[]
+  videos?: string[]
   priceHistory: PriceEvent[]
   sources: Source[]
 }
