@@ -37,4 +37,4 @@ if [ -n "$SHARED_NGINX" ]; then
 fi
 
 echo ""
-echo "✅ Deploy completado → http://204-168-174-0.nip.io"
+echo "✅ Deploy completado → http://crm.cremme.es"

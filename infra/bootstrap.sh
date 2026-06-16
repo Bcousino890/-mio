@@ -7,7 +7,7 @@
 # nuevo (aditivo) y conecta la app a la red compartida. zintoleads intacto.
 #
 #   Postgres → 127.0.0.1:5433    Redis → 127.0.0.1:6380    App → 127.0.0.1:3000
-#   Dominio público → http://204-168-174-0.nip.io  (vía nginx compartido)
+#   Dominio público → http://crm.cremme.es  (vía nginx compartido)
 #
 # Overrides opcionales (export antes de ejecutar):
 #   SHARED_NGINX=infrastructure-nginx-1
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DOMAIN="204-168-174-0.nip.io"
+DOMAIN="crm.cremme.es"
 APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
 
