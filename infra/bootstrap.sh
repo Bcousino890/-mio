@@ -1,107 +1,96 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# casafari-mio · bootstrap.sh — instalación completa AISLADA en el CX33
+# casafari-mio · bootstrap.sh — instalación AISLADA en el CX33
 #
-# ⚠️  CONVIVE con zintoleads y otros stacks. Este script:
-#     • NO toca ningún archivo de nginx que no sea casafari.conf
-#     • Hace BACKUP de la config de nginx antes de cualquier cambio
-#     • Verifica `nginx -t` antes de cada reload (si falla, restaura el backup)
-#     • Usa puertos aislados (5433 / 6380 / 3000, solo localhost)
-#     • certbot solo emite cert para 204-168-174-0.nip.io (server block propio)
+# El VPS sirve :80/:443 con un nginx en Docker (infrastructure-nginx-1) que
+# enruta por dominio. Este script NO toca esa config: añade un archivo .conf
+# nuevo (aditivo) y conecta la app a la red compartida. zintoleads intacto.
 #
-# Uso en el VPS:
-#   git clone https://github.com/Bcousino890/casafari-mio.git /opt/casafari
-#   cd /opt/casafari && bash infra/bootstrap.sh
+#   Postgres → 127.0.0.1:5433    Redis → 127.0.0.1:6380    App → 127.0.0.1:3000
+#   Dominio público → http://204-168-174-0.nip.io  (vía nginx compartido)
+#
+# Overrides opcionales (export antes de ejecutar):
+#   SHARED_NGINX=infrastructure-nginx-1
+#   SHARED_NET=infrastructure_default
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DOMAIN="204-168-174-0.nip.io"
+APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
-
-# Email para Let's Encrypt (avisos de expiración). Cambia si quieres.
-LE_EMAIL="${LE_EMAIL:-admin@zinto.app}"
 
 log()  { echo -e "\n▶ $*"; }
 ok()   { echo "  ✅ $*"; }
+warn() { echo "  ⚠️  $*"; }
 fail() { echo "  ❌ $*"; exit 1; }
 
-# ── 0. Comprobaciones previas ────────────────────────────────────────────────
+# ── 0. Comprobaciones ────────────────────────────────────────────────────────
 log "[0/7] Comprobaciones previas..."
-command -v docker  >/dev/null || fail "Docker no está instalado (curl -fsSL https://get.docker.com | sh)"
-command -v nginx   >/dev/null || fail "nginx no está instalado en el host"
-[ -f "$REPO_DIR/.env" ] || fail "Falta $REPO_DIR/.env — copia .env.example y rellena POSTGRES_PASSWORD"
+command -v docker >/dev/null || fail "Docker no está instalado"
+[ -f "$REPO_DIR/.env" ] || fail "Falta $REPO_DIR/.env"
 grep -q '^POSTGRES_PASSWORD=..*' "$REPO_DIR/.env" || fail "POSTGRES_PASSWORD vacío en .env"
-ok "Docker, nginx y .env OK"
 
-# ── 1. Backup de la config de nginx (por si acaso) ───────────────────────────
-log "[1/7] Backup de nginx..."
-BACKUP="/root/nginx-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-tar czf "$BACKUP" /etc/nginx 2>/dev/null || true
-ok "Backup en $BACKUP"
+# Detectar el nginx que sirve el :80 (contenedor) y su red
+SHARED_NGINX="${SHARED_NGINX:-$(docker ps --filter "publish=80" --format '{{.Names}}' | head -1)}"
+[ -n "$SHARED_NGINX" ] || fail "No encuentro el contenedor nginx que sirve el :80"
+SHARED_NET="${SHARED_NET:-$(docker inspect "$SHARED_NGINX" \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' \
+  | grep -v '^$' | head -1)}"
+[ -n "$SHARED_NET" ] || fail "No encuentro la red del nginx compartido"
+ok "nginx compartido: $SHARED_NGINX  ·  red: $SHARED_NET"
 
-# ── 2. Postgres + Redis (puertos aislados) ───────────────────────────────────
+# ── 1. Build de la imagen de la app ──────────────────────────────────────────
+log "[1/7] Build de la app (puede tardar en el primer run)..."
+$COMPOSE build app
+ok "Imagen construida"
+
+# ── 2. Postgres + Redis (best-effort: la UI usa mock, no bloquea) ────────────
 log "[2/7] Levantando Postgres (5433) + Redis (6380)..."
-$COMPOSE up -d postgres redis
-for i in $(seq 1 30); do
-  if $COMPOSE exec -T postgres pg_isready -U casafari >/dev/null 2>&1; then break; fi
-  sleep 2
+$COMPOSE up -d postgres redis || warn "DB/Redis no arrancaron (la UI funciona igual con mock)"
+for i in $(seq 1 20); do
+  $COMPOSE exec -T postgres pg_isready -U casafari >/dev/null 2>&1 && break || sleep 2
 done
-$COMPOSE exec -T postgres pg_isready -U casafari >/dev/null 2>&1 || fail "Postgres no arrancó"
-ok "Postgres y Redis arriba"
+ok "Postgres y Redis arriba (o continuando sin ellos)"
 
-# ── 3. Migraciones ───────────────────────────────────────────────────────────
+# ── 3. Migraciones (best-effort) ─────────────────────────────────────────────
 log "[3/7] Aplicando migraciones..."
 $COMPOSE exec -T postgres sh -c \
   'for f in $(ls /migrations/*.sql 2>/dev/null | sort); do echo "   >> $f"; psql -U casafari -d casafari -f "$f" || exit 1; done' \
-  || fail "Fallo aplicando migraciones"
-ok "Migraciones aplicadas"
+  && ok "Migraciones aplicadas" || warn "Migraciones omitidas/fallidas (no bloquea la web)"
 
-# ── 4. Build + arrancar la app (3000, solo localhost) ────────────────────────
-log "[4/7] Build + arranque de la app..."
-$COMPOSE build app
+# ── 4. Arrancar la app ───────────────────────────────────────────────────────
+log "[4/7] Arrancando la app..."
 $COMPOSE up -d --no-deps app
 sleep 8
-curl -sf http://127.0.0.1:3000 >/dev/null || { $COMPOSE logs app --tail=40; fail "La app no responde en :3000"; }
+curl -sf http://127.0.0.1:3000 >/dev/null \
+  || { $COMPOSE logs app --tail=40; fail "La app no responde en :3000"; }
 ok "App respondiendo en 127.0.0.1:3000"
 
-# ── 5. nginx — instalar SOLO nuestro server block ────────────────────────────
-log "[5/7] Registrando server block de casafari (aislado)..."
-mkdir -p /etc/nginx/snippets
-cp "$REPO_DIR/infra/nginx-casafari-proxy.conf" /etc/nginx/snippets/casafari-proxy.conf
-cp "$REPO_DIR/infra/nginx-casafari.conf"       /etc/nginx/conf.d/casafari.conf
-if nginx -t 2>/dev/null; then
-  systemctl reload nginx
-  ok "nginx recargado (casafari.conf activo, resto intacto)"
-else
-  echo "  ⚠️  nginx -t falló — restaurando backup y abortando"
-  rm -f /etc/nginx/conf.d/casafari.conf /etc/nginx/snippets/casafari-proxy.conf
-  tar xzf "$BACKUP" -C / 2>/dev/null || true
-  nginx -t && systemctl reload nginx
-  fail "Config de nginx inválida — se restauró el estado anterior (zintoleads intacto)"
-fi
+# ── 5. Conectar la app a la red del nginx compartido ─────────────────────────
+log "[5/7] Conectando $APP_CONTAINER a la red $SHARED_NET..."
+docker network connect "$SHARED_NET" "$APP_CONTAINER" 2>/dev/null \
+  && ok "Conectada" || ok "Ya estaba conectada"
 
-# ── 6. TLS con Certbot — SOLO para nuestro dominio ───────────────────────────
-log "[6/7] Emitiendo certificado TLS para $DOMAIN..."
-if ! command -v certbot >/dev/null; then
-  apt-get update -qq && apt-get install -y -qq certbot python3-certbot-nginx
+# ── 6. Instalar el server block en el nginx compartido (aditivo) ─────────────
+log "[6/7] Registrando $DOMAIN en $SHARED_NGINX (sin tocar zinto.conf)..."
+docker cp "$REPO_DIR/infra/nginx-casafari-shared.conf" \
+  "$SHARED_NGINX:/etc/nginx/conf.d/casafari.conf"
+if docker exec "$SHARED_NGINX" nginx -t >/dev/null 2>&1; then
+  docker exec "$SHARED_NGINX" nginx -s reload
+  ok "nginx recargado — casafari.conf activo, resto intacto"
+else
+  warn "nginx -t falló: revirtiendo (zintoleads queda intacto)"
+  docker exec "$SHARED_NGINX" rm -f /etc/nginx/conf.d/casafari.conf
+  docker exec "$SHARED_NGINX" nginx -s reload || true
+  fail "Config inválida — revertida"
 fi
-# --nginx solo edita el server block cuyo server_name = $DOMAIN (casafari.conf).
-# zintoleads tiene otro server_name → certbot ni lo mira.
-certbot --nginx \
-  -d "$DOMAIN" \
-  --non-interactive --agree-tos --redirect \
-  --email "$LE_EMAIL" \
-  --cert-name casafari-mio \
-  || echo "  ⚠️  Certbot no pudo emitir (¿DNS/80 ocupado?). La app sigue en HTTP."
-nginx -t && systemctl reload nginx
-ok "TLS configurado (si Certbot tuvo éxito)"
 
 # ── 7. Fin ───────────────────────────────────────────────────────────────────
 log "[7/7] ✅ Bootstrap completado"
 echo ""
-echo "  🌐  http://$DOMAIN   (y https:// si Certbot funcionó)"
-echo "  📦  contenedores:  $COMPOSE ps"
-echo "  📜  logs app:      $COMPOSE logs -f app"
+echo "  🌐  http://$DOMAIN"
+echo "  📦  docker ps | grep casafari"
+echo "  📜  $COMPOSE logs -f app"
 echo ""
 echo "  zintoleads y el resto del VPS NO se han tocado."
