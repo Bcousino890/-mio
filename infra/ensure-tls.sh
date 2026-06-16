@@ -44,6 +44,12 @@ if [ -f "$CERT_LIVE/fullchain.pem" ]; then
 fi
 
 command -v certbot >/dev/null || { apt-get update -qq && apt-get install -y -qq certbot; }
+
+# Asegura que el conf http activo tenga el location del reto ACME (por si el
+# último deploy instaló una versión sin él).
+docker cp "$REPO_DIR/infra/nginx-casafari-shared.conf" "$SHARED_NGINX:/etc/nginx/conf.d/casafari.conf"
+docker exec "$SHARED_NGINX" nginx -t >/dev/null 2>&1 && docker exec "$SHARED_NGINX" nginx -s reload
+
 docker exec "$SHARED_NGINX" mkdir -p /usr/share/nginx/html/.well-known/acme-challenge
 
 auth_hook="$(mktemp)"
