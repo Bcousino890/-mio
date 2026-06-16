@@ -57,13 +57,32 @@ export type Listing = {
   price_drops: number
   rc_status: 'none' | 'rc14' | 'rc20'
   exact_address?: string
+  barrio?: string
+  distrito?: string
   badge?: ListingBadge
   description?: string
   features?: string[]
+  photo_tags?: string[]
   floor_plans?: string[]
   videos?: string[]
+  virtual_tours?: string[]
+  energy_cert?: EnergyCert
+  deposit_months?: number
+  stats?: ListingStats
   priceHistory: PriceEvent[]
   sources: Source[]
+}
+
+export type EnergyCert = {
+  consumption?: string | null
+  emissions?: string | null
+  image?: string | null
+}
+
+export type ListingStats = {
+  views?: number | null
+  email_contacts?: number | null
+  favorites?: number | null
 }
 
 const rawListings: Listing[] = [

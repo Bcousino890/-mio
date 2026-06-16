@@ -19,6 +19,7 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
   const isParticular = row.advertiser_type === 'particular'
   const price = row.price ?? 0
   const sqm = row.square_meters ?? 0
+  const priceSqm = row.price_sqm ?? (sqm > 0 ? Math.round(price / sqm) : 0)
   const listedDate = (() => {
     const d = new Date()
     d.setUTCDate(d.getUTCDate() - (row.days_on_market ?? 0))
@@ -39,7 +40,7 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
     operation: row.operation,
     price,
     square_meters: sqm,
-    price_sqm: sqm > 0 ? Math.round(price / sqm) : 0,
+    price_sqm: priceSqm,
     bedrooms: row.bedrooms ?? 0,
     bathrooms: row.bathrooms ?? 1,
     floor: (row.features ?? []).find((f) => /planta|bajo|entreplanta/i.test(f)) ?? undefined,
@@ -58,12 +59,19 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
     portals: ['idealista'],
     price_drops: 0,
     rc_status: 'none',
-    exact_address: undefined,               // Idealista solo da ubicación aproximada
+    exact_address: row.exact_address ?? undefined,   // solo particulares: calle + nº
+    barrio: row.barrio ?? undefined,
+    distrito: row.distrito ?? undefined,
     badge,
     description: row.description ?? undefined,
     features: row.features ?? [],
+    photo_tags: row.photo_tags ?? [],
     floor_plans: row.floor_plans ?? [],
     videos: row.videos ?? [],
+    virtual_tours: row.virtual_tours ?? [],
+    energy_cert: row.energy_cert ?? undefined,
+    deposit_months: row.deposit_months ?? undefined,
+    stats: row.stats ?? undefined,
     priceHistory: [
       { date: listedDate, price, event: 'listed' },
     ],
@@ -77,10 +85,12 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
         status: 'active',
         listed_at: listedDate,
         url: row.source_url,
+        reference: row.reference ?? undefined,
+        phone: row.phone ?? undefined,
         bedrooms: row.bedrooms ?? undefined,
         bathrooms: row.bathrooms ?? undefined,
         built_area: row.square_meters ?? undefined,
-        address: row.address ?? undefined,
+        address: row.exact_address ?? row.address ?? undefined,
         is_particular: isParticular,
       },
     ],

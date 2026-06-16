@@ -10,7 +10,7 @@ import {
   TrendingDown, ChevronLeft, CheckCircle, XCircle,
   Phone, MessageCircle, Bed, Bath,
   Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
-  Sun, TreePalm, Waves, Wind, Home, Star,
+  Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink,
 } from 'lucide-react'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
@@ -80,6 +80,31 @@ function parseFeatureIcons(features: string[]) {
     }
   }
   return { matched, rest }
+}
+
+// Escala de color del certificado energético (A verde → G rojo)
+const ENERGY_COLORS: Record<string, string> = {
+  A: '#00a651', B: '#50b848', C: '#bfd730', D: '#fff200',
+  E: '#fcb814', F: '#f37021', G: '#ed1c24',
+}
+function EnergyLetter({ label, letter }: { label: string; letter?: string | null }) {
+  const L = (letter ?? '').toUpperCase()
+  const color = ENERGY_COLORS[L]
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] text-slate-500 w-20">{label}</span>
+      {color ? (
+        <span
+          className="inline-flex items-center justify-center w-6 h-6 rounded text-white text-xs font-bold"
+          style={{ background: color }}
+        >
+          {L}
+        </span>
+      ) : (
+        <span className="text-xs text-slate-600">No indicado</span>
+      )}
+    </div>
+  )
 }
 
 type Tab = 'detalles' | 'fuentes' | 'historico'
@@ -281,9 +306,21 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                     </div>
                     <div>
                       <p className="text-xs font-medium text-slate-300">{l.exact_address}</p>
-                      <p className="text-[11px] text-blue-400 mt-0.5 cursor-pointer hover:text-blue-300">Cambiar dirección ↻</p>
+                      <p className="text-[11px] text-emerald-400 mt-0.5">Dirección exacta ✓</p>
                     </div>
                   </div>
+                )}
+
+                {l.source_url && l.source_url !== '#' && (
+                  <a
+                    href={l.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-1.5 mt-3 w-full py-2 rounded-xl bg-[var(--c-surface)] border border-[var(--c-border-card)] text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+                  >
+                    Ver en {l.portal.charAt(0).toUpperCase() + l.portal.slice(1)}
+                    <ExternalLink size={12} />
+                  </a>
                 )}
               </div>
 
@@ -374,8 +411,9 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                     { label: 'Habitaciones', value: l.bedrooms > 0 ? `${l.bedrooms}` : 'Estudio' },
                     { label: 'Baños', value: `${l.bathrooms}` },
                     { label: 'Planta', value: l.floor ?? 'No especificada' },
-                    { label: 'Zona', value: l.zone_name },
-                    { label: 'Dirección', value: l.sources[0]?.address ?? l.exact_address ?? 'No disponible' },
+                    ...(l.deposit_months ? [{ label: 'Fianza', value: `${l.deposit_months} ${l.deposit_months === 1 ? 'mes' : 'meses'}` }] : []),
+                    { label: 'Zona', value: l.distrito ? `${l.zone_name} · ${l.distrito}` : l.zone_name },
+                    { label: 'Dirección', value: l.exact_address ?? l.sources[0]?.address ?? 'No disponible' },
                   ].map(({ label, value }) => (
                     <div key={label} className="flex items-center justify-between">
                       <span className="text-xs text-slate-600">{label}</span>
@@ -405,6 +443,48 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 </div>
               </div>
             </div>
+
+            {/* Certificado energético + Estadísticas del anuncio */}
+            {(l.energy_cert || l.stats) && (
+              <div className="grid grid-cols-2 gap-4">
+                {l.energy_cert && (
+                  <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl p-5">
+                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Certificado energético</h3>
+                    <div className="flex items-center gap-6">
+                      <div className="space-y-2.5">
+                        <EnergyLetter label="Consumo" letter={l.energy_cert.consumption} />
+                        <EnergyLetter label="Emisiones" letter={l.energy_cert.emissions} />
+                      </div>
+                      {l.energy_cert.image && (
+                        <img
+                          src={l.energy_cert.image}
+                          alt="Etiqueta de calificación energética"
+                          className="h-24 w-auto rounded-lg border border-[var(--c-border-card)] bg-white p-1"
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {l.stats && (
+                  <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl p-5">
+                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Estadísticas del anuncio</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { label: 'Visitas', value: l.stats.views },
+                        { label: 'Contactos', value: l.stats.email_contacts },
+                        { label: 'Favoritos', value: l.stats.favorites },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="text-center">
+                          <p className="text-2xl font-bold text-slate-200">{value ?? '—'}</p>
+                          <p className="text-[10px] text-slate-600 uppercase tracking-wide mt-0.5">{label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Mapa de ubicación */}
             <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl overflow-hidden">

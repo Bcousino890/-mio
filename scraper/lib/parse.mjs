@@ -83,11 +83,55 @@ export function parseListPage(html) {
   return out
 }
 
+// ─── Helpers para leer los objetos JS embebidos de la ficha ─────────────────
+// Idealista incrusta `var config = {…}` y `var adMultimediasInfo = {…}` en el
+// HTML SSR (visibles sin sesión). Son la fuente más fiable: fotos, planos,
+// vídeos, tours, anunciante, etc. Hacemos match de llaves/corchetes balanceado.
+function matchBalanced(s, open, oc, cc) {
+  let depth = 0, inStr = false, q = ''
+  for (let i = open; i < s.length; i++) {
+    const c = s[i], p = s[i - 1]
+    if (inStr) { if (c === q && p !== '\\') inStr = false; continue }
+    if (c === '"' || c === "'") { inStr = true; q = c; continue }
+    if (c === oc) depth++
+    else if (c === cc) { depth--; if (depth === 0) return s.slice(open, i + 1) }
+  }
+  return null
+}
+function jsObject(html, name) {
+  const at = html.indexOf(`var ${name} = `)
+  if (at === -1) return null
+  const open = html.indexOf('{', at)
+  return open === -1 ? null : matchBalanced(html, open, '{', '}')
+}
+function jsArray(objText, key) {
+  if (!objText) return null
+  const m = objText.match(new RegExp(`${key}\\s*:\\s*\\[`))
+  if (!m) return null
+  const open = objText.indexOf('[', m.index)
+  return matchBalanced(objText, open, '[', ']')
+}
+// Saca las URLs grandes de un array de multimedias (imageDataService:"…jpg").
+function imagesFrom(arrText) {
+  if (!arrText) return []
+  const seen = new Set(), out = []
+  for (const m of arrText.matchAll(/imageDataService:"([^"]+\.jpg)"/g)) {
+    if (!seen.has(m[1])) { seen.add(m[1]); out.push(m[1]) }
+  }
+  return out
+}
+function tagsFrom(arrText) {
+  if (!arrText) return []
+  return [...arrText.matchAll(/tag:"([^"]*)"/g)].map((m) => decode(m[1]))
+}
+
 /**
  * Parsea la ficha de detalle. Devuelve el objeto completo del anuncio listo
  * para upsert en la tabla `listings`.
  */
 export function parseDetailPage(html, external_id) {
+  const config = jsObject(html, 'config')
+  const mm = jsObject(html, 'adMultimediasInfo')
   // Título → dirección + operación
   const titleM = html.match(/<title>([^<]*)<\/title>/)
   const title = titleM ? decode(titleM[1]).replace(/\s*—\s*idealista.*$/i, '') : null
@@ -118,50 +162,131 @@ export function parseDetailPage(html, external_id) {
     if (bathrooms == null && /baño/i.test(f)) bathrooms = toInt(f)
   }
 
-  // Fotos (CDN de Idealista, normalizadas a un perfil grande seguro).
-  // El CDN sirve cada imagen en .jpg y .webp; deduplicamos por el id numérico
-  // del fichero y nos quedamos con una sola URL (.jpg) por foto.
-  const byImageId = new Map()
-  const byFloorPlanId = new Map()
-  for (const m of html.matchAll(/https:\/\/img\d*\.idealista\.com\/blur\/[^\s"']+?\/(\d+)\.(?:jpg|webp)/g)) {
-    // Idealista marca los planos con la palabra "plano" en la URL del contenedor
-    const context = html.slice(Math.max(0, m.index - 300), m.index)
-    const isFloorPlan = /plano|floor.?plan/i.test(context)
-    const url = m[0].replace(/\/blur\/[^/]+\//, '/blur/WEB_DETAIL_TOP-L-L/').replace(/\.webp$/, '.jpg')
-    if (isFloorPlan) {
-      if (!byFloorPlanId.has(m[1])) byFloorPlanId.set(m[1], url)
-    } else {
-      if (!byImageId.has(m[1])) byImageId.set(m[1], url)
+  // ── Multimedia (preferimos el objeto JS embebido; regex como respaldo) ──────
+  // adMultimediasInfo separa picturesWithoutPlans / plans / videos / tours.
+  let photos = imagesFrom(jsArray(mm, 'picturesWithoutPlans'))
+  let photo_tags = tagsFrom(jsArray(mm, 'picturesWithoutPlans'))
+  let floor_plans = imagesFrom(jsArray(mm, 'plans'))
+
+  if (photos.length === 0) {
+    // Respaldo: deduplicar por id numérico del fichero del CDN.
+    const byImageId = new Map(), byFloorPlanId = new Map()
+    for (const m of html.matchAll(/https:\/\/img\d*\.idealista\.com\/blur\/[^\s"']+?\/(\d+)\.(?:jpg|webp)/g)) {
+      const context = html.slice(Math.max(0, m.index - 300), m.index)
+      const isFloorPlan = /plano|floor.?plan/i.test(context)
+      const url = m[0].replace(/\/blur\/[^/]+\//, '/blur/WEB_DETAIL_TOP-L-L/').replace(/\.webp$/, '.jpg')
+      const bucket = isFloorPlan ? byFloorPlanId : byImageId
+      if (!bucket.has(m[1])) bucket.set(m[1], url)
+    }
+    photos = [...byImageId.values()].slice(0, 40)
+    if (floor_plans.length === 0) floor_plans = [...byFloorPlanId.values()].slice(0, 5)
+  }
+  photos = photos.slice(0, 40)
+  floor_plans = floor_plans.slice(0, 5)
+
+  // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos.
+  const videoSet = new Set(), videos = []
+  const videosArr = jsArray(mm, 'videos')
+  if (videosArr) {
+    for (const m of videosArr.matchAll(/"?(?:url|src|videoUrl)"?\s*:\s*"([^"]+)"/g)) {
+      if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
     }
   }
-  const photos = [...byImageId.values()].slice(0, 40)
-  const floor_plans = [...byFloorPlanId.values()].slice(0, 5)
-
-  // Vídeos (YouTube embeds o URLs directas de vídeo en la ficha)
-  const videoIds = new Set()
-  const videos = []
   for (const m of html.matchAll(/(?:youtube\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/g)) {
-    if (!videoIds.has(m[1])) {
-      videoIds.add(m[1])
-      videos.push(`https://www.youtube.com/embed/${m[1]}`)
+    const u = `https://www.youtube.com/embed/${m[1]}`
+    if (!videoSet.has(u)) { videoSet.add(u); videos.push(u) }
+  }
+
+  // Tours virtuales / 3D (visit3DTour, virtualTour360).
+  const virtual_tours = []
+  for (const key of ['visit3DTourURL', 'virtualTour360URL', 'visit3DTour', 'virtualTour360']) {
+    const arr = jsArray(mm, key)
+    if (arr) for (const m of arr.matchAll(/"(https?:\/\/[^"]+)"/g)) {
+      if (!virtual_tours.includes(m[1])) virtual_tours.push(m[1])
     }
   }
 
-  // Anunciante
-  const advM = html.match(/class="professional-name"[^>]*>\s*<[^>]*>\s*([^<]+)/) ||
-               html.match(/class="advertiser-name">\s*([^<]+)/)
-  const advertiser_name = advM ? decode(advM[1]) : null
-  const advertiser_type = /professional/i.test(html) && advertiser_name ? 'professional'
-    : /anunciante particular|particular/i.test(html) ? 'particular' : 'unknown'
+  // ── Anunciante (particular vs profesional) desde `config` ───────────────────
+  const cfg = (k) => {
+    const m = config && config.match(new RegExp(`${k}\\s*:\\s*"([^"]*)"`))
+    return m ? decode(m[1]) : null
+  }
+  const profName = cfg('adProfessionalName') || cfg('adCommercialName')
+  const firstName = cfg('adFirstName')
+  const lastName = cfg('adLastName')
+  const isOffice = config ? /isOfficeContactType\s*:\s*true/.test(config) : false
+  let advertiser_name, advertiser_type
+  if (profName || isOffice) {
+    advertiser_name = profName || 'Profesional'
+    advertiser_type = 'professional'
+  } else if (firstName != null || /<span\s+class="particular"/.test(html)) {
+    advertiser_name = [firstName, lastName].filter(Boolean).join(' ').trim() || 'Particular'
+    advertiser_type = 'particular'
+  } else {
+    // Respaldo al heurístico anterior.
+    const advM = html.match(/class="professional-name"[^>]*>\s*<[^>]*>\s*([^<]+)/) ||
+                 html.match(/class="advertiser-name">\s*([^<]+)/)
+    advertiser_name = advM ? decode(advM[1]) : null
+    advertiser_type = /professional/i.test(html) && advertiser_name ? 'professional'
+      : /anunciante particular|particular/i.test(html) ? 'particular' : 'unknown'
+  }
+
+  // Teléfono del anunciante (visible en el SSR sin sesión cuando existe).
+  const phoneM = html.match(/appcallback_target_phone="(\d{6,})"/) ||
+                 html.match(/href="tel:(\+?\d{6,})"/)
+  let phone = phoneM ? phoneM[1].replace(/^\+?34/, '') : null
+  if (phone) phone = phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
+
+  // Referencia del anuncio.
+  const refM = html.match(/class="txt-ref">\s*([A-Za-z0-9\-]+)\s*</)
+  const reference = refM ? refM[1].trim() : external_id
+
+  // ── Certificado energético (consumo + emisiones + imagen CEE) ───────────────
+  const consM = html.match(/Consumo:\s*<\/span>\s*<span class="icon-energy-c-([a-g])"/i)
+  const emisM = html.match(/Emisiones:\s*<\/span>\s*<span class="icon-energy-c-([a-g])"/i)
+  const ceeImgM = html.match(/class="energy-certificate-img"\s+src="([^"]+)"/)
+  const energy_cert = (consM || emisM || ceeImgM) ? {
+    consumption: consM ? consM[1].toUpperCase() : null,
+    emissions: emisM ? emisM[1].toUpperCase() : null,
+    image: ceeImgM ? ceeImgM[1].replace(/\?.*$/, '') : null,
+  } : null
+
+  // Fianza (meses) y €/m² declarado por el portal.
+  const depM = html.match(/Fianza de (\d+)\s*mes/i)
+  const deposit_months = depM ? Number(depM[1]) : null
+  const sqmPriceM = html.match(/Precio por m².*?([\d.,]+)\s*€\/m²/s)
+  const price_sqm = sqmPriceM ? Math.round(parseFloat(sqmPriceM[1].replace('.', '').replace(',', '.'))) : null
+
+  // Estadísticas del anuncio (visitas / contactos / favoritos).
+  const stViews = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*visitas/)
+  const stEmail = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*contactos por email/)
+  const stFav = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*veces guardado/)
+  const stats = (stViews || stEmail || stFav) ? {
+    views: stViews ? Number(stViews[1]) : null,
+    email_contacts: stEmail ? Number(stEmail[1]) : null,
+    favorites: stFav ? Number(stFav[1]) : null,
+  } : null
 
   // Descripción
   const descM = html.match(/class="adCommentsLanguage[^"]*"[^>]*>([\s\S]*?)<\/div>/)
   const description = descM ? decode(descM[1]).slice(0, 4000) : null
 
-  // Dirección legible (de la cabecera de ubicación)
-  const addrM = html.match(/class="main-info__title-minor"[^>]*>([^<]+)</) ||
-                html.match(/id="headerMap"[\s\S]{0,200}?<li[^>]*>([^<]+)</)
-  const address = addrM ? decode(addrM[1]) : (title ?? null)
+  // ── Dirección (cabecera de ubicación) + nivel de precisión ──────────────────
+  const headerBlock = html.match(/id="headerMap"[\s\S]*?<\/ul>/)
+  const addrLines = headerBlock
+    ? [...headerBlock[0].matchAll(/class="header-map-list">\s*([^<]+?)\s*<\/li>/g)].map((m) => decode(m[1]))
+    : []
+  const titleMainM = html.match(/class="main-info__title-main"[^>]*>([^<]+)</)
+  const streetLine = (addrLines[0] || (titleMainM ? decode(titleMainM[1]) : null) || '')
+    .replace(/^(?:alquiler|venta)\s+de\s+\w+\s+en\s+/i, '')
+    .trim() || null
+  const isExact = /"addressVisibility":"EXACT"/.test(html)
+  // Dirección legible completa (calle + barrio + distrito…).
+  const address = addrLines.length ? addrLines.join(', ') : (streetLine || title || null)
+  // Si el portal marca EXACT y la calle trae número, la consideramos exacta.
+  const exact_address = isExact && streetLine && /\d/.test(streetLine) ? streetLine : null
+  const barrio = addrLines.find((l) => /^Barrio /i.test(l))?.replace(/^Barrio\s+/i, '') ?? null
+  const distrito = addrLines.find((l) => /^Distrito /i.test(l))?.replace(/^Distrito\s+/i, '') ?? null
 
   // Tipo de inmueble (de "Alquiler de piso en …" / "Venta de ático …")
   const typeM = (title ?? '').match(/(?:de|del)\s+(piso|ático|atico|estudio|dúplex|duplex|chalet|casa|local|garaje|loft|apartamento)/i)
@@ -188,17 +313,19 @@ export function parseDetailPage(html, external_id) {
     source_type: 'portal',
     source_url: `https://www.idealista.com/inmueble/${external_id}/`,
     operation,
-    title, price, square_meters, bedrooms, bathrooms,
+    title, price, price_sqm, square_meters, bedrooms, bathrooms,
     property_type,
     latitude, longitude,
     blur_radius_m: 180,
-    address,
+    address, exact_address, barrio, distrito,
     days_on_market,
     advertiser_name, advertiser_type,
+    phone, reference,
+    energy_cert, deposit_months, stats,
     description,
     features,
-    photos,
+    photos, photo_tags,
     floor_plans,
-    videos,
+    videos, virtual_tours,
   }
 }
