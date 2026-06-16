@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { mockListings } from '@/lib/mock-listings'
 import {
-  ArrowLeft, MapPin, Bookmark, Calculator, FileText,
+  ArrowLeft, MapPin, Bookmark, Calculator, FileText, UserSearch,
   ChevronRight, ChevronDown, ExternalLink, Building2, User,
   TrendingDown, ChevronLeft, CheckCircle, XCircle,
 } from 'lucide-react'
@@ -182,20 +182,21 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
 
               {/* Action buttons */}
               <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-4">
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   {[
-                    { icon: Bookmark,   label: 'Guardar',  color: 'text-blue-400',   bg: 'bg-blue-950/50'   },
-                    { icon: Calculator, label: 'Valorar',  color: 'text-violet-400', bg: 'bg-violet-950/50' },
-                    { icon: FileText,   label: 'Nota',     color: 'text-amber-400',  bg: 'bg-amber-950/50'  },
-                  ].map(({ icon: Icon, label, color, bg }) => (
+                    { icon: UserSearch, label: 'Buscar contacto', color: 'text-white',     bg: 'bg-blue-600',      primary: true },
+                    { icon: Bookmark,   label: 'Guardar',         color: 'text-blue-400',   bg: 'bg-blue-950/50'   },
+                    { icon: Calculator, label: 'Valorar',         color: 'text-violet-400', bg: 'bg-violet-950/50' },
+                    { icon: FileText,   label: 'Crear nota',      color: 'text-amber-400',  bg: 'bg-amber-950/50'  },
+                  ].map(({ icon: Icon, label, color, bg, primary }) => (
                     <button
                       key={label}
                       className="flex flex-col items-center gap-1.5 py-2.5 rounded-xl hover:bg-[#151b2b] transition-colors"
                     >
-                      <div className={`w-10 h-10 rounded-full ${bg} flex items-center justify-center`}>
+                      <div className={`w-10 h-10 rounded-full ${bg} flex items-center justify-center ${primary ? 'shadow-lg shadow-blue-600/30' : ''}`}>
                         <Icon size={16} className={color} />
                       </div>
-                      <span className="text-[11px] text-slate-500 font-medium">{label}</span>
+                      <span className="text-[11px] text-slate-500 font-medium text-center leading-tight">{label}</span>
                     </button>
                   ))}
                 </div>
