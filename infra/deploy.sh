@@ -32,3 +32,5 @@ else
   $COMPOSE logs app --tail=50
   exit 1
 fi
+
+# deploy trigger: 2026-06-16T14:48:20Z
