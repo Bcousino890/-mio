@@ -37,3 +37,4 @@ yarn-error.log*
 # misc
 coverage/
 *.local
+web/public/photos/__MACOSX/
