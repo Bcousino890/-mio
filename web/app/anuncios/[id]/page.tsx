@@ -6,8 +6,9 @@ import { useRouter } from 'next/navigation'
 import { mockListings } from '@/lib/mock-listings'
 import {
   ArrowLeft, MapPin, Bookmark, Calculator, FileText, UserSearch,
-  ChevronRight, ChevronDown, ExternalLink, Building2, User,
+  ChevronRight, Building2, User,
   TrendingDown, ChevronLeft, CheckCircle, XCircle,
+  Phone, MessageCircle, Bed, Bath,
 } from 'lucide-react'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
@@ -44,7 +45,8 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const router = useRouter()
   const [tab, setTab] = useState<Tab>('detalles')
   const [photoIdx, setPhotoIdx] = useState(0)
-  const [expandedSource, setExpandedSource] = useState<string | null>(null)
+  const [smartlinkSources, setSmartlinkSources] = useState(false)
+  const [smartlinkHistory, setSmartlinkHistory] = useState(false)
 
   const listing = mockListings.find((l) => l.id === resolvedParams.id)
 
@@ -294,92 +296,125 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
             </div>
           )}
 
-          {/* FUENTES */}
+          {/* FUENTES — tabla Comercializando */}
           {tab === 'fuentes' && (
             <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-[#1a1f2e]">
-                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Comercializando</h3>
+              {/* Cabecera: título + toggle Venta/Alquiler + Smartlink */}
+              <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[#1a1f2e]">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Comercializando</h3>
+                  <span className="text-[11px] text-slate-600 bg-[#151b2b] px-2 py-0.5 rounded-full">
+                    {l.sources.length} fuentes
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500">Incluir tabla de fuentes en el Smartlink</span>
+                  <button
+                    onClick={() => setSmartlinkSources((v) => !v)}
+                    className={`relative w-9 h-5 rounded-full transition-colors ${smartlinkSources ? 'bg-blue-600' : 'bg-[#1e2130]'}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${smartlinkSources ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
               </div>
-              <div className="divide-y divide-[#1a1f2e]">
-                {l.sources.map((src) => {
-                  const st = STATUS_CONFIG[src.status]
-                  const StatusIcon = st.icon
-                  const isExpanded = expandedSource === src.id
 
-                  return (
-                    <div key={src.id}>
-                      <button
-                        onClick={() => setExpandedSource(isExpanded ? null : src.id)}
-                        className="w-full flex items-center gap-4 px-5 py-4 hover:bg-[#0f1520] transition-colors text-left"
-                      >
-                        {/* Avatar */}
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          src.type === 'particular' ? 'bg-amber-950/60' : 'bg-slate-800'
-                        }`}>
-                          {src.type === 'particular'
-                            ? <User size={16} className="text-amber-400" />
-                            : <Building2 size={16} className="text-slate-400" />
-                          }
-                        </div>
-
-                        {/* Name & type */}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[10px] text-slate-600 mb-0.5">
-                            {src.type === 'particular' ? 'Particular' : 'Agencia'}
-                          </p>
-                          <p className="text-sm font-semibold text-slate-200 truncate">{src.name}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5">{src.portal} · {timeSince(src.listed_at)}</p>
-                        </div>
-
-                        {/* Price */}
-                        <div className="text-right flex-shrink-0 mr-3">
-                          <p className="text-sm font-bold text-slate-200">{fmt(src.price)} €</p>
-                          <p className="text-[10px] text-slate-600">precio anunciado</p>
-                        </div>
-
-                        {/* Status */}
-                        <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border flex-shrink-0 ${st.className}`}>
-                          <StatusIcon size={11} />
-                          {st.label}
-                        </div>
-
-                        {/* Expand arrow */}
-                        <ChevronDown
-                          size={14}
-                          className={`text-slate-600 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </button>
-
-                      {/* Expanded detail */}
-                      {isExpanded && (
-                        <div className="bg-[#060810] border-t border-[#1a1f2e] px-5 py-3 flex items-center justify-between">
-                          <div className="flex gap-6 text-xs">
-                            <div>
-                              <p className="text-slate-600 mb-0.5">Portal</p>
-                              <p className="text-slate-300 font-medium">{src.portal}</p>
+              {/* Tabla con scroll horizontal */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[920px]">
+                  <thead>
+                    <tr className="text-[10px] text-slate-600 uppercase tracking-wide border-b border-[#1a1f2e]">
+                      <th className="font-medium px-5 py-2.5">Fuente</th>
+                      <th className="font-medium px-3 py-2.5">Referencia</th>
+                      <th className="font-medium px-3 py-2.5">Teléfono</th>
+                      <th className="font-medium px-3 py-2.5 text-right">Precio</th>
+                      <th className="font-medium px-3 py-2.5">Estado</th>
+                      <th className="font-medium px-3 py-2.5">Dirección</th>
+                      <th className="font-medium px-3 py-2.5 text-center"><Bed size={12} className="inline" /></th>
+                      <th className="font-medium px-3 py-2.5 text-center"><Bath size={12} className="inline" /></th>
+                      <th className="font-medium px-3 py-2.5 text-right">Área</th>
+                      <th className="font-medium px-3 py-2.5 text-center">Particular</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#1a1f2e]">
+                    {l.sources.map((src) => {
+                      const st = STATUS_CONFIG[src.status]
+                      return (
+                        <tr key={src.id} className="hover:bg-[#0f1520] transition-colors">
+                          {/* Fuente */}
+                          <td className="px-5 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
+                                src.is_particular ? 'bg-amber-950/60' : 'bg-slate-800'
+                              }`}>
+                                {src.is_particular
+                                  ? <User size={13} className="text-amber-400" />
+                                  : <Building2 size={13} className="text-slate-400" />}
+                              </div>
+                              <div className="min-w-0">
+                                <a
+                                  href={src.url} target="_blank" rel="noopener noreferrer"
+                                  className="text-xs font-semibold text-blue-400 hover:text-blue-300 truncate flex items-center gap-1"
+                                >
+                                  {src.name}
+                                </a>
+                                <p className="text-[10px] text-slate-600">{src.portal}</p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="text-slate-600 mb-0.5">Publicado</p>
-                              <p className="text-slate-300 font-medium">{new Date(src.listed_at).toLocaleDateString('es-ES')}</p>
-                            </div>
-                            <div>
-                              <p className="text-slate-600 mb-0.5">Precio</p>
-                              <p className="text-slate-300 font-medium">{fmt(src.price)} €</p>
-                            </div>
-                          </div>
-                          <a
-                            href={src.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
-                          >
-                            Ver anuncio <ExternalLink size={11} />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+                          </td>
+                          {/* Referencia */}
+                          <td className="px-3 py-3">
+                            <span className="text-[11px] text-slate-400 font-mono">{src.reference}</span>
+                          </td>
+                          {/* Teléfono */}
+                          <td className="px-3 py-3">
+                            {src.phone ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] text-slate-300 whitespace-nowrap">{src.phone}</span>
+                                <a href={`tel:${src.phone.replace(/\s/g, '')}`} className="w-5 h-5 rounded-full bg-blue-950/60 flex items-center justify-center text-blue-400 hover:bg-blue-900/60">
+                                  <Phone size={10} />
+                                </a>
+                                <a href={`https://wa.me/${src.phone.replace(/[^0-9]/g, '')}`} target="_blank" rel="noopener noreferrer" className="w-5 h-5 rounded-full bg-emerald-950/60 flex items-center justify-center text-emerald-400 hover:bg-emerald-900/60">
+                                  <MessageCircle size={10} />
+                                </a>
+                                {src.phone_contacts ? (
+                                  <span className="text-[10px] text-slate-600">+{src.phone_contacts}</span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-slate-700 text-xs">—</span>
+                            )}
+                          </td>
+                          {/* Precio */}
+                          <td className="px-3 py-3 text-right">
+                            <span className="text-xs font-bold text-slate-200 whitespace-nowrap">{fmt(src.price)} €</span>
+                          </td>
+                          {/* Estado */}
+                          <td className="px-3 py-3">
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${st.className}`}>
+                              {st.label}
+                            </span>
+                          </td>
+                          {/* Dirección */}
+                          <td className="px-3 py-3">
+                            <span className="text-[11px] text-slate-400 truncate block max-w-[140px]">{src.address}</span>
+                          </td>
+                          {/* Hab */}
+                          <td className="px-3 py-3 text-center text-xs text-slate-400">{src.bedrooms && src.bedrooms > 0 ? src.bedrooms : '—'}</td>
+                          {/* Baños */}
+                          <td className="px-3 py-3 text-center text-xs text-slate-400">{src.bathrooms ?? '—'}</td>
+                          {/* Área */}
+                          <td className="px-3 py-3 text-right text-xs text-slate-400 whitespace-nowrap">{src.built_area ? `${src.built_area} m²` : '—'}</td>
+                          {/* Particular */}
+                          <td className="px-3 py-3 text-center">
+                            <span className={`text-[11px] font-medium ${src.is_particular ? 'text-amber-400' : 'text-slate-500'}`}>
+                              {src.is_particular ? 'Sí' : 'No'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -387,6 +422,57 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
           {/* HISTÓRICO */}
           {tab === 'historico' && (
             <div className="space-y-4">
+              {/* Histórico horizontal (estilo Casafari) */}
+              <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Histórico de la propiedad</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-slate-500">Incluir historial en el Smartlink</span>
+                    <button
+                      onClick={() => setSmartlinkHistory((v) => !v)}
+                      className={`relative w-9 h-5 rounded-full transition-colors ${smartlinkHistory ? 'bg-blue-600' : 'bg-[#1e2130]'}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${smartlinkHistory ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-slate-600 uppercase tracking-wide mb-2 px-1">
+                  <span>Más reciente</span>
+                  <span>Más antiguo</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <div className="relative flex gap-3 pt-5 pb-1 min-w-min">
+                    {/* Línea horizontal */}
+                    <div className="absolute left-2 right-2 top-[26px] h-px bg-[#1e2130]" />
+                    {[...l.priceHistory].reverse().map((ev, i, arr) => {
+                      const cfg = EVENT_CONFIG[ev.event] ?? EVENT_CONFIG.listed
+                      const prev = arr[i + 1]
+                      const delta = prev ? ev.price - prev.price : 0
+                      return (
+                        <div key={i} className="relative flex-shrink-0 w-40">
+                          {/* Punto sobre la línea */}
+                          <div className={`absolute left-1/2 -translate-x-1/2 -top-[2px] w-3 h-3 rounded-full ${cfg.dot} ring-4 ring-[#0d1117]`} />
+                          <div className="mt-5 bg-[#0b0f17] border border-[#1a1f2e] rounded-xl p-3">
+                            <p className="text-[10px] text-slate-600 mb-1.5">
+                              {new Date(ev.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </p>
+                            <span className={`inline-block text-[10px] font-semibold ${cfg.color} mb-2`}>{cfg.label}</span>
+                            <p className="text-sm font-bold text-slate-200">{fmt(ev.price)} €</p>
+                            {delta !== 0 && (
+                              <p className={`text-[11px] font-medium mt-0.5 ${delta < 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {delta < 0 ? '' : '+'}{fmt(delta)} €
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
               {/* Price chart */}
               <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
                 <div className="flex items-center justify-between mb-4">
