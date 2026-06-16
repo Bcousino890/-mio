@@ -63,9 +63,9 @@ chmod +x "$auth_hook" "$clean_hook"
 if certbot certonly --manual --preferred-challenges http \
     --manual-auth-hook "$auth_hook" --manual-cleanup-hook "$clean_hook" \
     -d "$DOMAIN" --non-interactive --agree-tos -m "admin@zinto.app" \
-    --deploy-hook "DOMAIN=$DOMAIN SHARED_NGINX=$SHARED_NGINX bash $REPO_DIR/infra/ensure-tls.sh"; then
+    --deploy-hook "env DOMAIN=$DOMAIN SHARED_NGINX=$SHARED_NGINX bash $REPO_DIR/infra/ensure-tls.sh"; then
   if ! crontab -l 2>/dev/null | grep -q "casafari-mio"; then
-    (crontab -l 2>/dev/null; echo "17 3 * * * DOMAIN=$DOMAIN SHARED_NGINX=$SHARED_NGINX certbot renew --quiet # casafari-mio") | crontab -
+    (crontab -l 2>/dev/null; echo "17 3 * * * env DOMAIN=$DOMAIN SHARED_NGINX=$SHARED_NGINX certbot renew --quiet # casafari-mio") | crontab -
   fi
 else
   echo "  ⚠️  certbot falló — sigue en http"
