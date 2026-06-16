@@ -10,7 +10,7 @@ export default function PageShell({ title, subtitle, badge, children, action }: 
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
-      <header className="flex items-center justify-between px-8 py-5 border-b border-[#1e2130]">
+      <header className="flex items-center justify-between px-8 py-5 border-b border-[var(--c-border-card)]">
         <div className="flex items-center gap-3">
           <div>
             <div className="flex items-center gap-2">
