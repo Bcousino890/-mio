@@ -286,7 +286,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
               <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl p-4">
                 <div className="flex items-start justify-between mb-1">
                   <div>
-                    <p className="text-2xl font-bold text-white tracking-tight">
+                    <p className="text-2xl font-bold text-slate-100 tracking-tight">
                       {fmt(l.price)} {l.operation === 'sale' ? '€' : '€/mes'}
                     </p>
                     <p className="text-sm text-slate-500 mt-0.5">{fmt(l.price_sqm)} €/m²</p>
@@ -596,7 +596,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       <th className="font-medium px-3 py-2.5 text-center">Particular</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1a1f2e]">
+                  <tbody className="divide-y divide-[var(--c-border)]">
                     {l.sources.map((src) => {
                       const st = STATUS_CONFIG[src.status]
                       return (

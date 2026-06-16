@@ -5,6 +5,7 @@ import {
   ReferenceLine, ResponsiveContainer,
 } from 'recharts'
 import type { PriceEvent } from '@/lib/mock-listings'
+import { useTheme } from '@/components/ThemeProvider'
 
 interface Props {
   data: PriceEvent[]
@@ -31,15 +32,21 @@ function CustomTooltip({ active, payload }: any) {
   }
   const ev = eventLabels[point.event] ?? { label: point.event, color: '#94a3b8' }
   return (
-    <div className="bg-[#0d1117] border border-[#1e2130] rounded-xl px-3.5 py-2.5 shadow-xl text-xs">
+    <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl px-3.5 py-2.5 shadow-xl text-xs">
       <p className="text-slate-500 mb-1">{new Date(point.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
-      <p className="text-white font-bold text-sm">{fmt(point.price)} €</p>
+      <p className="text-slate-100 font-bold text-sm">{fmt(point.price)} €</p>
       <p className="mt-1" style={{ color: ev.color }}>{ev.label}</p>
     </div>
   )
 }
 
 export default function PriceChart({ data, operation }: Props) {
+  const { theme } = useTheme()
+  const isLight = theme === 'light'
+  const grid = isLight ? '#e2e8f0' : '#1e2130'
+  const tick = isLight ? '#64748b' : '#475569'
+  const dotRing = isLight ? '#ffffff' : '#0d1117'
+
   if (!data || data.length === 0) {
     return (
       <div className="flex items-center justify-center h-40 text-slate-700 text-sm">
@@ -62,18 +69,18 @@ export default function PriceChart({ data, operation }: Props) {
             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#1e2130" vertical={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke={grid} vertical={false} />
         <XAxis
           dataKey="date"
           tickFormatter={shortDate}
-          tick={{ fill: '#475569', fontSize: 11 }}
+          tick={{ fill: tick, fontSize: 11 }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
           domain={[minPrice - padding, maxPrice + padding]}
           tickFormatter={(v) => `${Math.round(v / 1000)}k`}
-          tick={{ fill: '#475569', fontSize: 11 }}
+          tick={{ fill: tick, fontSize: 11 }}
           axisLine={false}
           tickLine={false}
           width={44}
@@ -82,9 +89,9 @@ export default function PriceChart({ data, operation }: Props) {
         {data.length > 1 && (
           <ReferenceLine
             y={data[0].price}
-            stroke="#475569"
+            stroke={tick}
             strokeDasharray="3 3"
-            label={{ value: 'Precio inicial', position: 'insideTopLeft', fill: '#475569', fontSize: 10 }}
+            label={{ value: 'Precio inicial', position: 'insideTopLeft', fill: tick, fontSize: 10 }}
           />
         )}
         <Area
@@ -93,8 +100,8 @@ export default function PriceChart({ data, operation }: Props) {
           stroke="#3b82f6"
           strokeWidth={2}
           fill="url(#priceGrad)"
-          dot={{ fill: '#3b82f6', strokeWidth: 2, stroke: '#0d1117', r: 4 }}
-          activeDot={{ r: 5, fill: '#60a5fa', stroke: '#0d1117', strokeWidth: 2 }}
+          dot={{ fill: '#3b82f6', strokeWidth: 2, stroke: dotRing, r: 4 }}
+          activeDot={{ r: 5, fill: '#60a5fa', stroke: dotRing, strokeWidth: 2 }}
         />
       </AreaChart>
     </ResponsiveContainer>

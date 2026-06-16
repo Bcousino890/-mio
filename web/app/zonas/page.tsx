@@ -15,10 +15,10 @@ export default function ZonasPage() {
       title="Zonas & Scraping"
       subtitle="Estado de cobertura · 5 zonas de prueba activas"
     >
-      <div className="rounded-xl border border-[#1e2130] bg-[#0f1117] overflow-hidden">
+      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-[#1e2130]">
+            <tr className="border-b border-[var(--c-border-card)]">
               <th className="text-left px-5 py-3 text-xs text-slate-500 font-medium">Zona</th>
               <th className="text-left px-5 py-3 text-xs text-slate-500 font-medium">Slug Idealista</th>
               <th className="text-left px-5 py-3 text-xs text-slate-500 font-medium">Portales</th>
@@ -30,13 +30,13 @@ export default function ZonasPage() {
             {zonas.map((z, i) => (
               <tr
                 key={z.slug}
-                className={`border-b border-[#1a1f2e] ${i % 2 === 0 ? '' : 'bg-[#0d1019]'}`}
+                className={`border-b border-[var(--c-border)] ${i % 2 === 0 ? '' : 'bg-[var(--c-card)]'}`}
               >
                 <td className="px-5 py-3 text-slate-200 font-medium">{z.name}</td>
                 <td className="px-5 py-3 text-slate-500 font-mono text-xs">{z.slug}</td>
                 <td className="px-5 py-3">
                   {z.portals.map((p) => (
-                    <span key={p} className="text-[11px] bg-[#1e2a45] text-blue-300 px-2 py-0.5 rounded mr-1">
+                    <span key={p} className="text-[11px] bg-[var(--c-active)] text-blue-300 px-2 py-0.5 rounded mr-1">
                       {p}
                     </span>
                   ))}

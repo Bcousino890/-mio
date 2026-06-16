@@ -7,15 +7,16 @@
   --sidebar-w: 220px;
 
   /* Backgrounds */
-  --c-bg:          #0a0d14;
-  --c-bg-deep:     #05070d;
-  --c-card:        #0d1117;
-  --c-surface:     #151b2b;
-  --c-hover:       #0f1520;
-  --c-border:      #1a1f2e;
-  --c-border-card: #1e2130;
-  --c-active:      #1e2a45;
-  --c-sidebar-bg:  #0f1117;
+  --c-bg:            #0a0d14;
+  --c-bg-deep:       #05070d;
+  --c-card:          #0d1117;
+  --c-surface:       #151b2b;
+  --c-hover:         #0f1520;
+  --c-border:        #1a1f2e;
+  --c-border-card:   #1e2130;
+  --c-border-strong: #2d3447;
+  --c-active:        #1e2a45;
+  --c-sidebar-bg:    #0f1117;
 
   /* Text */
   --c-text-1: #e2e8f0;
@@ -27,19 +28,20 @@
 
 [data-theme="light"] {
   /* Backgrounds */
-  --c-bg:          #f1f5f9;
-  --c-bg-deep:     #e8edf5;
-  --c-card:        #ffffff;
-  --c-surface:     #f8fafc;
-  --c-hover:       #f1f5f9;
-  --c-border:      #e2e8f0;
-  --c-border-card: #e2e8f0;
-  --c-active:      #dbeafe;
-  --c-sidebar-bg:  #1e293b;
+  --c-bg:            #eef2f7;
+  --c-bg-deep:       #e3e9f1;
+  --c-card:          #ffffff;
+  --c-surface:       #f4f7fb;
+  --c-hover:         #eef2f7;
+  --c-border:        #e2e8f0;
+  --c-border-card:   #dfe5ee;
+  --c-border-strong: #cbd5e1;
+  --c-active:        #dbeafe;
+  --c-sidebar-bg:    #0f1117;   /* sidebar permanece oscura en ambos temas */
 
   /* Text */
   --c-text-1: #0f172a;
-  --c-text-2: #334155;
+  --c-text-2: #475569;
   --c-text-3: #64748b;
   --c-text-4: #94a3b8;
   --c-text-5: #cbd5e1;
@@ -52,20 +54,62 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-/* ── Tailwind slate text overrides for light theme ───────────── */
-[data-theme="light"] .text-slate-100,
-[data-theme="light"] .text-slate-200,
-[data-theme="light"] .text-white        { color: var(--c-text-1) !important; }
-[data-theme="light"] .text-slate-300,
-[data-theme="light"] .text-slate-400    { color: var(--c-text-2) !important; }
-[data-theme="light"] .text-slate-500,
-[data-theme="light"] .text-slate-600    { color: var(--c-text-3) !important; }
-[data-theme="light"] .text-slate-700    { color: var(--c-text-4) !important; }
+/* ─────────────────────────────────────────────────────────────────────────
+   Overrides de tema claro — SOLO dentro de <main>. La sidebar (<aside>) se
+   queda siempre oscura, así que sus clases de texto claro no deben tocarse.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Texto neutro (slate) → escala de la variable de tema.
+   OJO: NO incluimos .text-white aquí — se usa sobre fondos de color/oscuros
+   (botones, badges, overlays de foto) y debe seguir siendo blanco. Para texto
+   que deba oscurecerse en claro usamos .text-slate-100. */
+[data-theme="light"] main :is(.text-slate-100, .text-slate-200) { color: var(--c-text-1) !important; }
+[data-theme="light"] main :is(.text-slate-300, .text-slate-400)              { color: var(--c-text-2) !important; }
+[data-theme="light"] main :is(.text-slate-500, .text-slate-600)              { color: var(--c-text-3) !important; }
+[data-theme="light"] main .text-slate-700                                     { color: var(--c-text-4) !important; }
+
+/* Acentos → tonos más oscuros para contraste sobre fondo claro */
+[data-theme="light"] main .text-blue-400   { color: #2563eb !important; }
+[data-theme="light"] main .text-emerald-400{ color: #059669 !important; }
+[data-theme="light"] main .text-green-400  { color: #16a34a !important; }
+[data-theme="light"] main .text-red-400    { color: #dc2626 !important; }
+[data-theme="light"] main .text-violet-400 { color: #7c3aed !important; }
+[data-theme="light"] main .text-amber-400  { color: #d97706 !important; }
+[data-theme="light"] main .text-purple-400 { color: #9333ea !important; }
+
+/* Badges / chips oscuros translúcidos → tintes claros */
+[data-theme="light"] main .bg-emerald-950\/60,
+[data-theme="light"] main .bg-emerald-950\/50 { background-color: #d1fae5 !important; }
+[data-theme="light"] main .bg-green-950\/60    { background-color: #dcfce7 !important; }
+[data-theme="light"] main .bg-red-950\/60,
+[data-theme="light"] main .bg-red-950\/50     { background-color: #fee2e2 !important; }
+[data-theme="light"] main .bg-blue-950\/60,
+[data-theme="light"] main .bg-blue-950\/50    { background-color: #dbeafe !important; }
+[data-theme="light"] main .bg-violet-950\/60,
+[data-theme="light"] main .bg-violet-950\/50  { background-color: #ede9fe !important; }
+[data-theme="light"] main .bg-amber-950\/60,
+[data-theme="light"] main .bg-amber-950\/50   { background-color: #fef3c7 !important; }
+[data-theme="light"] main .bg-slate-800       { background-color: #e2e8f0 !important; }
+
+/* Bordes de esos badges */
+[data-theme="light"] main .border-emerald-800\/40 { border-color: #6ee7b7 !important; }
+[data-theme="light"] main .border-green-800\/40   { border-color: #86efac !important; }
+[data-theme="light"] main .border-red-800\/40     { border-color: #fca5a5 !important; }
+[data-theme="light"] main .border-blue-800\/40    { border-color: #93c5fd !important; }
+[data-theme="light"] main .border-violet-800\/40  { border-color: #c4b5fd !important; }
+
+/* Iconos de acento dentro de píldoras de color claro (mantener saturado) */
+[data-theme="light"] main .bg-blue-950\/60 .text-blue-400,
+[data-theme="light"] main .bg-blue-950\/50 .text-blue-400     { color: #1d4ed8 !important; }
+[data-theme="light"] main .bg-emerald-950\/60 .text-emerald-400 { color: #047857 !important; }
+[data-theme="light"] main .bg-amber-950\/60 .text-amber-400,
+[data-theme="light"] main .bg-amber-950\/50 .text-amber-400   { color: #b45309 !important; }
+[data-theme="light"] main .bg-violet-950\/50 .text-violet-400 { color: #6d28d9 !important; }
 
 /* Dividers */
-[data-theme="light"] .divide-\[\#1a1f2e\] > * + * { border-color: var(--c-border) !important; }
+[data-theme="light"] main .divide-\[var\(--c-border\)\] > * + * { border-color: var(--c-border) !important; }
 
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--c-bg); }
-::-webkit-scrollbar-thumb { background: var(--c-border-card); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--c-border-strong); border-radius: 3px; }

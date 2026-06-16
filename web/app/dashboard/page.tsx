@@ -19,7 +19,7 @@ export default function DashboardPage() {
         {stats.map(({ label, value, icon: Icon, color }) => (
           <div
             key={label}
-            className="rounded-xl border border-[#1e2130] bg-[#0f1117] p-5"
+            className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-5"
           >
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-slate-500">{label}</p>
@@ -31,7 +31,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Empty state — DB sin datos aún */}
-      <div className="rounded-xl border border-dashed border-[#2d3447] bg-[#0f1117] p-12 text-center">
+      <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">
         <Building2 size={32} className="mx-auto text-slate-700 mb-3" />
         <p className="text-slate-500 text-sm font-medium">Base de datos vacía</p>
         <p className="text-slate-700 text-xs mt-1">

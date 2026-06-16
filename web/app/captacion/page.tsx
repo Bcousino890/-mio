@@ -8,7 +8,7 @@ export default function CaptacionPage() {
       subtitle="Leads de particulares · exclusivas rotas · señales de motivación"
     >
       <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="rounded-xl border border-[#1e2130] bg-[#0f1117] p-5">
+        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-5">
           <div className="flex items-center gap-2 mb-3">
             <Users size={16} className="text-purple-400" />
             <p className="text-sm font-medium text-slate-300">Particulares activos</p>
@@ -16,7 +16,7 @@ export default function CaptacionPage() {
           <p className="text-2xl font-bold text-slate-100">—</p>
           <p className="text-xs text-slate-600 mt-1">Vista: v_leads_particulares</p>
         </div>
-        <div className="rounded-xl border border-[#1e2130] bg-[#0f1117] p-5">
+        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-5">
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle size={16} className="text-amber-400" />
             <p className="text-sm font-medium text-slate-300">Exclusivas rotas</p>
@@ -26,7 +26,7 @@ export default function CaptacionPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-dashed border-[#2d3447] bg-[#0f1117] p-12 text-center">
+      <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">
         <Users size={32} className="mx-auto text-slate-700 mb-3" />
         <p className="text-slate-500 text-sm font-medium">Sin leads todavía</p>
         <p className="text-slate-700 text-xs mt-1">
