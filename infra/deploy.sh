@@ -7,6 +7,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DOMAIN="crm.cremme.es"
 APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
 
@@ -28,13 +29,10 @@ if [ -n "$SHARED_NET" ]; then
   docker network connect "$SHARED_NET" "$APP_CONTAINER" 2>/dev/null || true
 fi
 
-echo "▶ [4/4] Recargando nginx compartido ($SHARED_NGINX)..."
+echo "▶ [4/4] Asegurando HTTPS y recargando nginx compartido ($SHARED_NGINX)..."
 if [ -n "$SHARED_NGINX" ]; then
-  # Reasegura el conf (por si el contenedor nginx se recreó) y recarga
-  docker cp "$REPO_DIR/infra/nginx-casafari-shared.conf" \
-    "$SHARED_NGINX:/etc/nginx/conf.d/casafari.conf" 2>/dev/null || true
-  docker exec "$SHARED_NGINX" nginx -t >/dev/null 2>&1 && docker exec "$SHARED_NGINX" nginx -s reload || true
+  DOMAIN="$DOMAIN" SHARED_NGINX="$SHARED_NGINX" bash "$REPO_DIR/infra/ensure-tls.sh" || true
 fi
 
 echo ""
-echo "✅ Deploy completado → http://crm.cremme.es"
+echo "✅ Deploy completado → https://$DOMAIN"

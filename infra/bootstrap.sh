@@ -86,10 +86,15 @@ else
   fail "Config inválida — revertida"
 fi
 
+# ── 6.5 TLS (Let's Encrypt — manual http-01 vía docker cp, no toca zinto) ────
+log "[6.5/7] Configurando HTTPS para $DOMAIN..."
+DOMAIN="$DOMAIN" SHARED_NGINX="$SHARED_NGINX" bash "$REPO_DIR/infra/ensure-tls.sh" \
+  || warn "TLS no configurado — sigue funcionando en http"
+
 # ── 7. Fin ───────────────────────────────────────────────────────────────────
 log "[7/7] ✅ Bootstrap completado"
 echo ""
-echo "  🌐  http://$DOMAIN"
+echo "  🌐  https://$DOMAIN"
 echo "  📦  docker ps | grep casafari"
 echo "  📜  $COMPOSE logs -f app"
 echo ""
