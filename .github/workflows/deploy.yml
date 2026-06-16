@@ -53,11 +53,19 @@ jobs:
             set -e
             cd /opt/casafari
 
-            # .env: si no existe, lo crea con una contraseña aleatoria (primera vez)
+            # .env: si no existe lo crea desde la plantilla; si existe pero le
+            # falta POSTGRES_PASSWORD (p.ej. de un intento previo fallido), lo completa.
             if [ ! -f .env ]; then
               cp .env.example .env
-              sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
-              echo "🔑 .env creado con POSTGRES_PASSWORD aleatorio"
+              echo "📄 .env creado desde .env.example"
+            fi
+            if ! grep -q '^POSTGRES_PASSWORD=..*' .env; then
+              if grep -q '^POSTGRES_PASSWORD=' .env; then
+                sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+              else
+                echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+              fi
+              echo "🔑 POSTGRES_PASSWORD generado aleatoriamente"
             fi
 
             # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
