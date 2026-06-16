@@ -13,7 +13,29 @@
 
 ---
 
-## Primera vez en el VPS
+## 🚀 Instalación automática (recomendada)
+
+Un solo script hace todo de forma **aislada de zintoleads** (DB → migraciones →
+app → nginx → TLS), con backup de nginx y rollback si algo falla:
+
+```bash
+ssh root@204.168.174.0
+git clone https://github.com/Bcousino890/casafari-mio.git /opt/casafari
+cd /opt/casafari
+cp .env.example .env && nano .env      # pon POSTGRES_PASSWORD
+bash infra/bootstrap.sh
+```
+
+→ Web pública en **https://204-168-174-0.nip.io**
+
+> **Garantía de aislamiento:** `bootstrap.sh` solo crea `casafari.conf` y su snippet.
+> Antes de recargar nginx hace `nginx -t`; si falla, **restaura el backup** y aborta.
+> `certbot --nginx -d 204-168-174-0.nip.io` solo edita el server block con ese
+> `server_name` — el de zintoleads tiene otro nombre, así que **ni lo toca**.
+
+---
+
+## Instalación manual (paso a paso)
 
 ### 1. Clonar el repo
 
