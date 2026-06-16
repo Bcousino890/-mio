@@ -1,0 +1,79 @@
+name: Deploy a CX33
+
+# Despliega casafari-mio al VPS sin que el servidor necesite credenciales de git.
+# El runner de GitHub (que SÍ tiene acceso al repo privado) hace checkout y
+# sincroniza el código al VPS por SSH; luego ejecuta el build allí.
+on:
+  push:
+    branches:
+      - claude/affectionate-albattani-leauui
+    paths:
+      - 'web/**'
+      - 'db/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # botón "Run workflow" manual
+
+concurrency:
+  group: deploy-cx33
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. El runner descarga el código (repo privado → acceso automático)
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Preparar la clave SSH para llegar al VPS
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # 3. Sincronizar el código al VPS (sin .git, sin node_modules, sin .env)
+      - name: Rsync al VPS
+        run: |
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.next' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }}" \
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/"
+
+      # 4. Ejecutar el deploy en el VPS
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+
+            # .env: si no existe lo crea desde la plantilla; si existe pero le
+            # falta POSTGRES_PASSWORD (p.ej. de un intento previo fallido), lo completa.
+            if [ ! -f .env ]; then
+              cp .env.example .env
+              echo "📄 .env creado desde .env.example"
+            fi
+            if ! grep -q '^POSTGRES_PASSWORD=..*' .env; then
+              if grep -q '^POSTGRES_PASSWORD=' .env; then
+                sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+              else
+                echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+              fi
+              echo "🔑 POSTGRES_PASSWORD generado aleatoriamente"
+            fi
+
+            # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
+            if docker ps --format '{{.Names}}' | grep -q casafari-app; then
+              echo "▶ Deploy incremental (app ya existe)"
+              bash infra/deploy.sh
+            else
+              echo "▶ Primera instalación: bootstrap completo"
+              bash infra/bootstrap.sh
+            fi
+          EOF

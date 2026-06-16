@@ -1,115 +1,168 @@
 'use client'
 
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import type { Listing } from '@/lib/mock-listings'
-import { Bed, Bath, Maximize2, Clock, TrendingDown, MapPin, Building2, User } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MoreHorizontal, MapPin, TrendingDown } from 'lucide-react'
+
+const BADGE_STYLES: Record<string, string> = {
+  green:  'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+  amber:  'bg-amber-500/15 text-amber-400 border-amber-500/25',
+  red:    'bg-red-500/15 text-red-400 border-red-500/25',
+  blue:   'bg-blue-500/15 text-blue-400 border-blue-500/25',
+  purple: 'bg-violet-500/15 text-violet-400 border-violet-500/25',
+  orange: 'bg-orange-500/15 text-orange-400 border-orange-500/25',
+}
 
 function fmt(n: number) {
   return n.toLocaleString('es-ES')
 }
 
+function daysLabel(d: number) {
+  if (d === 0) return 'Hoy'
+  if (d === 1) return 'Hace 1 día'
+  return `Hace ${d} días`
+}
+
 interface Props {
   listing: Listing
   active?: boolean
-  onClick?: () => void
+  onHover?: (id: string | null) => void
 }
 
-export default function PropertyCard({ listing: l, active, onClick }: Props) {
+export default function PropertyCard({ listing: l, active, onHover }: Props) {
+  const router = useRouter()
+  const [photoIdx, setPhotoIdx] = useState(0)
+
+  const prevPhoto = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setPhotoIdx((i) => (i === 0 ? l.photos.length - 1 : i - 1))
+  }
+  const nextPhoto = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setPhotoIdx((i) => (i === l.photos.length - 1 ? 0 : i + 1))
+  }
+
   return (
-    <div
-      onClick={onClick}
-      className={`cursor-pointer border rounded-xl overflow-hidden transition-all hover:border-blue-500/40 ${
+    <article
+      onClick={() => router.push(`/anuncios/${l.id}`)}
+      onMouseEnter={() => onHover?.(l.id)}
+      onMouseLeave={() => onHover?.(null)}
+      className={`group cursor-pointer rounded-2xl overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/40 ${
         active
-          ? 'border-blue-500 bg-[#111827]'
-          : 'border-[#1e2130] bg-[#0f1117] hover:bg-[#111218]'
-      }`}
+          ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/10'
+          : 'ring-1 ring-white/5'
+      } bg-[#0d1017]`}
     >
-      {/* Photo placeholder */}
-      <div className="relative h-36 bg-[#1a1f2e] flex items-center justify-center">
-        <Building2 size={28} className="text-slate-700" />
+      {/* ── Photo area ── */}
+      <div className="relative h-44 bg-[#141924] overflow-hidden">
+        {l.photos.length > 0 ? (
+          <img
+            src={l.photos[photoIdx]}
+            alt={l.title}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-700 text-sm">Sin foto</div>
+        )}
 
-        {/* Badges top-left */}
-        <div className="absolute top-2 left-2 flex flex-col gap-1">
-          {l.days_on_market > 0 && (
-            <span className="text-[10px] bg-black/70 text-slate-300 px-2 py-0.5 rounded">
-              {l.days_on_market}d en mercado
-            </span>
-          )}
-          {l.price_drops > 0 && (
-            <span className="text-[10px] bg-green-900/80 text-green-300 px-2 py-0.5 rounded flex items-center gap-1">
-              <TrendingDown size={10} />
-              {l.price_drops} bajada{l.price_drops > 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
+        {/* Dark scrim bottom */}
+        <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/75 to-transparent" />
 
-        {/* RC badge top-right */}
-        {l.rc_status !== 'none' && (
-          <div className="absolute top-2 right-2">
-            <span className="text-[10px] bg-purple-900/80 text-purple-300 px-2 py-0.5 rounded">
-              Ubicación exacta
+        {/* Slider arrows — visible on hover */}
+        {l.photos.length > 1 && (
+          <>
+            <button
+              onClick={prevPhoto}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 backdrop-blur-sm text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              onClick={nextPhoto}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/50 backdrop-blur-sm text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+            >
+              <ChevronRight size={14} />
+            </button>
+            {/* Dot indicators */}
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+              {l.photos.map((_, i) => (
+                <span
+                  key={i}
+                  className={`w-1 h-1 rounded-full transition-all ${i === photoIdx ? 'bg-white w-2.5' : 'bg-white/40'}`}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Top-left: badge */}
+        {l.badge && (
+          <div className="absolute top-2.5 left-2.5">
+            <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border backdrop-blur-sm ${BADGE_STYLES[l.badge.color]}`}>
+              {l.badge.color === 'green' && l.price_drops > 0 && <TrendingDown size={9} />}
+              {l.badge.label}
             </span>
           </div>
         )}
 
-        {/* Price overlay bottom */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-3 py-2">
-          <span className="text-white font-bold text-sm">
-            {l.operation === 'sale' ? '' : ''}
+        {/* Top-right: actions */}
+        <button
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-2.5 right-2.5 w-7 h-7 rounded-full bg-black/50 backdrop-blur-sm text-white/70 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70 hover:text-white"
+        >
+          <MoreHorizontal size={14} />
+        </button>
+
+        {/* Bottom-left: price */}
+        <div className="absolute bottom-2.5 left-3">
+          <span className="text-white font-bold text-base leading-none tracking-tight">
             {fmt(l.price)}{l.operation === 'sale' ? ' €' : ' €/mes'}
           </span>
-          <span className="text-slate-400 text-xs ml-2">
-            ({fmt(l.price_sqm)} €/m²)
+          <span className="text-white/60 text-xs ml-1.5">
+            {fmt(l.price_sqm)} €/m²
+          </span>
+        </div>
+
+        {/* Operation tag */}
+        <div className="absolute bottom-2.5 right-3">
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${l.operation === 'sale' ? 'bg-blue-600/80 text-white' : 'bg-violet-600/80 text-white'}`}>
+            {l.operation === 'sale' ? 'VENTA' : 'ALQUILER'}
           </span>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="px-3 py-2.5">
-        <p className="text-slate-200 text-sm font-medium leading-snug line-clamp-1 mb-2">
+      {/* ── Content area ── */}
+      <div className="px-3.5 py-3">
+        {/* Title */}
+        <p className="text-slate-200 text-sm font-semibold leading-snug line-clamp-1 mb-1.5">
           {l.title}
         </p>
 
-        {/* Specs row */}
-        <div className="flex items-center gap-3 text-xs text-slate-500 mb-2">
-          <span className="flex items-center gap-1">
-            <Bed size={12} /> {l.bedrooms > 0 ? l.bedrooms : 'Est.'}
-          </span>
-          <span className="flex items-center gap-1">
-            <Bath size={12} /> {l.bathrooms}
-          </span>
-          <span className="flex items-center gap-1">
-            <Maximize2 size={12} /> {l.square_meters} m²
-          </span>
-          {l.floor && (
-            <span className="text-slate-600">{l.floor}</span>
-          )}
-        </div>
+        {/* Specs line */}
+        <p className="text-slate-500 text-xs mb-2.5">
+          {l.square_meters} m²
+          {l.bedrooms > 0 && <> · {l.bedrooms} hab</>}
+          {` · ${l.bathrooms} baño${l.bathrooms > 1 ? 's' : ''}`}
+          {l.floor && <> · {l.floor}</>}
+        </p>
 
-        {/* Source info */}
+        {/* Bottom row */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            {l.advertiser_type === 'particular' ? (
-              <User size={11} className="text-amber-400" />
-            ) : (
-              <Building2 size={11} className="text-slate-500" />
-            )}
-            <span className="text-xs text-slate-600 truncate max-w-[120px]">
-              {l.advertiser_name}
-            </span>
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+            <MapPin size={10} className="text-slate-700" />
+            <span className="truncate max-w-[140px]">{l.zone_name}</span>
           </div>
-          {l.listing_count > 1 && (
-            <span className="text-[11px] text-blue-400 bg-blue-950/50 px-2 py-0.5 rounded">
-              {l.listing_count} fuentes
-            </span>
-          )}
-        </div>
-
-        {/* Zone */}
-        <div className="flex items-center gap-1 mt-1.5">
-          <MapPin size={10} className="text-slate-700" />
-          <span className="text-[11px] text-slate-600">{l.zone_name}</span>
+          <div className="flex items-center gap-2">
+            {l.listing_count > 1 && (
+              <span className="text-[10px] text-blue-400 bg-blue-950/60 border border-blue-900/40 px-1.5 py-0.5 rounded-full">
+                {l.listing_count} fuentes
+              </span>
+            )}
+            <span className="text-[10px] text-slate-700">{daysLabel(l.days_on_market)}</span>
+          </div>
         </div>
       </div>
-    </div>
+    </article>
   )
 }

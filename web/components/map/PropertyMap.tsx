@@ -8,13 +8,50 @@ interface Props {
   listings: Listing[]
   activeId?: string | null
   onMarkerClick?: (id: string) => void
+  onMarkerHover?: (id: string | null) => void
 }
 
-function fmt(n: number) {
-  return n.toLocaleString('es-ES')
+function fmtPrice(n: number, op: string) {
+  if (op === 'rent') return `${n.toLocaleString('es-ES')} €/mes`
+  const k = n >= 1_000_000
+    ? `${(n / 1_000_000).toLocaleString('es-ES', { minimumFractionDigits: n % 1_000_000 !== 0 ? 1 : 0, maximumFractionDigits: 1 })} M€`
+    : `${Math.round(n / 1000)} K€`
+  return k
 }
 
-export default function PropertyMap({ listings, activeId, onMarkerClick }: Props) {
+function markerHtml(l: Listing, isActive: boolean) {
+  const priceStr = fmtPrice(l.price, l.operation)
+  const isPartic = l.advertiser_type === 'particular'
+  const bg = isActive ? '#3b82f6' : '#ffffff'
+  const text = isActive ? '#ffffff' : '#0f172a'
+  const border = isActive ? 'transparent' : 'rgba(0,0,0,0.12)'
+  const shadow = isActive
+    ? '0 4px 16px rgba(59,130,246,0.5)'
+    : '0 2px 8px rgba(0,0,0,0.25)'
+  const dot = isPartic && !isActive ? 'background:#f59e0b;' : ''
+  const dotHtml = isPartic ? `<span style="width:6px;height:6px;border-radius:50%;${dot || 'background:#3b82f6;'}display:inline-block;flex-shrink:0"></span>` : ''
+
+  return `<div style="
+    background:${bg};
+    color:${text};
+    border:1px solid ${border};
+    border-radius:999px;
+    padding:4px 10px;
+    font-size:12px;
+    font-weight:700;
+    font-family:system-ui,-apple-system,sans-serif;
+    white-space:nowrap;
+    box-shadow:${shadow};
+    display:flex;
+    align-items:center;
+    gap:5px;
+    cursor:pointer;
+    transition:all .15s;
+    letter-spacing:-0.01em;
+  ">${dotHtml}${priceStr}</div>`
+}
+
+export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -23,57 +60,54 @@ export default function PropertyMap({ listings, activeId, onMarkerClick }: Props
 
   useEffect(() => {
     if (!containerRef.current) return
-    // Guard against StrictMode double-invoke and already-init containers
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if ((containerRef.current as any)._leaflet_id) return
 
     import('leaflet').then((L) => {
       if (!containerRef.current) return
 
-      // Fix webpack default icon paths
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (L.Icon.Default.prototype as any)._getIconUrl
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: '/leaflet/marker-icon-2x.png',
-        iconUrl: '/leaflet/marker-icon.png',
-        shadowUrl: '/leaflet/marker-shadow.png',
-      })
-
       const map = L.map(containerRef.current, {
         center: [40.4300, -3.6900],
         zoom: 13,
-        zoomControl: true,
+        zoomControl: false,
+        attributionControl: false,
       })
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19,
+      // Carto light for contrast with our dark UI
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap © CARTO',
+        maxZoom: 20,
       }).addTo(map)
 
-      listings.forEach((l) => {
-        const isPartic = l.advertiser_type === 'particular'
-        const color = isPartic ? '#f59e0b' : '#3b82f6'
+      // Custom zoom controls placement
+      L.control.zoom({ position: 'topright' }).addTo(map)
+      L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map)
 
+      listings.forEach((l) => {
         const icon = L.divIcon({
           className: '',
-          html: `<div style="background:${color};color:white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid rgba(255,255,255,0.25);box-shadow:0 2px 8px rgba(0,0,0,0.5);cursor:pointer;">${l.square_meters}</div>`,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
+          html: markerHtml(l, false),
+          iconAnchor: [0, 0],
         })
 
         const marker = L.marker([l.latitude, l.longitude], { icon })
           .addTo(map)
           .bindPopup(`
-            <div style="min-width:180px;font-family:system-ui;font-size:13px;line-height:1.5">
-              <div style="font-weight:700;font-size:14px">${fmt(l.price)} €</div>
-              <div style="color:#64748b;font-size:11px">${fmt(l.price_sqm)} €/m² · ${l.square_meters}m² · ${l.bedrooms}h ${l.bathrooms}b</div>
-              <div style="margin-top:4px;font-size:12px">${l.title}</div>
-              <div style="color:#94a3b8;font-size:11px">${l.zone_name}</div>
-              ${l.listing_count > 1 ? `<div style="color:#60a5fa;font-size:11px;margin-top:2px">${l.listing_count} fuentes</div>` : ''}
+            <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
+              <div style="font-weight:700;font-size:14px;color:#0f172a">${l.price.toLocaleString('es-ES')} €</div>
+              <div style="color:#64748b;font-size:11px;margin-top:1px">${l.price_sqm.toLocaleString('es-ES')} €/m² · ${l.square_meters}m² · ${l.bedrooms > 0 ? l.bedrooms + 'h · ' : ''}${l.bathrooms}b</div>
+              <div style="margin-top:5px;font-size:12px;color:#1e293b;font-weight:500">${l.title}</div>
+              <div style="color:#94a3b8;font-size:11px;margin-top:1px">${l.zone_name}</div>
+              ${l.listing_count > 1 ? `<div style="color:#3b82f6;font-size:11px;margin-top:3px;font-weight:600">${l.listing_count} fuentes</div>` : ''}
             </div>
-          `, { offset: [0, -8], maxWidth: 220 })
+          `, { maxWidth: 240, offset: [0, 4] })
 
-        marker.on('click', () => onMarkerClick?.(l.id))
+        marker.on('click', () => {
+          onMarkerClick?.(l.id)
+        })
+        marker.on('mouseover', () => onMarkerHover?.(l.id))
+        marker.on('mouseout', () => onMarkerHover?.(null))
+
         markersRef.current[l.id] = marker
       })
 
@@ -89,26 +123,42 @@ export default function PropertyMap({ listings, activeId, onMarkerClick }: Props
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Update active marker style
   useEffect(() => {
-    if (!mapRef.current || !activeId) return
-    const marker = markersRef.current[activeId]
-    if (marker) marker.openPopup()
-  }, [activeId])
+    if (!mapRef.current) return
+    import('leaflet').then((L) => {
+      Object.entries(markersRef.current).forEach(([id, marker]) => {
+        const l = listings.find((x) => x.id === id)
+        if (!l) return
+        const isActive = id === activeId
+        marker.setIcon(L.divIcon({
+          className: '',
+          html: markerHtml(l, isActive),
+          iconAnchor: [0, 0],
+        }))
+        if (isActive) {
+          marker.openPopup()
+          marker.setZIndexOffset(1000)
+        } else {
+          marker.setZIndexOffset(0)
+        }
+      })
+    })
+  }, [activeId, listings])
 
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
-      {/* Legend */}
-      <div className="absolute bottom-6 left-4 z-[1000] bg-[#0f1117]/90 backdrop-blur border border-[#1e2130] rounded-lg px-3 py-2 text-xs text-slate-400 space-y-1 pointer-events-none">
+      {/* Map legend */}
+      <div className="absolute bottom-5 left-4 z-[1000] bg-white/95 backdrop-blur border border-black/8 rounded-xl px-3 py-2 text-xs text-slate-600 space-y-1 pointer-events-none shadow-md">
         <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full bg-blue-500 inline-block flex-shrink-0" />
-          Agencia/Portal
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-3 rounded-full bg-amber-400 inline-block flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0" />
           Particular
         </div>
-        <div className="text-[10px] text-slate-600 pt-0.5">nº = m²</div>
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-blue-500 inline-block flex-shrink-0" />
+          Agencia / Portal
+        </div>
       </div>
     </div>
   )

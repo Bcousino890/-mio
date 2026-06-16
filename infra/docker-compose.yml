@@ -4,11 +4,12 @@
 # ⚠️ El CX33 es COMPARTIDO (ya corre zinto-v2, zinto-crm, powerchat, nginx:80/443).
 #    Por eso: proyecto aislado, puertos no estándar (5433/6380, solo localhost),
 #    y memoria conservadora para ser buen vecino.
-# Arranque: `docker compose -p casafari --env-file ../.env up -d postgres redis`
-# (app y caddy se activan cuando el código de la plataforma esté construido;
-#  la URL pública irá por el nginx existente, NO por un Caddy en 80/443)
+# Arranque completo: docker compose -p casafari --env-file ../.env up -d
+# Solo DB+Redis: docker compose -p casafari --env-file ../.env up -d postgres redis
 # ─────────────────────────────────────────────────────────────────────────────
 services:
+
+  # ── PostgreSQL 16 + PostGIS ──────────────────────────────────────────────────
   postgres:
     image: postgis/postgis:16-3.4
     container_name: casafari-pg
@@ -17,8 +18,6 @@ services:
       POSTGRES_DB: casafari
       POSTGRES_USER: casafari
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
-    # Tuning para ~8 GB de RAM (CX33). Ajustar si el plan cambia de máquina.
-    # Tuning conservador: el CX33 es COMPARTIDO con otros stacks de producción.
     command:
       - "postgres"
       - "-c"
@@ -33,16 +32,17 @@ services:
       - "max_connections=40"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ../db/migrations:/migrations:ro       # aplicar con: psql -f /migrations/0001..., en orden
+      - ../db/migrations:/migrations:ro
       - ../db/etl:/etl:ro
     ports:
-      - "127.0.0.1:5433:5432"                  # 5433 en host (5432 lo usan otros stacks); solo localhost
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U casafari"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # ── Redis 7 ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: casafari-redis
@@ -51,30 +51,31 @@ services:
     volumes:
       - redisdata:/data
     ports:
-      - "127.0.0.1:6380:6379"                  # 6380 en host (6379 lo usan otros stacks)
+      - "127.0.0.1:6380:6379"
 
-  # ── App (Node/Next, self-host). Descomentar cuando exista el código. ─────────
-  # app:
-  #   build: ..
-  #   container_name: casafari-app
-  #   restart: unless-stopped
-  #   env_file: ../.env
-  #   depends_on:
-  #     postgres: { condition: service_healthy }
-  #   ports:
-  #     - "127.0.0.1:3000:3000"
-
-  # ── Caddy: reverse proxy + TLS automático. Sirve la URL pública. ─────────────
-  # caddy:
-  #   image: caddy:2
-  #   container_name: casafari-caddy
-  #   restart: unless-stopped
-  #   ports: ["80:80", "443:443"]
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
-  #     - caddydata:/data
+  # ── Next.js app (web) ─────────────────────────────────────────────────────────
+  app:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: casafari-app:latest
+    container_name: casafari-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health 2>/dev/null || wget -qO- http://localhost:3000 | head -c1 | grep -c . || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 volumes:
   pgdata:
   redisdata:
-  # caddydata:

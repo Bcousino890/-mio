@@ -4,20 +4,32 @@ import { useState, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
 import { mockListings } from '@/lib/mock-listings'
-import { SlidersHorizontal, LayoutList, Map, TrendingDown, User, Building2 } from 'lucide-react'
+import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search } from 'lucide-react'
 
 const PropertyMap = dynamic(() => import('@/components/map/PropertyMap'), { ssr: false })
 
 type Operation = 'all' | 'sale' | 'rent'
 type AdvertiserFilter = 'all' | 'particular' | 'professional'
+type SortKey = 'days' | 'price_asc' | 'price_desc' | 'sqm'
+
+const SORT_LABELS: Record<SortKey, string> = {
+  days: 'Más recientes',
+  price_asc: 'Precio: menor a mayor',
+  price_desc: 'Precio: mayor a menor',
+  sqm: '€/m² menor',
+}
 
 export default function AnunciosPage() {
+  const [hoverId, setHoverId] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [operation, setOperation] = useState<Operation>('all')
   const [advertiser, setAdvertiser] = useState<AdvertiserFilter>('all')
   const [showMap, setShowMap] = useState(true)
   const [onlyWithDrops, setOnlyWithDrops] = useState(false)
-  const [sortBy, setSortBy] = useState<'days' | 'price' | 'sqm'>('days')
+  const [sortBy, setSortBy] = useState<SortKey>('days')
+  const [showSortMenu, setShowSortMenu] = useState(false)
+
+  const combinedActive = hoverId ?? activeId
 
   const filtered = useMemo(() => {
     return mockListings
@@ -25,145 +37,164 @@ export default function AnunciosPage() {
       .filter((l) => advertiser === 'all' || l.advertiser_type === advertiser)
       .filter((l) => !onlyWithDrops || l.price_drops > 0)
       .sort((a, b) => {
-        if (sortBy === 'days') return b.days_on_market - a.days_on_market
-        if (sortBy === 'price') return a.price - b.price
-        if (sortBy === 'sqm') return a.price_sqm - b.price_sqm
-        return 0
+        switch (sortBy) {
+          case 'days': return a.days_on_market - b.days_on_market
+          case 'price_asc': return a.price - b.price
+          case 'price_desc': return b.price - a.price
+          case 'sqm': return a.price_sqm - b.price_sqm
+        }
       })
   }, [operation, advertiser, onlyWithDrops, sortBy])
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Filter bar */}
-      <header className="flex items-center gap-2 px-4 py-3 border-b border-[#1e2130] bg-[#0a0d14] flex-wrap">
-        <h1 className="text-sm font-semibold text-slate-200 mr-2">Anuncios</h1>
+    <div className="flex flex-col h-full bg-[#08090e]">
+      {/* ── Filter bar ── */}
+      <header className="flex-none flex items-center gap-2 px-4 py-2.5 border-b border-[#1a1f2e] bg-[#08090e] flex-wrap">
 
-        {/* Operation filter */}
-        <div className="flex rounded-lg border border-[#2d3447] overflow-hidden text-xs">
-          {(['all', 'sale', 'rent'] as const).map((op) => (
+        {/* Search input */}
+        <div className="relative flex-1 max-w-xs">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+          <input
+            type="text"
+            placeholder="Buscar zona, calle..."
+            className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0d1117] border border-[#1e2130] rounded-lg text-slate-400 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50 focus:ring-1 focus:ring-blue-600/20"
+          />
+        </div>
+
+        <div className="w-px h-5 bg-[#1e2130]" />
+
+        {/* Operation pills */}
+        <div className="flex rounded-lg bg-[#0d1117] border border-[#1e2130] p-0.5 gap-0.5">
+          {(['all', 'sale', 'rent'] as Operation[]).map((op) => (
             <button
               key={op}
               onClick={() => setOperation(op)}
-              className={`px-3 py-1.5 transition-all ${
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                 operation === op
-                  ? 'bg-blue-600 text-white'
-                  : 'text-slate-400 hover:bg-[#1a1f2e] hover:text-slate-200'
+                  ? 'bg-[#1e2a45] text-blue-400 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-400'
               }`}
             >
-              {op === 'all' ? 'Todo' : op === 'sale' ? 'En venta' : 'Alquiler'}
+              {op === 'all' ? 'Todos' : op === 'sale' ? 'Venta' : 'Alquiler'}
             </button>
           ))}
         </div>
 
-        {/* Advertiser filter */}
-        <div className="flex rounded-lg border border-[#2d3447] overflow-hidden text-xs">
-          <button
-            onClick={() => setAdvertiser('all')}
-            className={`px-3 py-1.5 flex items-center gap-1.5 transition-all ${
-              advertiser === 'all' ? 'bg-[#1e2a45] text-blue-300' : 'text-slate-400 hover:bg-[#1a1f2e]'
-            }`}
-          >
-            Todos
-          </button>
-          <button
-            onClick={() => setAdvertiser('particular')}
-            className={`px-3 py-1.5 flex items-center gap-1.5 transition-all ${
-              advertiser === 'particular' ? 'bg-amber-900/40 text-amber-300' : 'text-slate-400 hover:bg-[#1a1f2e]'
-            }`}
-          >
-            <User size={11} /> Particular
-          </button>
-          <button
-            onClick={() => setAdvertiser('professional')}
-            className={`px-3 py-1.5 flex items-center gap-1.5 transition-all ${
-              advertiser === 'professional' ? 'bg-[#1e2a45] text-blue-300' : 'text-slate-400 hover:bg-[#1a1f2e]'
-            }`}
-          >
-            <Building2 size={11} /> Agencia
-          </button>
+        {/* Advertiser pills */}
+        <div className="flex rounded-lg bg-[#0d1117] border border-[#1e2130] p-0.5 gap-0.5">
+          {(['all', 'particular', 'professional'] as AdvertiserFilter[]).map((a) => (
+            <button
+              key={a}
+              onClick={() => setAdvertiser(a)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
+                advertiser === a
+                  ? 'bg-[#1e2a45] text-blue-400 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-400'
+              }`}
+            >
+              {a === 'all' ? 'Todos' : a === 'particular' ? 'Particular' : 'Agencia'}
+            </button>
+          ))}
         </div>
 
-        {/* Price drops toggle */}
+        {/* Bajadas toggle */}
         <button
           onClick={() => setOnlyWithDrops(!onlyWithDrops)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
             onlyWithDrops
-              ? 'border-green-600 bg-green-900/30 text-green-300'
-              : 'border-[#2d3447] text-slate-400 hover:bg-[#1a1f2e]'
+              ? 'bg-emerald-950/60 border-emerald-800/40 text-emerald-400'
+              : 'bg-[#0d1117] border-[#1e2130] text-slate-600 hover:text-slate-400'
           }`}
         >
-          <TrendingDown size={12} />
-          Con bajadas
+          <SlidersHorizontal size={12} />
+          Bajadas
         </button>
 
-        <div className="flex-1" />
-
-        {/* Sort */}
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-          className="text-xs bg-[#0f1117] border border-[#2d3447] text-slate-400 rounded-lg px-2 py-1.5 cursor-pointer"
-        >
-          <option value="days">Días en mercado</option>
-          <option value="price">Precio ↑</option>
-          <option value="sqm">€/m² ↑</option>
-        </select>
-
-        {/* View toggle */}
-        <div className="flex rounded-lg border border-[#2d3447] overflow-hidden">
+        {/* Sort dropdown */}
+        <div className="relative ml-auto">
           <button
-            onClick={() => setShowMap(true)}
-            className={`px-2.5 py-1.5 transition-all ${showMap ? 'bg-[#1e2a45] text-blue-300' : 'text-slate-500 hover:bg-[#1a1f2e]'}`}
+            onClick={() => setShowSortMenu(!showSortMenu)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border bg-[#0d1117] border-[#1e2130] text-slate-400 hover:text-slate-200 transition-colors"
           >
-            <Map size={14} />
+            {SORT_LABELS[sortBy]}
+            <ChevronDown size={11} className={`transition-transform ${showSortMenu ? 'rotate-180' : ''}`} />
           </button>
-          <button
-            onClick={() => setShowMap(false)}
-            className={`px-2.5 py-1.5 transition-all ${!showMap ? 'bg-[#1e2a45] text-blue-300' : 'text-slate-500 hover:bg-[#1a1f2e]'}`}
-          >
-            <LayoutList size={14} />
-          </button>
+          {showSortMenu && (
+            <div className="absolute right-0 top-full mt-1.5 z-50 bg-[#0d1117] border border-[#1e2130] rounded-xl shadow-xl shadow-black/40 py-1 min-w-[190px]">
+              {(Object.entries(SORT_LABELS) as [SortKey, string][]).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => { setSortBy(key); setShowSortMenu(false) }}
+                  className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
+                    sortBy === key ? 'text-blue-400 bg-blue-950/30' : 'text-slate-400 hover:bg-[#151b2b] hover:text-slate-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
+        {/* Map toggle */}
+        <button
+          onClick={() => setShowMap(!showMap)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+            showMap
+              ? 'bg-[#1e2a45] border-blue-800/40 text-blue-400'
+              : 'bg-[#0d1117] border-[#1e2130] text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          {showMap ? <LayoutList size={13} /> : <Map size={13} />}
+          {showMap ? 'Lista' : 'Mapa'}
+        </button>
       </header>
 
-      {/* Body */}
+      {/* ── Main content ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: list */}
-        <div
-          className={`overflow-y-auto flex-shrink-0 ${
-            showMap ? 'w-[420px]' : 'flex-1'
-          } border-r border-[#1e2130]`}
-        >
-          {/* Count bar */}
-          <div className="sticky top-0 z-10 px-4 py-2 bg-[#0a0d14] border-b border-[#1a1f2e]">
+
+        {/* Property list */}
+        <div className={`flex flex-col overflow-hidden transition-all duration-300 ${showMap ? 'w-[52%]' : 'w-full'}`}>
+          {/* Counter */}
+          <div className="flex-none px-4 py-2 border-b border-[#1a1f2e]">
             <p className="text-xs text-slate-500">
-              <span className="text-slate-200 font-semibold">{filtered.length}</span> propiedades
-              {operation !== 'all' && ` · ${operation === 'sale' ? 'venta' : 'alquiler'}`}
-              {advertiser !== 'all' && ` · ${advertiser}`}
-              <span className="ml-2 text-slate-700">— datos mock</span>
+              <span className="text-slate-300 font-semibold">{filtered.length}</span>
+              {' '}de{' '}
+              <span className="text-slate-400">{mockListings.length}</span> anuncios
+              {showMap && <span className="text-slate-700"> en el mapa</span>}
             </p>
           </div>
 
-          <div className={`p-3 ${showMap ? '' : 'grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3'}`}>
-            {filtered.map((l) => (
-              <div key={l.id} className={showMap ? 'mb-2' : ''}>
-                <PropertyCard
-                  listing={l}
-                  active={activeId === l.id}
-                  onClick={() => setActiveId(activeId === l.id ? null : l.id)}
-                />
+          {/* Cards grid */}
+          <div className="flex-1 overflow-y-auto px-3 py-3">
+            {filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-slate-700">
+                <p className="text-sm font-medium">Sin resultados</p>
+                <p className="text-xs mt-1">Ajusta los filtros para ver más anuncios</p>
               </div>
-            ))}
+            ) : (
+              <div className={`grid gap-3 ${showMap ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                {filtered.map((listing) => (
+                  <PropertyCard
+                    key={listing.id}
+                    listing={listing}
+                    active={combinedActive === listing.id}
+                    onHover={setHoverId}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Right: map */}
+        {/* Map panel */}
         {showMap && (
-          <div className="flex-1 relative">
+          <div className="flex-1 relative border-l border-[#1a1f2e]">
             <PropertyMap
               listings={filtered}
-              activeId={activeId}
-              onMarkerClick={(id) => setActiveId(activeId === id ? null : id)}
+              activeId={combinedActive}
+              onMarkerClick={(id) => setActiveId(id === activeId ? null : id)}
+              onMarkerHover={setHoverId}
             />
           </div>
         )}

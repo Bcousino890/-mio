@@ -1,64 +1,158 @@
 # Despliegue — casafari-mio
 
-**Servidor:** Hetzner **CX33** · ref #123878962 · host `zinto.leads` · IP **204.168.174.0**
-**Infra:** solo VPS + proxies. Sin Supabase, sin Vercel.
+**Servidor:** Hetzner **CX33** · IP **204.168.174.0** · host `zinto.leads`  
+**URL gratis (funciona ya):** `http://204-168-174-0.nip.io` — ver [`dominio-gratis.md`](dominio-gratis.md)  
+**Convivencia:** zintoleads y otros stacks siguen intactos — casafari-mio usa puertos aislados.
 
-> ⚠️ **Capacidad:** el plan maestro se dimensionó para un CX43 (8 vCPU / 16 GB / 160 GB).
-> El CX33 es más pequeño (~4 vCPU / 8 GB). Para las **5 zonas de prueba** sobra; al
-> escalar a toda la Comunidad de Madrid habrá que vigilar RAM/disco (INSPIRE + histórico)
-> y, llegado el caso, subir de máquina o separar Postgres. El `docker-compose.yml` ya
-> viene tuneado para 8 GB.
+| Servicio | Puerto en host | Visible desde |
+|---|---|---|
+| Postgres (casafari) | `5433` | solo localhost |
+| Redis (casafari) | `6380` | solo localhost |
+| Next.js app | `3000` | solo localhost |
+| nginx | `80` / `443` | público — sirve `mio.zinto.app` |
 
-## 1. Preparar el VPS (una vez)
+---
+
+## 🚀 Instalación automática (recomendada)
+
+Un solo script hace todo de forma **aislada de zintoleads** (DB → migraciones →
+app → nginx → TLS), con backup de nginx y rollback si algo falla:
+
 ```bash
 ssh root@204.168.174.0
-apt update && apt -y upgrade
-curl -fsSL https://get.docker.com | sh        # Docker + compose plugin
-ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw --force enable
-```
-
-## 2. Traer el código
-```bash
 git clone https://github.com/Bcousino890/casafari-mio.git /opt/casafari
 cd /opt/casafari
-cp .env.example .env && nano .env             # rellenar POSTGRES_PASSWORD, proxies Geonode, etc.
+cp .env.example .env && nano .env      # pon POSTGRES_PASSWORD
+bash infra/bootstrap.sh
 ```
 
-## 3. Levantar la base de datos
+→ Web pública en **https://204-168-174-0.nip.io**
+
+> **Garantía de aislamiento:** `bootstrap.sh` solo crea `casafari.conf` y su snippet.
+> Antes de recargar nginx hace `nginx -t`; si falla, **restaura el backup** y aborta.
+> `certbot --nginx -d 204-168-174-0.nip.io` solo edita el server block con ese
+> `server_name` — el de zintoleads tiene otro nombre, así que **ni lo toca**.
+
+---
+
+## Instalación manual (paso a paso)
+
+### 1. Clonar el repo
+
 ```bash
-cd infra
-docker compose --env-file ../.env up -d postgres redis
-docker compose exec postgres pg_isready -U casafari
+ssh root@204.168.174.0
+git clone https://github.com/Bcousino890/casafari-mio.git /opt/casafari
+cd /opt/casafari
 ```
 
-## 4. Aplicar migraciones (en orden)
+### 2. Configurar `.env`
+
 ```bash
-for f in /migrations/0001 /migrations/0002 ... ; do :; done   # o:
-docker compose exec postgres sh -c \
-  'for f in /migrations/*.sql; do echo ">> $f"; psql -U casafari -d casafari -f "$f" || break; done'
+cp .env.example .env
+nano .env
+# Mínimo obligatorio: POSTGRES_PASSWORD=<una_contraseña_segura>
 ```
 
-## 5. Cargar cartografía INSPIRE (5 zonas de prueba)
-- Descargar el GML de Catastro/INSPIRE de los municipios objetivo (Madrid, Pozuelo, Alcobendas).
-- Importar reproyectando a 4326:
+### 3. Registrar en nginx (sin tocar la config de zintoleads)
+
 ```bash
-ogr2ogr -f PostgreSQL "PG:host=localhost user=casafari dbname=casafari" \
-  CADASTRALPARCEL.gml -t_srs EPSG:4326 -nln cadastre_parcel_raw -overwrite
-# luego INSERT ... SELECT a cadastre_parcel (rc14 = referencia, geom).
+# Snippet de proxy (reutilizable por HTTP y HTTPS)
+cp /opt/casafari/infra/nginx-casafari-proxy.conf /etc/nginx/snippets/casafari-proxy.conf
+
+# Server block para mio.zinto.app
+cp /opt/casafari/infra/nginx-casafari.conf /etc/nginx/conf.d/casafari.conf
+
+# Verificar que no rompe nada
+nginx -t && systemctl reload nginx
 ```
 
-## 6. (Cuando exista la app) build + arrancar
+> Si usas un subdominio distinto, edita `server_name` en `/etc/nginx/conf.d/casafari.conf`.
+
+### 4. TLS gratis con Certbot
+
 ```bash
-# descomentar servicios app + caddy en docker-compose.yml
-docker compose --env-file ../.env up -d --build
+# Solo si certbot no está instalado:
+apt install -y certbot python3-certbot-nginx
+
+certbot --nginx -d mio.zinto.app
+# Certbot añade el redirect HTTP→HTTPS y renueva automáticamente
 ```
-URL temporal mientras no haya dominio: **http://204.168.174.0** (Caddy en :80).
-Con dominio: poner el host en `infra/Caddyfile` y Caddy emite TLS solo.
 
-## 7. Importar los 2.500 legacy
-Ver [`db/etl/import_legacy_particulares.sql`](../db/etl/import_legacy_particulares.sql).
+### 5. Arrancar Postgres + Redis
 
-## Acceso para deploy automatizado
-Para que el deploy lo dispare CI/asistente, añadir una **clave SSH pública** al
-`~/.ssh/authorized_keys` del VPS (NO compartir contraseñas en claro). Recomendado:
-deshabilitar login por contraseña una vez configurada la clave.
+```bash
+cd /opt/casafari/infra
+docker compose -p casafari --env-file ../.env up -d postgres redis
+
+# Verificar Postgres:
+docker compose -p casafari --env-file ../.env exec postgres pg_isready -U casafari
+```
+
+### 6. Aplicar migraciones
+
+```bash
+docker compose -p casafari --env-file ../.env exec postgres sh -c \
+  'for f in $(ls /migrations/*.sql | sort); do
+     echo ">> $f"
+     psql -U casafari -d casafari -f "$f" || exit 1
+   done'
+```
+
+### 7. Build y arrancar la app
+
+```bash
+cd /opt/casafari
+bash infra/deploy.sh
+```
+
+✅ App disponible en **https://mio.zinto.app**
+
+---
+
+## Deploys sucesivos (actualizar código)
+
+```bash
+ssh root@204.168.174.0 "cd /opt/casafari && bash infra/deploy.sh"
+```
+
+El script hace: `git pull` → `docker build` → `docker compose up -d --no-deps app` → health check.
+
+---
+
+## Comandos de operación
+
+```bash
+COMPOSE="docker compose -p casafari --env-file /opt/casafari/.env -f /opt/casafari/infra/docker-compose.yml"
+
+# Logs en tiempo real
+$COMPOSE logs -f app
+
+# Estado de contenedores
+$COMPOSE ps
+
+# Reiniciar solo la app (sin rebuild)
+$COMPOSE restart app
+
+# Abrir psql
+$COMPOSE exec postgres psql -U casafari -d casafari
+
+# Parar todo
+$COMPOSE down
+```
+
+---
+
+## DNS (entrada A en tu proveedor)
+
+| Nombre | Tipo | Valor |
+|---|---|---|
+| `mio` | A | `204.168.174.0` |
+
+---
+
+## Aislamiento con zintoleads
+
+- Los contenedores corren en la red Docker `casafari_default` (aislada).
+- Postgres en `5433`, Redis en `6380` — no colisionan con los puertos de zintoleads.
+- En nginx, el `server_name mio.zinto.app` solo afecta las peticiones a ese dominio.
+- Los logs van a `/var/log/nginx/casafari-*.log` — separados de los demás.
