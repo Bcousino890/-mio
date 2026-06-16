@@ -1,0 +1,53 @@
+name: Deploy a CX33
+
+# Despliega casafari-mio al VPS por SSH.
+# Se dispara al hacer push a la rama de deploy, o manualmente desde la pestaña Actions.
+on:
+  push:
+    branches:
+      - claude/affectionate-albattani-leauui
+    paths:
+      - 'web/**'
+      - 'db/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # botón "Run workflow" manual
+
+# Evita despliegues solapados
+concurrency:
+  group: deploy-cx33
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          # Tiempo amplio por el primer build de Docker
+          command_timeout: 20m
+          script: |
+            set -e
+            # Primera vez: clona. Siguientes: actualiza.
+            if [ ! -d /opt/casafari/.git ]; then
+              git clone https://github.com/Bcousino890/casafari-mio.git /opt/casafari
+            fi
+            cd /opt/casafari
+            git fetch origin
+            git checkout claude/affectionate-albattani-leauui
+            git pull --ff-only origin claude/affectionate-albattani-leauui
+
+            # .env debe existir ya en el VPS (no se versiona). Si no, avisa.
+            if [ ! -f /opt/casafari/.env ]; then
+              echo "❌ Falta /opt/casafari/.env en el VPS. Créalo una vez con POSTGRES_PASSWORD."
+              exit 1
+            fi
+
+            # Despliegue normal (build + swap de la app + health check).
+            # NO toca nginx ni certbot — eso ya quedó configurado por bootstrap.sh.
+            bash infra/deploy.sh
