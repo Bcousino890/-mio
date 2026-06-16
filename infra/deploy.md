@@ -1,8 +1,15 @@
 # Despliegue — casafari-mio
 
 **Servidor:** Hetzner **CX33** · IP **204.168.174.0** · host `zinto.leads`  
-**URL temporal:** `http://204.168.174.0` (sin dominio aún)  
-**Stack existente:** nginx en :80/:443, otros proyectos en sus propios puertos — casafari-mio lo respeta.
+**Subdominio:** `mio.zinto.app` (apunta la entrada DNS A a 204.168.174.0)  
+**Convivencia:** zintoleads y otros stacks siguen intactos — casafari-mio usa puertos aislados.
+
+| Servicio | Puerto en host | Visible desde |
+|---|---|---|
+| Postgres (casafari) | `5433` | solo localhost |
+| Redis (casafari) | `6380` | solo localhost |
+| Next.js app | `3000` | solo localhost |
+| nginx | `80` / `443` | público — sirve `mio.zinto.app` |
 
 ---
 
@@ -21,97 +28,109 @@ cd /opt/casafari
 ```bash
 cp .env.example .env
 nano .env
-# Rellenar al menos: POSTGRES_PASSWORD (invéntate una segura)
+# Mínimo obligatorio: POSTGRES_PASSWORD=<una_contraseña_segura>
 ```
 
-### 3. Levantar Postgres + Redis (primero, sin la app)
+### 3. Registrar en nginx (sin tocar la config de zintoleads)
 
 ```bash
-cd infra
+# Snippet de proxy (reutilizable por HTTP y HTTPS)
+cp /opt/casafari/infra/nginx-casafari-proxy.conf /etc/nginx/snippets/casafari-proxy.conf
+
+# Server block para mio.zinto.app
+cp /opt/casafari/infra/nginx-casafari.conf /etc/nginx/conf.d/casafari.conf
+
+# Verificar que no rompe nada
+nginx -t && systemctl reload nginx
+```
+
+> Si usas un subdominio distinto, edita `server_name` en `/etc/nginx/conf.d/casafari.conf`.
+
+### 4. TLS gratis con Certbot
+
+```bash
+# Solo si certbot no está instalado:
+apt install -y certbot python3-certbot-nginx
+
+certbot --nginx -d mio.zinto.app
+# Certbot añade el redirect HTTP→HTTPS y renueva automáticamente
+```
+
+### 5. Arrancar Postgres + Redis
+
+```bash
+cd /opt/casafari/infra
 docker compose -p casafari --env-file ../.env up -d postgres redis
 
-# Verificar que Postgres responde:
-docker compose -p casafari exec postgres pg_isready -U casafari
+# Verificar Postgres:
+docker compose -p casafari --env-file ../.env exec postgres pg_isready -U casafari
 ```
 
-### 4. Aplicar migraciones
+### 6. Aplicar migraciones
 
 ```bash
-docker compose -p casafari exec postgres sh -c \
+docker compose -p casafari --env-file ../.env exec postgres sh -c \
   'for f in $(ls /migrations/*.sql | sort); do
      echo ">> $f"
      psql -U casafari -d casafari -f "$f" || exit 1
    done'
 ```
 
-### 5. Registrar el server block en nginx
-
-```bash
-cp /opt/casafari/infra/nginx-casafari.conf /etc/nginx/conf.d/casafari.conf
-
-# Si quieres usar el dominio real, edita server_name:
-nano /etc/nginx/conf.d/casafari.conf
-
-nginx -t && systemctl reload nginx
-```
-
-### 6. Build y arrancar la app
+### 7. Build y arrancar la app
 
 ```bash
 cd /opt/casafari
 bash infra/deploy.sh
 ```
 
-Accede en: **http://204.168.174.0**
+✅ App disponible en **https://mio.zinto.app**
 
 ---
 
 ## Deploys sucesivos (actualizar código)
 
 ```bash
-ssh root@204.168.174.0
-cd /opt/casafari && bash infra/deploy.sh
+ssh root@204.168.174.0 "cd /opt/casafari && bash infra/deploy.sh"
 ```
 
 El script hace: `git pull` → `docker build` → `docker compose up -d --no-deps app` → health check.
 
 ---
 
-## Comandos útiles
+## Comandos de operación
 
 ```bash
-# Logs de la app en tiempo real
-docker compose -p casafari -f /opt/casafari/infra/docker-compose.yml logs -f app
+COMPOSE="docker compose -p casafari --env-file /opt/casafari/.env -f /opt/casafari/infra/docker-compose.yml"
 
-# Estado de los contenedores
-docker compose -p casafari -f /opt/casafari/infra/docker-compose.yml ps
+# Logs en tiempo real
+$COMPOSE logs -f app
+
+# Estado de contenedores
+$COMPOSE ps
 
 # Reiniciar solo la app (sin rebuild)
-docker compose -p casafari -f /opt/casafari/infra/docker-compose.yml restart app
+$COMPOSE restart app
 
 # Abrir psql
-docker compose -p casafari -f /opt/casafari/infra/docker-compose.yml exec postgres \
-  psql -U casafari -d casafari
+$COMPOSE exec postgres psql -U casafari -d casafari
+
+# Parar todo
+$COMPOSE down
 ```
 
 ---
 
-## Con dominio propio (cuando lo tengas)
+## DNS (entrada A en tu proveedor)
 
-1. Editar `/etc/nginx/conf.d/casafari.conf` → cambiar `server_name` a `mio.tudominio.com`
-2. Instalar Certbot si no está: `apt install -y certbot python3-certbot-nginx`
-3. `certbot --nginx -d mio.tudominio.com`
-4. Nginx queda con HTTPS automático.
+| Nombre | Tipo | Valor |
+|---|---|---|
+| `mio` | A | `204.168.174.0` |
 
 ---
 
-## Notas de convivencia con otros stacks
+## Aislamiento con zintoleads
 
-| Recurso | Puerto en host | Solo accesible desde |
-|---|---|---|
-| Postgres | 5433 | localhost |
-| Redis | 6380 | localhost |
-| Next.js app | 3000 | localhost (nginx hace proxy) |
-| nginx | 80 / 443 | público |
-
-Los puertos 5432 y 6379 los usan los otros stacks — casafari-mio no los toca.
+- Los contenedores corren en la red Docker `casafari_default` (aislada).
+- Postgres en `5433`, Redis en `6380` — no colisionan con los puertos de zintoleads.
+- En nginx, el `server_name mio.zinto.app` solo afecta las peticiones a ese dominio.
+- Los logs van a `/var/log/nginx/casafari-*.log` — separados de los demás.
