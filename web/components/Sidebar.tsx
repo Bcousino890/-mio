@@ -11,7 +11,10 @@ import {
   MapPin,
   Settings,
   ChevronRight,
+  Sun,
+  Moon,
 } from 'lucide-react'
+import { useTheme } from '@/components/ThemeProvider'
 
 const modules = [
   {
@@ -55,14 +58,15 @@ const modules = [
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const { theme, toggle } = useTheme()
 
   return (
     <aside
       className="fixed top-0 left-0 h-screen flex flex-col z-[2000]"
-      style={{ width: 'var(--sidebar-w)', background: '#0f1117', borderRight: '1px solid #1e2130' }}
+      style={{ width: 'var(--sidebar-w)', background: 'var(--c-sidebar-bg)', borderRight: '1px solid var(--c-border-card)' }}
     >
       {/* Logo */}
-      <div className="px-5 py-5 border-b border-[#1e2130]">
+      <div className="px-5 py-5" style={{ borderBottom: '1px solid var(--c-border-card)' }}>
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-md bg-brand flex items-center justify-center text-white text-xs font-bold">
             C
@@ -88,9 +92,15 @@ export default function Sidebar() {
                   href={href}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-all group ${
                     active
-                      ? 'bg-[#1e2a45] text-white'
-                      : 'text-[#8892a4] hover:bg-[#1a1f2e] hover:text-slate-200'
+                      ? 'text-white'
+                      : 'text-[#8892a4] hover:text-slate-200'
                   }`}
+                  style={active
+                    ? { background: 'var(--c-active)' }
+                    : undefined
+                  }
+                  onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--c-hover)' }}
+                  onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = '' }}
                 >
                   <Icon
                     size={16}
@@ -114,10 +124,27 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-2 py-3 border-t border-[#1e2130]">
+      <div className="px-2 py-3" style={{ borderTop: '1px solid var(--c-border-card)' }}>
+        {/* Theme toggle */}
+        <button
+          onClick={toggle}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm text-slate-500 hover:text-slate-300 transition-all"
+          style={{ marginBottom: '2px' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--c-hover)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
+        >
+          {theme === 'dark'
+            ? <Sun size={16} className="text-amber-400" />
+            : <Moon size={16} className="text-blue-400" />
+          }
+          <span>{theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}</span>
+        </button>
+
         <Link
           href="/settings"
-          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm text-slate-600 hover:bg-[#1a1f2e] hover:text-slate-300 transition-all"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm text-slate-600 hover:text-slate-300 transition-all"
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--c-hover)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
         >
           <Settings size={16} />
           <span>Configuración</span>

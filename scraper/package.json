@@ -1,0 +1,13 @@
+{
+  "name": "casafari-scraper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scraper de Idealista por zona para casafari-mio (curl + UA WhatsApp, no requiere proxy).",
+  "scripts": {
+    "scrape": "node scrape-zone.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

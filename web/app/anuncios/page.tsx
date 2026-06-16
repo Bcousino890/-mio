@@ -47,9 +47,9 @@ export default function AnunciosPage() {
   }, [operation, advertiser, onlyWithDrops, sortBy])
 
   return (
-    <div className="flex flex-col h-full bg-[#08090e]">
+    <div className="flex flex-col h-full bg-[var(--c-bg)]">
       {/* ── Filter bar ── */}
-      <header className="flex-none flex items-center gap-2 px-4 py-2.5 border-b border-[#1a1f2e] bg-[#08090e] flex-wrap">
+      <header className="flex-none flex items-center gap-2 px-4 py-2.5 border-b border-[var(--c-border)] bg-[var(--c-bg)] flex-wrap">
 
         {/* Search input */}
         <div className="relative flex-1 max-w-xs">
@@ -57,21 +57,21 @@ export default function AnunciosPage() {
           <input
             type="text"
             placeholder="Buscar zona, calle..."
-            className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0d1117] border border-[#1e2130] rounded-lg text-slate-400 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50 focus:ring-1 focus:ring-blue-600/20"
+            className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg text-slate-400 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50 focus:ring-1 focus:ring-blue-600/20"
           />
         </div>
 
-        <div className="w-px h-5 bg-[#1e2130]" />
+        <div className="w-px h-5 bg-[var(--c-border-card)]" />
 
         {/* Operation pills */}
-        <div className="flex rounded-lg bg-[#0d1117] border border-[#1e2130] p-0.5 gap-0.5">
+        <div className="flex rounded-lg bg-[var(--c-card)] border border-[var(--c-border-card)] p-0.5 gap-0.5">
           {(['all', 'sale', 'rent'] as Operation[]).map((op) => (
             <button
               key={op}
               onClick={() => setOperation(op)}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                 operation === op
-                  ? 'bg-[#1e2a45] text-blue-400 shadow-sm'
+                  ? 'bg-[var(--c-active)] text-blue-400 shadow-sm'
                   : 'text-slate-600 hover:text-slate-400'
               }`}
             >
@@ -81,14 +81,14 @@ export default function AnunciosPage() {
         </div>
 
         {/* Advertiser pills */}
-        <div className="flex rounded-lg bg-[#0d1117] border border-[#1e2130] p-0.5 gap-0.5">
+        <div className="flex rounded-lg bg-[var(--c-card)] border border-[var(--c-border-card)] p-0.5 gap-0.5">
           {(['all', 'particular', 'professional'] as AdvertiserFilter[]).map((a) => (
             <button
               key={a}
               onClick={() => setAdvertiser(a)}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                 advertiser === a
-                  ? 'bg-[#1e2a45] text-blue-400 shadow-sm'
+                  ? 'bg-[var(--c-active)] text-blue-400 shadow-sm'
                   : 'text-slate-600 hover:text-slate-400'
               }`}
             >
@@ -103,7 +103,7 @@ export default function AnunciosPage() {
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
             onlyWithDrops
               ? 'bg-emerald-950/60 border-emerald-800/40 text-emerald-400'
-              : 'bg-[#0d1117] border-[#1e2130] text-slate-600 hover:text-slate-400'
+              : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-600 hover:text-slate-400'
           }`}
         >
           <SlidersHorizontal size={12} />
@@ -114,19 +114,19 @@ export default function AnunciosPage() {
         <div className="relative ml-auto">
           <button
             onClick={() => setShowSortMenu(!showSortMenu)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border bg-[#0d1117] border-[#1e2130] text-slate-400 hover:text-slate-200 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-400 hover:text-slate-200 transition-colors"
           >
             {SORT_LABELS[sortBy]}
             <ChevronDown size={11} className={`transition-transform ${showSortMenu ? 'rotate-180' : ''}`} />
           </button>
           {showSortMenu && (
-            <div className="absolute right-0 top-full mt-1.5 z-50 bg-[#0d1117] border border-[#1e2130] rounded-xl shadow-xl shadow-black/40 py-1 min-w-[190px]">
+            <div className="absolute right-0 top-full mt-1.5 z-50 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl shadow-xl shadow-black/40 py-1 min-w-[190px]">
               {(Object.entries(SORT_LABELS) as [SortKey, string][]).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => { setSortBy(key); setShowSortMenu(false) }}
                   className={`w-full text-left px-3.5 py-2 text-xs transition-colors ${
-                    sortBy === key ? 'text-blue-400 bg-blue-950/30' : 'text-slate-400 hover:bg-[#151b2b] hover:text-slate-200'
+                    sortBy === key ? 'text-blue-400 bg-blue-950/30' : 'text-slate-400 hover:bg-[var(--c-surface)] hover:text-slate-200'
                   }`}
                 >
                   {label}
@@ -141,8 +141,8 @@ export default function AnunciosPage() {
           onClick={() => setShowMap(!showMap)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
             showMap
-              ? 'bg-[#1e2a45] border-blue-800/40 text-blue-400'
-              : 'bg-[#0d1117] border-[#1e2130] text-slate-600 hover:text-slate-400'
+              ? 'bg-[var(--c-active)] border-blue-800/40 text-blue-400'
+              : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-600 hover:text-slate-400'
           }`}
         >
           {showMap ? <LayoutList size={13} /> : <Map size={13} />}
@@ -156,7 +156,7 @@ export default function AnunciosPage() {
         {/* Property list */}
         <div className={`flex flex-col overflow-hidden transition-all duration-300 ${showMap ? 'w-[52%]' : 'w-full'}`}>
           {/* Counter */}
-          <div className="flex-none px-4 py-2 border-b border-[#1a1f2e]">
+          <div className="flex-none px-4 py-2 border-b border-[var(--c-border)]">
             <p className="text-xs text-slate-500">
               <span className="text-slate-300 font-semibold">{filtered.length}</span>
               {' '}de{' '}
@@ -189,7 +189,7 @@ export default function AnunciosPage() {
 
         {/* Map panel */}
         {showMap && (
-          <div className="flex-1 relative border-l border-[#1a1f2e]">
+          <div className="flex-1 relative border-l border-[var(--c-border)]">
             <PropertyMap
               listings={filtered}
               activeId={combinedActive}

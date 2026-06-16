@@ -13,6 +13,16 @@ export type Source = {
   status: 'active' | 'withdrawn' | 'sold'
   listed_at: string
   url: string
+  // Datos de la ficha "Comercializando" (se autocompletan en normalizeListings)
+  reference?: string
+  phone?: string
+  phone_contacts?: number
+  bedrooms?: number
+  bathrooms?: number
+  built_area?: number
+  plot_area?: number
+  address?: string
+  is_particular?: boolean
 }
 
 export type ListingBadge = {
@@ -47,12 +57,35 @@ export type Listing = {
   price_drops: number
   rc_status: 'none' | 'rc14' | 'rc20'
   exact_address?: string
+  barrio?: string
+  distrito?: string
   badge?: ListingBadge
+  description?: string
+  features?: string[]
+  photo_tags?: string[]
+  floor_plans?: string[]
+  videos?: string[]
+  virtual_tours?: string[]
+  energy_cert?: EnergyCert
+  deposit_months?: number
+  stats?: ListingStats
   priceHistory: PriceEvent[]
   sources: Source[]
 }
 
-export const mockListings: Listing[] = [
+export type EnergyCert = {
+  consumption?: string | null
+  emissions?: string | null
+  image?: string | null
+}
+
+export type ListingStats = {
+  views?: number | null
+  email_contacts?: number | null
+  favorites?: number | null
+}
+
+const rawListings: Listing[] = [
   {
     id: 'l1', property_id: 'p1',
     title: 'Piso en Calle de Serrano, Salamanca',
@@ -267,3 +300,55 @@ export const mockListings: Listing[] = [
     ],
   },
 ]
+
+// ── Normalización ────────────────────────────────────────────────────────────
+// Rellena los campos de la ficha "Comercializando" de cada fuente de forma
+// determinista cuando no vienen explícitos, para que la tabla se vea completa.
+function hashStr(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return h
+}
+
+function genReference(src: Source): string {
+  const h = hashStr(src.id + src.portal)
+  const prefixes = ['REF', 'MV', 'CB', 'ID', 'AG']
+  const prefix = prefixes[h % prefixes.length]
+  return `${prefix}${(h % 9_000_000 + 1_000_000)}`
+}
+
+function genPhone(src: Source): string {
+  const h = hashStr(src.id + src.name)
+  const isMobile = h % 2 === 0
+  const lead = isMobile ? 6 : 9
+  const d = (n: number) => String(h % n).padStart(2, '0')
+  return `+34 ${lead}${(h % 90 + 10)} ${d(90) } ${d(80)} ${d(70)}`
+}
+
+function normalizeListings(listings: Listing[]): Listing[] {
+  return listings.map((l) => ({
+    ...l,
+    sources: l.sources.map((s) => ({
+      ...s,
+      reference: s.reference ?? genReference(s),
+      phone: s.phone ?? genPhone(s),
+      phone_contacts: s.phone_contacts ?? (hashStr(s.id) % 4),
+      bedrooms: s.bedrooms ?? l.bedrooms,
+      bathrooms: s.bathrooms ?? l.bathrooms,
+      built_area: s.built_area ?? l.square_meters,
+      plot_area: s.plot_area,
+      address: s.address ?? l.exact_address ?? l.zone_name,
+      is_particular: s.is_particular ?? (s.type === 'particular'),
+    })),
+  }))
+}
+
+// Datos REALES scrapeados de Idealista (empezando por Goya). Si el fichero está
+// vacío se cae a los datos de ejemplo para no romper la UI en desarrollo.
+import goyaData from './listings-goya.json'
+
+const realListings = goyaData as unknown as Listing[]
+
+export const mockListings: Listing[] = normalizeListings(
+  realListings.length > 0 ? realListings : rawListings,
+)

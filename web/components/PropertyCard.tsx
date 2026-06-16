@@ -3,15 +3,15 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Listing } from '@/lib/mock-listings'
-import { ChevronLeft, ChevronRight, MoreHorizontal, MapPin, TrendingDown } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MoreHorizontal, MapPin } from 'lucide-react'
 
-const BADGE_STYLES: Record<string, string> = {
-  green:  'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
-  amber:  'bg-amber-500/15 text-amber-400 border-amber-500/25',
-  red:    'bg-red-500/15 text-red-400 border-red-500/25',
-  blue:   'bg-blue-500/15 text-blue-400 border-blue-500/25',
-  purple: 'bg-violet-500/15 text-violet-400 border-violet-500/25',
-  orange: 'bg-orange-500/15 text-orange-400 border-orange-500/25',
+const BADGE_DOT: Record<string, string> = {
+  green:  'bg-emerald-400',
+  amber:  'bg-amber-400',
+  red:    'bg-red-400',
+  blue:   'bg-blue-400',
+  purple: 'bg-violet-400',
+  orange: 'bg-orange-400',
 }
 
 function fmt(n: number) {
@@ -52,10 +52,10 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
         active
           ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/10'
           : 'ring-1 ring-white/5'
-      } bg-[#0d1017]`}
+      } bg-[var(--c-card)]`}
     >
       {/* ── Photo area ── */}
-      <div className="relative h-44 bg-[#141924] overflow-hidden">
+      <div className="relative h-44 bg-[var(--c-card)] overflow-hidden">
         {l.photos.length > 0 ? (
           <img
             src={l.photos[photoIdx]}
@@ -96,16 +96,6 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
           </>
         )}
 
-        {/* Top-left: badge */}
-        {l.badge && (
-          <div className="absolute top-2.5 left-2.5">
-            <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border backdrop-blur-sm ${BADGE_STYLES[l.badge.color]}`}>
-              {l.badge.color === 'green' && l.price_drops > 0 && <TrendingDown size={9} />}
-              {l.badge.label}
-            </span>
-          </div>
-        )}
-
         {/* Top-right: actions */}
         <button
           onClick={(e) => e.stopPropagation()}
@@ -134,6 +124,17 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
 
       {/* ── Content area ── */}
       <div className="px-3.5 py-3">
+        {/* Badge chip + days */}
+        {l.badge && (
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+              <span className={`w-1.5 h-1.5 rounded-full ${BADGE_DOT[l.badge.color]}`} />
+              {l.badge.label}
+            </span>
+            <span className="text-[10px] text-slate-700">{daysLabel(l.days_on_market)}</span>
+          </div>
+        )}
+
         {/* Title */}
         <p className="text-slate-200 text-sm font-semibold leading-snug line-clamp-1 mb-1.5">
           {l.title}
@@ -159,7 +160,7 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
                 {l.listing_count} fuentes
               </span>
             )}
-            <span className="text-[10px] text-slate-700">{daysLabel(l.days_on_market)}</span>
+            {!l.badge && <span className="text-[10px] text-slate-700">{daysLabel(l.days_on_market)}</span>}
           </div>
         </div>
       </div>
