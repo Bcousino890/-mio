@@ -8,7 +8,7 @@ interface Props {
 
 export default function PageShell({ title, subtitle, badge, children, action }: Props) {
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-full">
       {/* Top bar */}
       <header className="flex items-center justify-between px-8 py-5 border-b border-[#1e2130]">
         <div className="flex items-center gap-3">

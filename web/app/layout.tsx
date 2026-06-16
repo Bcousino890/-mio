@@ -9,12 +9,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es">
-      <body>
+    <html lang="es" className="h-full">
+      <body className="h-full overflow-hidden">
         <Sidebar />
         <main
           style={{ marginLeft: 'var(--sidebar-w)' }}
-          className="min-h-screen bg-[#0a0d14]"
+          className="h-full bg-[#0a0d14]"
         >
           {children}
         </main>
