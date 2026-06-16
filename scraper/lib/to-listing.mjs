@@ -32,7 +32,10 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
   return {
     id: row.external_id,
     property_id: row.external_id,
-    title: (row.title ?? '').replace(/\s*[—–-]\s*idealista.*$/i, '').trim() || `Inmueble ${row.external_id}`,
+    title: (row.title ?? '')
+      .replace(/\s*[—–-]\s*idealista.*$/i, '')
+      .replace(/^(?:alquiler|venta)\s+de\s+\w+\s+en\s+/i, '')
+      .trim() || `Inmueble ${row.external_id}`,
     operation: row.operation,
     price,
     square_meters: sqm,

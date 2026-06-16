@@ -9,12 +9,20 @@ import {
   ChevronRight, Building2, User,
   TrendingDown, ChevronLeft, CheckCircle, XCircle,
   Phone, MessageCircle, Bed, Bath,
+  Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
+  Sun, TreePalm, Waves, Wind, Home, Star,
 } from 'lucide-react'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
 
 function fmt(n: number) { return n.toLocaleString('es-ES') }
+
+function cleanTitle(title: string) {
+  return title
+    .replace(/^(?:alquiler|venta)\s+de\s+\w+\s+en\s+/i, '')
+    .trim()
+}
 
 function timeSince(dateStr: string) {
   const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000)
@@ -39,6 +47,41 @@ const EVENT_CONFIG: Record<string, { color: string; dot: string; label: string }
   withdrawn:      { color: 'text-slate-400',  dot: 'bg-slate-500',   label: 'Retirado' },
 }
 
+// Map Idealista feature text → lucide icon
+type IconComponent = React.ComponentType<{ size?: number; className?: string }>
+const FEATURE_ICON_MAP: Array<{ pattern: RegExp; icon: IconComponent; label: string }> = [
+  { pattern: /balc[oó]n/i,              icon: Home,       label: 'Balcón' },
+  { pattern: /terraza/i,                icon: TreePalm,   label: 'Terraza' },
+  { pattern: /ascensor/i,               icon: ArrowUpDown,label: 'Ascensor' },
+  { pattern: /aire acondicionado/i,     icon: Wind,       label: 'Aire A/C' },
+  { pattern: /calefacci[oó]n/i,         icon: Flame,      label: 'Calefacción' },
+  { pattern: /amueblad/i,               icon: Armchair,   label: 'Amueblado' },
+  { pattern: /cocina equipada/i,        icon: ChefHat,    label: 'Cocina equipada' },
+  { pattern: /piscina/i,               icon: Waves,       label: 'Piscina' },
+  { pattern: /portero|conserjería/i,    icon: BellRing,   label: 'Portero' },
+  { pattern: /garaje|parking/i,         icon: Car,        label: 'Garaje' },
+  { pattern: /exterior/i,               icon: Sun,        label: 'Exterior' },
+  { pattern: /buen estado|segunda mano/i,icon: Star,      label: 'Buen estado' },
+]
+
+function parseFeatureIcons(features: string[]) {
+  const matched: { icon: IconComponent; label: string }[] = []
+  const rest: string[] = []
+  const usedIdx = new Set<number>()
+
+  for (const f of features) {
+    const hit = FEATURE_ICON_MAP.find((m) => m.pattern.test(f))
+    if (hit && !matched.find((m) => m.label === hit.label)) {
+      matched.push({ icon: hit.icon, label: hit.label })
+      usedIdx.add(features.indexOf(f))
+    } else if (!hit) {
+      // Skip purely numeric rows (m², rooms, baths — already shown in stats)
+      if (!/^\d+\s*(?:m²|habitaci|baño)/i.test(f)) rest.push(f)
+    }
+  }
+  return { matched, rest }
+}
+
 type Tab = 'detalles' | 'fuentes' | 'historico'
 
 export default function PropertyDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -48,6 +91,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const [photoIdx, setPhotoIdx] = useState(0)
   const [smartlinkSources, setSmartlinkSources] = useState(false)
   const [smartlinkHistory, setSmartlinkHistory] = useState(false)
+  const [showFullDesc, setShowFullDesc] = useState(false)
 
   const listing = mockListings.find((l) => l.id === resolvedParams.id)
 
@@ -77,7 +121,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
           Anuncios
         </button>
         <ChevronRight size={12} className="text-slate-700" />
-        <span className="text-xs text-slate-400 truncate max-w-xs">{l.title}</span>
+        <span className="text-xs text-slate-400 truncate max-w-xs">{cleanTitle(l.title)}</span>
         <div className="ml-auto flex items-center gap-2">
           {l.rc_status !== 'none' && (
             <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${
@@ -261,12 +305,17 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 <div className="space-y-3">
                   {[
                     { label: 'Tipo de operación', value: l.operation === 'sale' ? 'Venta' : 'Alquiler' },
+                    { label: 'Inmueble', value: (() => {
+                      const f = l.features?.find((ft) => /piso|ático|atico|estudio|dúplex|duplex|chalet|loft|apartamento/i.test(ft))
+                      const m = (l.title + ' ' + (f ?? '')).match(/piso|ático|atico|estudio|dúplex|duplex|chalet|loft|apartamento/i)
+                      return m ? m[0].charAt(0).toUpperCase() + m[0].slice(1).replace('atico', 'ático').replace('duplex', 'dúplex') : 'Piso'
+                    })() },
                     { label: 'Superficie construida', value: `${l.square_meters} m²` },
                     { label: 'Habitaciones', value: l.bedrooms > 0 ? `${l.bedrooms}` : 'Estudio' },
                     { label: 'Baños', value: `${l.bathrooms}` },
                     { label: 'Planta', value: l.floor ?? 'No especificada' },
                     { label: 'Zona', value: l.zone_name },
-                    { label: 'Dirección', value: l.exact_address ?? 'No disponible' },
+                    { label: 'Dirección', value: l.sources[0]?.address ?? l.exact_address ?? 'No disponible' },
                   ].map(({ label, value }) => (
                     <div key={label} className="flex items-center justify-between">
                       <span className="text-xs text-slate-600">{label}</span>
@@ -315,25 +364,54 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
               </div>
             </div>
 
-            {/* Características del anuncio (scrapeadas) */}
-            {l.features && l.features.length > 0 && (
-              <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
-                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Características del anuncio</h3>
-                <div className="flex flex-wrap gap-2">
-                  {l.features.map((f, i) => (
-                    <span key={i} className="text-[11px] text-slate-300 bg-[#151b2b] border border-[#1e2130] px-2.5 py-1 rounded-lg">
-                      {f}
-                    </span>
-                  ))}
+            {/* Características del anuncio — iconos + pills */}
+            {l.features && l.features.length > 0 && (() => {
+              const { matched, rest } = parseFeatureIcons(l.features)
+              return (
+                <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Características</h3>
+                  {matched.length > 0 && (
+                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-3 mb-4">
+                      {matched.map(({ icon: Icon, label }) => (
+                        <div key={label} className="flex flex-col items-center gap-1.5 text-center">
+                          <span className="w-10 h-10 rounded-xl bg-[#151b2b] border border-[#1e2130] flex items-center justify-center text-blue-400">
+                            <Icon size={16} />
+                          </span>
+                          <span className="text-[10px] text-slate-400 leading-tight">{label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {rest.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {rest.map((f, i) => (
+                        <span key={i} className="text-[11px] text-slate-400 bg-[#151b2b] border border-[#1e2130] px-2.5 py-1 rounded-lg">
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* Descripción (scrapeada) */}
             {l.description && (
               <div className="bg-[#0d1117] border border-[#1e2130] rounded-2xl p-5">
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Descripción</h3>
-                <p className="text-sm text-slate-400 leading-relaxed whitespace-pre-line">{l.description}</p>
+                <p className="text-sm text-slate-400 leading-relaxed whitespace-pre-line">
+                  {showFullDesc || l.description.length <= 400
+                    ? l.description
+                    : l.description.slice(0, 400) + '…'}
+                </p>
+                {l.description.length > 400 && (
+                  <button
+                    onClick={() => setShowFullDesc((v) => !v)}
+                    className="mt-2 text-xs text-blue-400 hover:text-blue-300 font-medium"
+                  >
+                    {showFullDesc ? 'Ver menos ↑' : 'Ver descripción completa ↓'}
+                  </button>
+                )}
               </div>
             )}
             </div>
