@@ -25,7 +25,7 @@ sleep 8
 if curl -sf http://127.0.0.1:3000 > /dev/null; then
   echo ""
   echo "✅ App responde en http://127.0.0.1:3000"
-  echo "✅ Pública en https://mio.zinto.app"
+  echo "✅ Pública en http://204-168-174-0.nip.io"
 else
   echo ""
   echo "⚠️  App no responde — últimos logs:"

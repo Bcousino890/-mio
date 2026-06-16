@@ -1,7 +1,7 @@
 # Despliegue — casafari-mio
 
 **Servidor:** Hetzner **CX33** · IP **204.168.174.0** · host `zinto.leads`  
-**Subdominio:** `mio.zinto.app` (apunta la entrada DNS A a 204.168.174.0)  
+**URL gratis (funciona ya):** `http://204-168-174-0.nip.io` — ver [`dominio-gratis.md`](dominio-gratis.md)  
 **Convivencia:** zintoleads y otros stacks siguen intactos — casafari-mio usa puertos aislados.
 
 | Servicio | Puerto en host | Visible desde |
