@@ -67,7 +67,7 @@ jobs:
           const sale = JSON.parse(fs.readFileSync('scraper/output/goya-sale-latest.json'));
           const combined = [...rent, ...sale];
 
-          // Deduplicación
+          // Deduplicación por external_id (ID único de Idealista)
           const seen = new Set();
           const deduped = combined.filter(l => {
             if (seen.has(l.external_id)) return false;
@@ -75,12 +75,17 @@ jobs:
             return true;
           });
 
-          console.log(`✅ Consolidado:`);
-          console.log(`  Alquiler: ${rent.length}`);
-          console.log(`  Venta: ${sale.length}`);
-          console.log(`  Total: ${deduped.length}`);
+          const duplicatesRemoved = combined.length - deduped.length;
+
+          console.log(`✅ CONSOLIDACIÓN Y DEDUPLICACIÓN:`);
+          console.log(`  Alquiler: ${rent.length} anuncios`);
+          console.log(`  Venta: ${sale.length} anuncios`);
+          console.log(`  Total antes dedup: ${combined.length}`);
+          console.log(`  Duplicados eliminados: ${duplicatesRemoved}`);
+          console.log(`  TOTAL FINAL: ${deduped.length} anuncios únicos`);
 
           fs.writeFileSync('web/lib/listings-goya-full.json', JSON.stringify(deduped, null, 2));
+          console.log(`  ✓ Guardado en web/lib/listings-goya-full.json`);
           EOF
 
       - name: Commit and push
@@ -93,6 +98,13 @@ jobs:
 
       - name: Summary
         run: |
-          echo "✅ Scraping Goya completado"
-          echo "📊 Total: $(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)") anuncios"
-          echo "📁 Archivo: web/lib/listings-goya-full.json"
+          TOTAL=$(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)")
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║ ✅ SCRAPING GOYA COMPLETADO                                   ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📊 ESTADÍSTICAS FINALES:"
+          echo "  • Total anuncios: $TOTAL"
+          echo "  • Archivo: web/lib/listings-goya-full.json"
+          echo "  • Status: ✓ Listo para usar en la web"
+          echo ""
