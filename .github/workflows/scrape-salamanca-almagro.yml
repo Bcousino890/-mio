@@ -1,0 +1,47 @@
+name: Scrape Salamanca + Almagro (escribe en BD de producción)
+
+# A diferencia de scrape-goya.yml (que corre en el runner y solo commitea
+# JSON), esta automatización SSH al VPS y lanza el scrape ahí, porque solo el
+# VPS tiene acceso a DATABASE_URL de producción. El job del runner solo lanza
+# el proceso en background (nohup) y termina; el scrape real (varias horas)
+# sigue corriendo en el VPS de forma independiente.
+on:
+  workflow_dispatch: {}  # botón "Run workflow" manual (o trigger por API)
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Lanzar scrape en background en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            mkdir -p scraper/output
+            chmod +x scraper/scrape-salamanca-almagro.sh
+            nohup bash scraper/scrape-salamanca-almagro.sh \
+              > "scraper/output/launch-$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &
+            PID=$!
+            disown
+            sleep 3
+            if kill -0 "$PID" 2>/dev/null; then
+              echo "▶ Scrape lanzado en background en el VPS (PID $PID)"
+            else
+              echo "✗ El proceso no arrancó, revisa scraper/output/ en el VPS"
+              exit 1
+            fi
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "El scrape de Salamanca (6 sub-barrios) + Almagro quedó corriendo en background en el VPS."
+          echo "Puede tardar varias horas. Progreso y logs en /opt/casafari/scraper/output/ del VPS."
+          echo "Resultados visibles en https://crm.cremme.es/anuncios a medida que se van insertando."
