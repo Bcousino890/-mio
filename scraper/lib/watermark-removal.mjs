@@ -62,20 +62,26 @@ export function cleanInmowebImage(url) {
 }
 
 /**
- * Idealista: Spanish portal with images on img*.idealista.com/blur/
+ * Idealista: Remove watermarks by transforming WEB_DETAIL → WEB_DETAIL_TOP-
  * URL pattern: https://img1.idealista.com/blur/{MODE}/{ID}.jpg
- * Different blur modes: WEB_DETAIL_TOP-L-L has watermark; try WEB_DETAIL for cleaner version
- * or remove blur entirely for original
+ * WEB_DETAIL/ has watermark overlay, WEB_DETAIL_TOP- is the clean watermark-free version.
+ * Examples:
+ *   https://img1.idealista.com/blur/WEB_DETAIL-L-L/123.jpg → WEB_DETAIL_TOP-L-L/123.jpg
+ *   https://img1.idealista.com/blur/WEB_DETAIL/456.jpg → WEB_DETAIL_TOP-/456.jpg
  */
 export function isIdealistaImage(url) {
   if (!url) return false
-  return /img\d*\.idealista\.com\/blur\//i.test(url) && /\.(?:jpe?g|webp)(?:$|[?#])/i.test(url)
+  return /img\d*\.idealista\.com\/blur\//i.test(url) && /WEB_DETAIL/i.test(url) && /\.(?:jpe?g|webp)(?:$|[?#])/i.test(url)
 }
 
 export function cleanIdealistaImage(url) {
   if (!isIdealistaImage(url)) return url
-  // Try replacing blur mode with WEB_DETAIL which is typically cleaner
-  let cleaned = url.replace(/\/blur\/[^/]+\//, '/blur/WEB_DETAIL/')
+  // WEB_DETAIL/ → WEB_DETAIL_TOP-/
+  let cleaned = url.replace(/WEB_DETAIL\//g, 'WEB_DETAIL_TOP-/')
+  // WEB_DETAIL-XXX → WEB_DETAIL_TOP-XXX (e.g., WEB_DETAIL-XL-L → WEB_DETAIL_TOP-XL-L)
+  cleaned = cleaned.replace(/WEB_DETAIL-([^/]+)/g, 'WEB_DETAIL_TOP-$1')
+  // Remove query strings
+  cleaned = cleaned.replace(/[?#].*$/, '')
   return cleaned
 }
 
