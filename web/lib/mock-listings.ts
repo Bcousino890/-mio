@@ -468,9 +468,10 @@ function normalizeListings(listings: Listing[]): Listing[] {
 
 // Datos REALES scrapeados de Idealista (empezando por Goya). Si el fichero está
 // vacío se cae a los datos de ejemplo para no romper la UI en desarrollo.
-import goyaData from './listings-goya.json'
+import goyaSample from './listings-goya.json'
+import goyaFull from './listings-goya-full.json'
 
-const realListings = goyaData as unknown as Listing[]
+const realListings = (goyaFull.length > goyaSample.length ? goyaFull : goyaSample) as unknown as Listing[]
 
 export const mockListings: Listing[] = normalizeListings(
   realListings.length > 0 ? realListings : rawListings,
