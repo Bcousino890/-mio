@@ -192,26 +192,55 @@ export async function parseDetailPage(html, external_id) {
   // (Mobilia: .jpg → -original.jpg, Inmoweb: remove thumb suffixes, etc.)
   photos = cleanPhotos(photos, 'idealista')
 
-  // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos.
+  // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos + iframes
   const videoSet = new Set(), videos = []
+
+  // 1. Buscar en el objeto adMultimediasInfo.videos
   const videosArr = jsArray(mm, 'videos')
   if (videosArr) {
     for (const m of videosArr.matchAll(/"?(?:url|src|videoUrl)"?\s*:\s*"([^"]+)"/g)) {
       if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
     }
   }
+
+  // 2. Buscar YouTube e Vimeo embebidos en iframes
   for (const m of html.matchAll(/(?:youtube\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/g)) {
     const u = `https://www.youtube.com/embed/${m[1]}`
     if (!videoSet.has(u)) { videoSet.add(u); videos.push(u) }
   }
+  for (const m of html.matchAll(/(?:vimeo\.com\/videos\/|player\.vimeo\.com\/video\/)(\d+)/g)) {
+    const u = `https://player.vimeo.com/video/${m[1]}`
+    if (!videoSet.has(u)) { videoSet.add(u); videos.push(u) }
+  }
+
+  // 3. Buscar iframes de vídeo con src directo
+  for (const m of html.matchAll(/<iframe[^>]+src="([^"]*(?:youtube|vimeo|idealista)[^"]*)"/gi)) {
+    const videoUrl = m[1]
+    if (!videoSet.has(videoUrl)) { videoSet.add(videoUrl); videos.push(videoUrl) }
+  }
+
+  // 4. Buscar en atributos de data-* que Idealista usa para vídeos
+  for (const m of html.matchAll(/data-video-url="([^"]+)"/g)) {
+    if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
+  }
 
   // Tours virtuales / 3D (visit3DTour, virtualTour360).
   const virtual_tours = []
-  for (const key of ['visit3DTourURL', 'virtualTour360URL', 'visit3DTour', 'virtualTour360']) {
+  for (const key of ['visit3DTourURL', 'virtualTour360URL', 'visit3DTour', 'virtualTour360', 'virtualTourUrl']) {
     const arr = jsArray(mm, key)
     if (arr) for (const m of arr.matchAll(/"(https?:\/\/[^"]+)"/g)) {
       if (!virtual_tours.includes(m[1])) virtual_tours.push(m[1])
     }
+  }
+
+  // Buscar iframes de tours 3D y enlaces de Matterport / otros proveedores
+  for (const m of html.matchAll(/<iframe[^>]+src="([^"]*(?:matterport|3dtour|virtualTour|tour3d)[^"]*)"/gi)) {
+    if (!virtual_tours.includes(m[1])) virtual_tours.push(m[1])
+  }
+
+  // Buscar URLs de tours 3D en atributos data-*
+  for (const m of html.matchAll(/data-(?:tour|virtualTour)-url="([^"]+)"/gi)) {
+    if (!virtual_tours.includes(m[1])) virtual_tours.push(m[1])
   }
 
   // ── Anunciante (particular vs profesional) desde `config` ───────────────────

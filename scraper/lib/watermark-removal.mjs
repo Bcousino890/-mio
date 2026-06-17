@@ -62,6 +62,24 @@ export function cleanInmowebImage(url) {
 }
 
 /**
+ * Idealista: Spanish portal with images on img*.idealista.com/blur/
+ * URL pattern: https://img1.idealista.com/blur/{MODE}/{ID}.jpg
+ * Different blur modes: WEB_DETAIL_TOP-L-L has watermark; try WEB_DETAIL for cleaner version
+ * or remove blur entirely for original
+ */
+export function isIdealistaImage(url) {
+  if (!url) return false
+  return /img\d*\.idealista\.com\/blur\//i.test(url) && /\.(?:jpe?g|webp)(?:$|[?#])/i.test(url)
+}
+
+export function cleanIdealistaImage(url) {
+  if (!isIdealistaImage(url)) return url
+  // Try replacing blur mode with WEB_DETAIL which is typically cleaner
+  let cleaned = url.replace(/\/blur\/[^/]+\//, '/blur/WEB_DETAIL/')
+  return cleaned
+}
+
+/**
  * Fotocasa: Serves images from various CDNs (now mostly ixpimg.com).
  * Typically clean, but some cached versions may have branding.
  * No aggressive transformation needed; just normalize URLs.
@@ -107,6 +125,9 @@ export function cleanPhotoUrl(url, sourceHint = null) {
   if (!url) return url
 
   // Try platform-specific cleaners in order of specificity
+  if (isIdealistaImage(url)) {
+    return cleanIdealistaImage(url)
+  }
   if (isMobiliaImage(url)) {
     return cleanMobiliaImage(url)
   }
