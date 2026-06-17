@@ -7,7 +7,7 @@ on:
   push:
     branches:
       - main
-      - claude/affectionate-albattani-leauui
+      - claude/tender-hypatia-av518f
     paths:
       - 'web/**'
       - 'db/**'
