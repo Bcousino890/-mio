@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
 import { mockListings } from '@/lib/mock-listings'
 import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search } from 'lucide-react'
+import type { Listing } from '@/lib/mock-listings'
 
 const PropertyMap = dynamic(() => import('@/components/map/PropertyMap'), { ssr: false })
 
@@ -20,6 +21,9 @@ const SORT_LABELS: Record<SortKey, string> = {
 }
 
 export default function AnunciosPage() {
+  const [listings, setListings] = useState<Listing[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [operation, setOperation] = useState<Operation>('all')
@@ -31,8 +35,79 @@ export default function AnunciosPage() {
 
   const combinedActive = hoverId ?? activeId
 
+  // Load listings from API on mount
+  useEffect(() => {
+    const fetchListings = async () => {
+      try {
+        setLoading(true)
+        const response = await fetch('/api/listings?limit=5000')
+        if (!response.ok) throw new Error('Failed to fetch listings')
+        const result = await response.json()
+        if (result.success && Array.isArray(result.data)) {
+          // Transform raw DB data to Listing type
+          const transformed = result.data.map((row: any): Listing => {
+            const portal = row.portal || 'idealista'
+            const price = row.price || 0
+            const listedDate = new Date().toISOString().split('T')[0]
+            return {
+              id: row.id,
+              property_id: row.property_id,
+              title: row.title || `Inmueble ${row.id}`,
+              operation: row.operation || 'rent',
+              price,
+              square_meters: row.square_meters || 0,
+              price_sqm: row.price_sqm || 0,
+              bedrooms: row.bedrooms || 0,
+              bathrooms: row.bathrooms || 1,
+              zone_name: row.zone_name || 'Unknown',
+              portal,
+              source_type: 'portal' as const,
+              advertiser_type: row.advertiser_type || 'professional',
+              advertiser_name: row.advertiser_name || 'Idealista',
+              days_on_market: row.days_on_market || 0,
+              is_active: row.is_active !== false,
+              latitude: row.latitude || 40.43,
+              longitude: row.longitude || -3.68,
+              photos: Array.isArray(row.photos) ? row.photos : (typeof row.photos === 'string' ? [] : []),
+              source_url: row.source_url || '',
+              listing_count: 1,
+              portals: [portal],
+              price_drops: 0,
+              rc_status: 'none' as const,
+              description: row.description,
+              features: Array.isArray(row.features) ? row.features : (typeof row.features === 'string' ? [] : []),
+              priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
+              sources: [{
+                id: `${row.id}-${portal}`,
+                type: row.advertiser_type === 'particular' ? 'particular' : 'agency',
+                name: row.advertiser_name || 'Idealista',
+                portal,
+                price,
+                status: 'active' as const,
+                listed_at: listedDate,
+                url: row.source_url || '',
+                is_particular: row.advertiser_type === 'particular',
+              }],
+            }
+          })
+          setListings(transformed)
+          setError(null)
+        }
+      } catch (err) {
+        console.error('Error loading listings:', err)
+        setError(err instanceof Error ? err.message : 'Error loading listings')
+        // Fallback to mock listings if API fails
+        setListings(mockListings)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchListings()
+  }, [])
+
   const filtered = useMemo(() => {
-    return mockListings
+    const dataToUse = listings.length > 0 ? listings : mockListings
+    return dataToUse
       .filter((l) => operation === 'all' || l.operation === operation)
       .filter((l) => advertiser === 'all' || l.advertiser_type === advertiser)
       .filter((l) => !onlyWithDrops || l.price_drops > 0)
@@ -44,7 +119,7 @@ export default function AnunciosPage() {
           case 'sqm': return a.price_sqm - b.price_sqm
         }
       })
-  }, [operation, advertiser, onlyWithDrops, sortBy])
+  }, [listings, operation, advertiser, onlyWithDrops, sortBy])
 
   return (
     <div className="flex flex-col h-full bg-[var(--c-bg)]">
