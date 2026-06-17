@@ -195,15 +195,27 @@ export async function parseDetailPage(html, external_id) {
   // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos + iframes
   const videoSet = new Set(), videos = []
 
-  // 1. Buscar en el objeto adMultimediasInfo.videos
-  const videosArr = jsArray(mm, 'videos')
-  if (videosArr) {
-    for (const m of videosArr.matchAll(/"?(?:url|src|videoUrl)"?\s*:\s*"([^"]+)"/g)) {
-      if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
+  // 1. Buscar en el objeto adMultimediasInfo.videos y variaciones
+  for (const key of ['videos', 'professionalVideos', 'videoList']) {
+    const videosArr = jsArray(mm, key)
+    if (videosArr) {
+      for (const m of videosArr.matchAll(/"?(?:url|src|videoUrl|videoLocation)"?\s*:\s*"([^"]+)"/g)) {
+        if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
+      }
     }
   }
 
-  // 2. Buscar YouTube e Vimeo embebidos en iframes
+  // 2. Buscar URLs de vídeo en objetos de multimedia
+  if (mm) {
+    for (const m of mm.matchAll(/"(?:videoUrl|video_url|url)":\s*"(https?:\/\/[^"]+)"/g)) {
+      if (!videoSet.has(m[1]) && /\.(?:mp4|webm|mov)|youtube|vimeo/i.test(m[1])) {
+        videoSet.add(m[1])
+        videos.push(m[1])
+      }
+    }
+  }
+
+  // 3. Buscar YouTube e Vimeo embebidos en iframes
   for (const m of html.matchAll(/(?:youtube\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/g)) {
     const u = `https://www.youtube.com/embed/${m[1]}`
     if (!videoSet.has(u)) { videoSet.add(u); videos.push(u) }
@@ -213,14 +225,27 @@ export async function parseDetailPage(html, external_id) {
     if (!videoSet.has(u)) { videoSet.add(u); videos.push(u) }
   }
 
-  // 3. Buscar iframes de vídeo con src directo
-  for (const m of html.matchAll(/<iframe[^>]+src="([^"]*(?:youtube|vimeo|idealista)[^"]*)"/gi)) {
-    const videoUrl = m[1]
-    if (!videoSet.has(videoUrl)) { videoSet.add(videoUrl); videos.push(videoUrl) }
+  // 4. Buscar iframes de vídeo con src directo (más permisivo)
+  for (const m of html.matchAll(/<iframe[^>]+src="([^"]+)"/gi)) {
+    const src = m[1]
+    if (/(?:youtube|vimeo|video|mp4|idealista|media)/i.test(src) && !videoSet.has(src)) {
+      videoSet.add(src)
+      videos.push(src)
+    }
   }
 
-  // 4. Buscar en atributos de data-* que Idealista usa para vídeos
-  for (const m of html.matchAll(/data-video-url="([^"]+)"/g)) {
+  // 5. Buscar <video> tags HTML5 con src
+  for (const m of html.matchAll(/<video[^>]*>[\s\S]*?<source[^>]+src="([^"]+)"/gi)) {
+    if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
+  }
+
+  // 6. Buscar en atributos de data-* que Idealista usa para vídeos
+  for (const m of html.matchAll(/data-(?:video|media)-(?:url|src)="([^"]+)"/gi)) {
+    if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
+  }
+
+  // 7. Buscar enlaces de vídeo en divs con clase video o media
+  for (const m of html.matchAll(/class="[^"]*(?:video|media)[^"]*"[^>]*data-url="([^"]+)"/gi)) {
     if (!videoSet.has(m[1])) { videoSet.add(m[1]); videos.push(m[1]) }
   }
 

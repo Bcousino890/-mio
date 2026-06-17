@@ -28,7 +28,11 @@ var adMultimediasInfo = {
   ],
   videos: [
     { url: "https://www.youtube.com/embed/dQw4w9WgXcQ" },
-    { videoUrl: "https://player.vimeo.com/video/123456789" }
+    { videoUrl: "https://player.vimeo.com/video/123456789" },
+    { videoUrl: "https://example.com/video.mp4" }
+  ],
+  professionalVideos: [
+    { url: "https://www.youtube.com/embed/abc123xyz" }
   ],
   visit3DTour: [
     { url: "https://my.matterport.com/show/?m=abcdef123456" }
@@ -74,6 +78,12 @@ var adMultimediasInfo = {
 <iframe src="https://www.youtube.com/embed/yC6RYb3VWqY"></iframe>
 <iframe src="https://player.vimeo.com/video/987654321"></iframe>
 <iframe src="https://my.matterport.com/show/?m=xyz123abc"></iframe>
+
+<video controls>
+  <source src="https://media.idealista.com/videos/property-video.mp4" type="video/mp4">
+</video>
+
+<div class="video-section" data-video-url="https://www.youtube.com/embed/zzz999rrr"></div>
 
 Anuncio actualizado el 5 de junio de 2025
 </body>
