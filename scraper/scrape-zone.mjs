@@ -102,10 +102,12 @@ async function upsertAll(rows) {
         portal, source_type, external_id, source_url, operation,
         advertiser_type, advertiser_name, price, bedrooms, bathrooms,
         square_meters, zone_raw, address, latitude, longitude, blur_radius_m,
-        description, features, photos, status, is_active, last_seen_at, updated_at
+        description, features, photos, status, is_active, last_seen_at, updated_at,
+        agency_url, agency_crm, agency_reference_id, agency_domain
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,
-        'active', true, now(), now()
+        'active', true, now(), now(),
+        $20,$21,$22,$23
       )
       ON CONFLICT (portal, external_id) DO UPDATE SET
         price = EXCLUDED.price,
@@ -120,6 +122,10 @@ async function upsertAll(rows) {
         description = EXCLUDED.description,
         features = EXCLUDED.features,
         photos = EXCLUDED.photos,
+        agency_url = EXCLUDED.agency_url,
+        agency_crm = EXCLUDED.agency_crm,
+        agency_reference_id = EXCLUDED.agency_reference_id,
+        agency_domain = EXCLUDED.agency_domain,
         status = 'active', is_active = true,
         last_seen_at = now(), updated_at = now()
       RETURNING (xmax = 0) AS inserted`
@@ -128,6 +134,7 @@ async function upsertAll(rows) {
       r.advertiser_type, r.advertiser_name, r.price, r.bedrooms, r.bathrooms,
       r.square_meters, ZONE, r.address, r.latitude, r.longitude, r.blur_radius_m,
       r.description, JSON.stringify(r.features), JSON.stringify(r.photos),
+      r.agency_url, r.agency_crm, r.agency_reference_id, r.agency_domain,
     ]
     const { rows: rr } = await client.query(q, vals)
     if (rr[0]?.inserted) inserted++; else updated++

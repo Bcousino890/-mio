@@ -4,6 +4,8 @@
 // expresiones regulares acotadas por artículo/bloque.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { detectCRMFromDetailPage } from './crm-detector.mjs'
+
 const NAMED = {
   euro: '€', sup2: '²', sup3: '³', nbsp: ' ', amp: '&', quot: '"', apos: "'",
   lt: '<', gt: '>', ordf: 'ª', ordm: 'º', deg: '°', middot: '·', hellip: '…',
@@ -307,6 +309,9 @@ export function parseDetailPage(html, external_id) {
     }
   }
 
+  // Detectar CRM de la agencia (si existe enlace adicional)
+  const crmDetection = detectCRMFromDetailPage(html)
+
   return {
     external_id,
     portal: 'idealista',
@@ -327,5 +332,10 @@ export function parseDetailPage(html, external_id) {
     photos, photo_tags,
     floor_plans,
     videos, virtual_tours,
+    // Información de CRM detectado
+    agency_url: crmDetection?.agencyUrl ?? null,
+    agency_crm: crmDetection?.crm ?? null,
+    agency_reference_id: crmDetection?.referenceId ?? null,
+    agency_domain: crmDetection?.agencyDomain ?? null,
   }
 }
