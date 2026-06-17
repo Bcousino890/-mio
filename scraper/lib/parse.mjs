@@ -295,13 +295,13 @@ export async function parseDetailPage(html, external_id) {
   const price_sqm = sqmPriceM ? Math.round(parseFloat(sqmPriceM[1].replace('.', '').replace(',', '.'))) : null
 
   // Estadísticas del anuncio (visitas / contactos / favoritos).
-  const stViews = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*visitas/)
-  const stEmail = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*contactos por email/)
-  const stFav = html.match(/<strong>(\d+)<\/strong>\s*<span>\s*veces guardado/)
+  const stViews = html.match(/<strong>([\d.]+)<\/strong>\s*<span>\s*visitas/)
+  const stEmail = html.match(/<strong>([\d.]+)<\/strong>\s*<span>\s*contactos por email/)
+  const stFav = html.match(/<strong>([\d.]+)<\/strong>\s*<span>\s*veces guardado/)
   const stats = (stViews || stEmail || stFav) ? {
-    views: stViews ? Number(stViews[1]) : null,
-    email_contacts: stEmail ? Number(stEmail[1]) : null,
-    favorites: stFav ? Number(stFav[1]) : null,
+    views: stViews ? toInt(stViews[1]) : null,
+    email_contacts: stEmail ? toInt(stEmail[1]) : null,
+    favorites: stFav ? toInt(stFav[1]) : null,
   } : null
 
   // Descripción
