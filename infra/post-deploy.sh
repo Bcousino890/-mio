@@ -5,6 +5,14 @@
 # Ejecuta TODAS las migraciones en /db/migrations/ en orden (0001, 0002, ...).
 # Se llama automáticamente tras deploy.sh.
 #
+# Corre los psql DENTRO del contenedor de Postgres (docker compose exec) en vez
+# de contra el host: el VPS no tiene el cliente `psql` instalado, y el puerto
+# publicado en el host (5433, ver docker-compose.yml) no coincide con el que
+# documenta .env.example (5432) — ambos motivos hacían que esto fallara en
+# silencio en TODOS los deploys hasta ahora (el error quedaba enmascarado por
+# `|| true` en deploy.sh). Dentro del contenedor no hay que lidiar con ninguno
+# de los dos: se habla con Postgres por su puerto interno de siempre.
+#
 # Uso:
 #   bash infra/post-deploy.sh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -12,8 +20,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MIGRATIONS_DIR="$REPO_DIR/db/migrations"
+COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
 
-# Source .env para obtener DATABASE_URL
 if [ ! -f "$REPO_DIR/.env" ]; then
   echo "❌ No existe .env — cópialo de .env.example y rellena los valores"
   exit 1
@@ -22,17 +30,18 @@ set -a
 source "$REPO_DIR/.env"
 set +a
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "❌ DATABASE_URL no definida en .env"
+if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+  echo "❌ POSTGRES_PASSWORD no definida en .env"
   exit 1
 fi
 
-DB_HOST_PORT=$(echo "$DATABASE_URL" | sed -E 's#^[^@]*@##; s#/.*##')
-echo "▶ Esperando a que PostgreSQL esté listo en ${DB_HOST_PORT}..."
+PSQL="$COMPOSE exec -T -e PGPASSWORD=$POSTGRES_PASSWORD postgres psql -U casafari -d casafari"
+
+echo "▶ Esperando a que PostgreSQL esté listo..."
 for i in {1..30}; do
-  PG_ERR=$(psql "$DATABASE_URL" -c "SELECT 1" 2>&1 >/dev/null) && { echo "✅ PostgreSQL listo"; break; }
+  PG_ERR=$($PSQL -c "SELECT 1" 2>&1 >/dev/null) && { echo "✅ PostgreSQL listo"; break; }
   if [ $i -eq 30 ]; then
-    echo "❌ Timeout esperando PostgreSQL (${DB_HOST_PORT})"
+    echo "❌ Timeout esperando PostgreSQL"
     echo "   Último error: $PG_ERR"
     exit 1
   fi
@@ -58,10 +67,11 @@ for num in "${MIGRATIONS[@]}"; do
 
   echo "▶ Aplicando: $FILE"
 
-  # Intenta aplicar; si falla por "ya existe", continúa (idempotente)
-  if psql "$DATABASE_URL" -f "$FILE" 2>&1 | grep -q "already exists"; then
+  # El volumen ../db/migrations:/migrations:ro expone el mismo archivo dentro
+  # del contenedor con el mismo nombre.
+  if $PSQL -f "/migrations/$FILE" 2>&1 | grep -q "already exists"; then
     echo "  ℹ️  (ya existe, saltando)"
-  elif psql "$DATABASE_URL" -f "$FILE"; then
+  elif $PSQL -f "/migrations/$FILE"; then
     echo "  ✅ Ok"
   else
     echo "  ❌ Error aplicando $FILE"

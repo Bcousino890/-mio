@@ -40,10 +40,15 @@ if [ -f .env.scraper ]; then
   set -a; source .env.scraper; set +a
 fi
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "✗ Falta DATABASE_URL (revisa .env)"
+if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+  echo "✗ Falta POSTGRES_PASSWORD (revisa .env)"
   exit 1
 fi
+
+# No usar el DATABASE_URL de .env tal cual: este script corre en el host (no
+# en docker), y Postgres está publicado ahí en el puerto 5433 (ver
+# infra/docker-compose.yml), no en el 5432 que documenta .env.example.
+export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
 
 if [ ! -d scraper/node_modules ]; then
   echo "▶ Instalando dependencias del scraper..."
