@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
         CASE WHEN square_meters > 0 THEN ROUND(price / square_meters) ELSE 0 END as price_sqm,
         bedrooms,
         bathrooms,
-        features,
+        COALESCE(features, '[]'::jsonb) as features,
         portal,
         source_type,
         advertiser_type,
@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
         latitude,
         longitude,
         address,
-        photos,
+        COALESCE(photos, '[]'::jsonb) as photos,
         source_url,
         agency_url,
         agency_crm,
@@ -42,7 +42,10 @@ export async function GET(request: NextRequest) {
         agency_domain,
         EXTRACT(DAY FROM (now() - last_seen_at))::int as days_on_market,
         description,
-        price as price_original
+        zone_raw,
+        exact_address,
+        barrio,
+        distrito
       FROM listings
       WHERE is_active = true
     `
