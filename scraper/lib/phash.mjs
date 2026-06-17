@@ -1,6 +1,5 @@
 import sharp from 'sharp';
-import imgHashPkg from 'imghash';
-const { phash } = imgHashPkg;
+import imghash from 'imghash';
 
 /**
  * Calcula pHash (perceptual hash) de una URL de imagen.
@@ -54,7 +53,7 @@ export async function calculatePhashFromUrl(imageUrl, options = {}) {
     const resized = await image.resize(8, 8, { fit: 'cover' }).raw().toBuffer({ resolveWithObject: true });
 
     // Calcular pHash usando imghash
-    const hash = await phash(Buffer.from(resized.data));
+    const hash = await imghash.hash.phash(Buffer.from(resized.data));
 
     return hash;
   } catch (error) {
