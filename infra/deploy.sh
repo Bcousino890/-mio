@@ -34,5 +34,8 @@ if [ -n "$SHARED_NGINX" ]; then
   DOMAIN="$DOMAIN" SHARED_NGINX="$SHARED_NGINX" bash "$REPO_DIR/infra/ensure-tls.sh" || true
 fi
 
+echo "▶ [5/5] Aplicando migraciones SQL..."
+bash "$REPO_DIR/infra/post-deploy.sh" || true
+
 echo ""
 echo "✅ Deploy completado → https://$DOMAIN"
