@@ -133,7 +133,7 @@ function tagsFrom(arrText) {
  * Parsea la ficha de detalle. Devuelve el objeto completo del anuncio listo
  * para upsert en la tabla `listings`.
  */
-export function parseDetailPage(html, external_id) {
+export async function parseDetailPage(html, external_id) {
   const config = jsObject(html, 'config')
   const mm = jsObject(html, 'adMultimediasInfo')
   // Título → dirección + operación

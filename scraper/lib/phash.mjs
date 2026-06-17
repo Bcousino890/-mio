@@ -1,5 +1,6 @@
 import sharp from 'sharp';
-import { phash } from 'imghash';
+import imgHashPkg from 'imghash';
+const { phash } = imgHashPkg;
 
 /**
  * Calcula pHash (perceptual hash) de una URL de imagen.

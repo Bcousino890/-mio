@@ -143,7 +143,7 @@ async function scrapeDetailPages(listings, portal) {
         continue
       }
 
-      const detail = parseDetailPage(res.html, listing.external_id)
+      const detail = await parseDetailPage(res.html, listing.external_id)
       if (detail && detail.photos) {
         // Apply watermark removal
         detail.photos = cleanPhotos(detail.photos, config.watermarkHint)
