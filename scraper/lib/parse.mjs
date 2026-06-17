@@ -6,6 +6,7 @@
 
 import { detectCRMFromDetailPage } from './crm-detector.mjs'
 import { calculatePhashFromUrl } from './phash.mjs'
+import { cleanPhotos } from './watermark-removal.mjs'
 
 const NAMED = {
   euro: '€', sup2: '²', sup3: '³', nbsp: ' ', amp: '&', quot: '"', apos: "'",
@@ -186,6 +187,10 @@ export function parseDetailPage(html, external_id) {
   }
   photos = photos.slice(0, 40)
   floor_plans = floor_plans.slice(0, 5)
+
+  // Apply watermark removal for platform-specific image transformations
+  // (Mobilia: .jpg → -original.jpg, Inmoweb: remove thumb suffixes, etc.)
+  photos = cleanPhotos(photos, 'idealista')
 
   // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos.
   const videoSet = new Set(), videos = []
