@@ -139,12 +139,18 @@ export async function parseDetailPage(html, external_id) {
   // Título → dirección + operación
   const titleM = html.match(/<title>([^<]*)<\/title>/)
   const title = titleM ? decode(titleM[1]).replace(/\s*—\s*idealista.*$/i, '') : null
-  const operation = /alquiler/i.test(title ?? '') ? 'rent' : 'sale'
+  const cfgOperationM = config && config.match(/\boperation\s*:\s*'(rent|sale)'/)
+  const operation = cfgOperationM ? cfgOperationM[1] : (/alquiler/i.test(title ?? '') ? 'rent' : 'sale')
 
-  // Precio
+  // Precio: preferimos config.idForm.buyingPrice (número exacto del JS
+  // embebido). El texto renderizado ("info-data-price"/"price") cambia de
+  // estructura entre venta y alquiler y puede acabar casando con otro número
+  // de la página (anuncios similares, simulador de hipoteca…), lo que produce
+  // precios absurdos.
+  const cfgPriceM = config && config.match(/\bbuyingPrice\s*:\s*([\d.]+)/)
   const priceM = html.match(/info-data-price"><span class="txt-bold">([\d.]+)/) ||
                  html.match(/class="price">([\d.]+)/)
-  const price = priceM ? toInt(priceM[1]) : null
+  const price = cfgPriceM ? Math.round(parseFloat(cfgPriceM[1])) : (priceM ? toInt(priceM[1]) : null)
 
   // Coordenadas desde la URL del staticmap: center=LAT%2CLNG
   let latitude = null, longitude = null
@@ -190,7 +196,9 @@ export async function parseDetailPage(html, external_id) {
 
   // Apply watermark removal for platform-specific image transformations
   // (Mobilia: .jpg → -original.jpg, Inmoweb: remove thumb suffixes, etc.)
+  // Los planos vienen con la misma marca de agua WEB_DETAIL que las fotos.
   photos = cleanPhotos(photos, 'idealista')
+  floor_plans = cleanPhotos(floor_plans, 'idealista')
 
   // Vídeos: del array `videos` del objeto JS + YouTube/Vimeo embebidos + iframes
   const videoSet = new Set(), videos = []
@@ -294,10 +302,16 @@ export async function parseDetailPage(html, external_id) {
   }
 
   // Teléfono del anunciante (visible en el SSR sin sesión cuando existe).
-  const phoneM = html.match(/appcallback_target_phone="(\d{6,})"/) ||
+  // El número se renderiza como texto plano justo antes del span
+  // "phone-type-info"; los atributos appcallback_target_phone/href="tel:" solo
+  // aparecen en otros formatos de ficha, así que quedan como respaldo.
+  const phoneM = html.match(/(\d[\d\s.]{6,14}\d)\s*<span[^>]*class="phone-type-info/) ||
+                 html.match(/appcallback_target_phone="(\d{6,})"/) ||
                  html.match(/href="tel:(\+?\d{6,})"/)
-  let phone = phoneM ? phoneM[1].replace(/^\+?34/, '') : null
-  if (phone) phone = phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
+  let phone = phoneM ? phoneM[1].replace(/[^\d+]/g, '') : null
+  if (phone) phone = phone.replace(/^\+?34/, '')
+  if (phone && phone.length === 9) phone = phone.replace(/(\d{3})(\d{2})(\d{2})(\d{2})/, '$1 $2 $3 $4')
+  else if (phone) phone = phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
 
   // Referencia del anuncio.
   const refM = html.match(/class="txt-ref">\s*([A-Za-z0-9\-]+)\s*</)
@@ -354,18 +368,34 @@ export async function parseDetailPage(html, external_id) {
   const typeM = (title ?? '').match(/(?:de|del)\s+(piso|ático|atico|estudio|dúplex|duplex|chalet|casa|local|garaje|loft|apartamento)/i)
   const property_type = typeM ? typeM[1].toLowerCase().replace('atico', 'ático').replace('duplex', 'dúplex') : 'piso'
 
-  // "Anuncio actualizado el DD de MONTH" → días en mercado
+  // "Anuncio actualizado el DD de MONTH" (fecha absoluta) o, el formato más
+  // habitual en la ficha actual, "Anuncio actualizado hace N días/semanas/
+  // meses/años" (fecha relativa) → días en mercado.
   const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
   let days_on_market = null
-  const upM = html.match(/actualizado el (\d{1,2}) de ([a-záéí]+)(?:\s+de\s+(\d{4}))?/i)
-  if (upM) {
-    const day = Number(upM[1])
-    const mon = MESES.indexOf(upM[2].toLowerCase())
-    if (mon >= 0) {
-      const now = new Date()
-      const year = upM[3] ? Number(upM[3]) : (mon > now.getMonth() ? now.getFullYear() - 1 : now.getFullYear())
-      const d = new Date(Date.UTC(year, mon, day))
-      days_on_market = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000))
+  if (/actualizado hoy/i.test(html)) {
+    days_on_market = 0
+  } else if (/actualizado ayer/i.test(html)) {
+    days_on_market = 1
+  } else {
+    const relM = html.match(/actualizado hace\s+(\d+|un|una)\s*(día|días|semana|semanas|mes|meses|año|años)/i)
+    if (relM) {
+      const n = /^\d+$/.test(relM[1]) ? Number(relM[1]) : 1
+      const unit = relM[2].toLowerCase()
+      const mult = unit.startsWith('d') ? 1 : unit.startsWith('sem') ? 7 : unit.startsWith('mes') ? 30 : 365
+      days_on_market = n * mult
+    } else {
+      const upM = html.match(/actualizado el (\d{1,2}) de ([a-záéí]+)(?:\s+de\s+(\d{4}))?/i)
+      if (upM) {
+        const day = Number(upM[1])
+        const mon = MESES.indexOf(upM[2].toLowerCase())
+        if (mon >= 0) {
+          const now = new Date()
+          const year = upM[3] ? Number(upM[3]) : (mon > now.getMonth() ? now.getFullYear() - 1 : now.getFullYear())
+          const d = new Date(Date.UTC(year, mon, day))
+          days_on_market = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000))
+        }
+      }
     }
   }
 
