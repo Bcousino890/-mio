@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, use } from 'react'
+import { useState, useEffect, useRef, use } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { mockListings } from '@/lib/mock-listings'
@@ -10,8 +11,9 @@ import {
   TrendingDown, ChevronLeft, CheckCircle, XCircle,
   Phone, MessageCircle, Bed, Bath,
   Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
-  Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink,
+  Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink, ChevronDown, X,
 } from 'lucide-react'
+import type { SourceReference } from '@/lib/mock-listings'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -107,6 +109,93 @@ function EnergyLetter({ label, letter }: { label: string; letter?: string | null
   )
 }
 
+function ReferenceDropdown({ references }: { references: SourceReference[] }) {
+  const [open, setOpen] = useState(false)
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  if (references.length === 0) return <span className="text-slate-700 text-xs">—</span>
+
+  const copy = (value: string, idx: number) => {
+    navigator.clipboard?.writeText(value).catch(() => {})
+    setCopiedIdx(idx)
+    setTimeout(() => setCopiedIdx(null), 1200)
+  }
+
+  if (references.length === 1) {
+    return (
+      <button
+        onClick={() => copy(references[0].value, 0)}
+        title="Haz click para copiar"
+        className="text-[11px] text-slate-400 font-mono hover:text-blue-400 transition-colors"
+      >
+        {copiedIdx === 0 ? 'Copiado ✓' : references[0].value}
+      </button>
+    )
+  }
+
+  const toggleOpen = () => {
+    const rect = btnRef.current?.getBoundingClientRect()
+    if (rect) setMenuPos({ top: rect.bottom + 4, left: rect.left })
+    setOpen((v) => !v)
+  }
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        onClick={toggleOpen}
+        className="flex items-center gap-1 text-[11px] text-slate-400 font-mono hover:text-blue-400 transition-colors"
+      >
+        {references[0].value}
+        <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && menuPos && typeof document !== 'undefined' && createPortal(
+        <>
+          <div className="fixed inset-0 z-[1000]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[1001] bg-[var(--c-bg-deep)] border border-[var(--c-border-card)] rounded-lg shadow-xl py-1 min-w-[190px]"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
+            {references.map((r, i) => (
+              <button
+                key={i}
+                title="Haz click para copiar"
+                onClick={() => copy(r.value, i)}
+                className="flex items-center justify-between gap-3 w-full px-3 py-1.5 text-[11px] hover:bg-[var(--c-hover)] transition-colors"
+              >
+                <span className="text-slate-500">{r.label}</span>
+                <span className="font-mono text-slate-300">{copiedIdx === i ? 'Copiado ✓' : r.value}</span>
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl w-full max-w-md p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300">
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 type Tab = 'detalles' | 'fuentes' | 'historico'
 
 export default function PropertyDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -115,9 +204,36 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const [tab, setTab] = useState<Tab>('detalles')
   const [mediaTab, setMediaTab] = useState<'fotos' | 'planos' | 'video'>('fotos')
   const [photoIdx, setPhotoIdx] = useState(0)
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [smartlinkSources, setSmartlinkSources] = useState(false)
   const [smartlinkHistory, setSmartlinkHistory] = useState(false)
   const [showFullDesc, setShowFullDesc] = useState(false)
+  const [activeModal, setActiveModal] = useState<'contacto' | 'valorar' | 'nota' | null>(null)
+  const [saved, setSaved] = useState(false)
+  const [notes, setNotes] = useState<{ text: string; date: string }[]>([])
+  const [noteDraft, setNoteDraft] = useState('')
+
+  useEffect(() => {
+    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
+    setSaved(savedIds.includes(resolvedParams.id))
+    const storedNotes = JSON.parse(localStorage.getItem(`casafari_notes_${resolvedParams.id}`) ?? '[]') as { text: string; date: string }[]
+    setNotes(storedNotes)
+  }, [resolvedParams.id])
+
+  function toggleSaved() {
+    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
+    const next = saved ? savedIds.filter((id) => id !== resolvedParams.id) : [...savedIds, resolvedParams.id]
+    localStorage.setItem('casafari_saved_listings', JSON.stringify(next))
+    setSaved(!saved)
+  }
+
+  function addNote() {
+    if (!noteDraft.trim()) return
+    const next = [{ text: noteDraft.trim(), date: new Date().toISOString() }, ...notes]
+    setNotes(next)
+    localStorage.setItem(`casafari_notes_${resolvedParams.id}`, JSON.stringify(next))
+    setNoteDraft('')
+  }
 
   const listing = mockListings.find((l) => l.id === resolvedParams.id)
 
@@ -134,6 +250,17 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const priceDropPct = l.priceHistory.length > 1
     ? Math.round(((l.priceHistory[0].price - l.price) / l.priceHistory[0].price) * 100)
     : 0
+
+  const photoSources = l.sources.filter((s) => (s.photos?.length ?? 0) > 0)
+  const activePhotoSource = photoSources.find((s) => s.id === selectedSourceId) ?? photoSources[0]
+  const activePhotos = activePhotoSource?.photos ?? l.photos
+
+  const zoneComparables = mockListings.filter((x) => x.zone_name === l.zone_name && x.id !== l.id && x.operation === l.operation)
+  const avgPriceSqm = zoneComparables.length > 0
+    ? Math.round(zoneComparables.reduce((sum, x) => sum + x.price_sqm, 0) / zoneComparables.length)
+    : l.price_sqm
+  const estimatedValue = Math.round(avgPriceSqm * l.square_meters)
+  const estimatedDeltaPct = Math.round(((estimatedValue - l.price) / l.price) * 100)
 
   return (
     <div className="flex flex-col h-full bg-[var(--c-bg)] overflow-hidden">
@@ -185,8 +312,8 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       style={mediaTab !== mt ? { background: 'var(--c-surface)' } : undefined}
                     >
                       {mt === 'video' ? 'Vídeo' : mt.charAt(0).toUpperCase() + mt.slice(1)}
-                      {mt === 'fotos' && l.photos.length > 0 && (
-                        <span className="ml-1 text-[10px] opacity-60">{l.photos.length}</span>
+                      {mt === 'fotos' && activePhotos.length > 0 && (
+                        <span className="ml-1 text-[10px] opacity-60">{activePhotos.length}</span>
                       )}
                       {mt === 'planos' && l.floor_plans && (
                         <span className="ml-1 text-[10px] opacity-60">{l.floor_plans.length}</span>
@@ -195,6 +322,24 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                   ))}
                 </div>
               ) : null}
+
+              {/* Selector de fuente de fotos */}
+              {mediaTab === 'fotos' && photoSources.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-slate-500 whitespace-nowrap">Seleccionar fuente de fotos</label>
+                  <select
+                    value={activePhotoSource?.id}
+                    onChange={(e) => { setSelectedSourceId(e.target.value); setPhotoIdx(0) }}
+                    className="flex-1 text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
+                  >
+                    {photoSources.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.photos!.length})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Main media viewer */}
               <div className="relative rounded-2xl overflow-hidden bg-[var(--c-card)] aspect-[4/3] group">
@@ -211,9 +356,9 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                     alt="Plano"
                     className="w-full h-full object-contain p-4"
                   />
-                ) : l.photos.length > 0 ? (
+                ) : activePhotos.length > 0 ? (
                   <img
-                    src={l.photos[photoIdx]}
+                    src={activePhotos[photoIdx]}
                     alt={l.title}
                     className="w-full h-full object-cover"
                   />
@@ -224,7 +369,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 )}
                 {/* Prev/next for fotos & planos */}
                 {mediaTab !== 'video' && (() => {
-                  const arr = mediaTab === 'planos' ? (l.floor_plans ?? []) : l.photos
+                  const arr = mediaTab === 'planos' ? (l.floor_plans ?? []) : activePhotos
                   return arr.length > 1 ? (
                     <>
                       <button
@@ -248,9 +393,9 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
               </div>
 
               {/* Thumbnails */}
-              {mediaTab === 'fotos' && l.photos.length > 1 && (
+              {mediaTab === 'fotos' && activePhotos.length > 1 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
-                  {l.photos.map((p, i) => (
+                  {activePhotos.map((p, i) => (
                     <button
                       key={i}
                       onClick={() => setPhotoIdx(i)}
@@ -328,13 +473,14 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
               <div className="bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-2xl p-4">
                 <div className="grid grid-cols-4 gap-2">
                   {[
-                    { icon: UserSearch, label: 'Buscar contacto', color: 'text-white',     bg: 'bg-blue-600',      primary: true },
-                    { icon: Bookmark,   label: 'Guardar',         color: 'text-blue-400',   bg: 'bg-blue-950/50'   },
-                    { icon: Calculator, label: 'Valorar',         color: 'text-violet-400', bg: 'bg-violet-950/50' },
-                    { icon: FileText,   label: 'Crear nota',      color: 'text-amber-400',  bg: 'bg-amber-950/50'  },
-                  ].map(({ icon: Icon, label, color, bg, primary }) => (
+                    { key: 'contacto', icon: UserSearch, label: 'Buscar contacto',                  color: 'text-white',                       bg: 'bg-blue-600',                          primary: true,  onClick: () => setActiveModal('contacto') },
+                    { key: 'guardar',  icon: Bookmark,   label: saved ? 'Guardado' : 'Guardar',      color: saved ? 'text-white' : 'text-blue-400', bg: saved ? 'bg-blue-600' : 'bg-blue-950/50', primary: false, onClick: toggleSaved },
+                    { key: 'valorar',  icon: Calculator, label: 'Valorar',                           color: 'text-violet-400',                  bg: 'bg-violet-950/50',                     primary: false, onClick: () => setActiveModal('valorar') },
+                    { key: 'nota',     icon: FileText,   label: notes.length > 0 ? `Notas (${notes.length})` : 'Crear nota', color: 'text-amber-400', bg: 'bg-amber-950/50',           primary: false, onClick: () => setActiveModal('nota') },
+                  ].map(({ key, icon: Icon, label, color, bg, primary, onClick }) => (
                     <button
-                      key={label}
+                      key={key}
+                      onClick={onClick}
                       className="flex flex-col items-center gap-1.5 py-2.5 rounded-xl hover:bg-[var(--c-surface)] transition-colors"
                     >
                       <div className={`w-10 h-10 rounded-full ${bg} flex items-center justify-center ${primary ? 'shadow-lg shadow-blue-600/30' : ''}`}>
@@ -407,11 +553,19 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       const m = (l.title + ' ' + (f ?? '')).match(/piso|ático|atico|estudio|dúplex|duplex|chalet|loft|apartamento/i)
                       return m ? m[0].charAt(0).toUpperCase() + m[0].slice(1).replace('atico', 'ático').replace('duplex', 'dúplex') : 'Piso'
                     })() },
+                    ...(l.is_bank_owned ? [{ label: 'Categoría', value: 'Inmueble de banco' }] : []),
                     { label: 'Superficie construida', value: `${l.square_meters} m²` },
                     { label: 'Habitaciones', value: l.bedrooms > 0 ? `${l.bedrooms}` : 'Estudio' },
                     { label: 'Baños', value: `${l.bathrooms}` },
                     { label: 'Planta', value: l.floor ?? 'No especificada' },
+                    ...(l.exterior !== undefined ? [{ label: 'Interior/Exterior', value: l.exterior ? 'Exterior' : 'Interior' }] : []),
+                    ...(l.condition ? [{ label: 'Estado de conservación', value: l.condition }] : []),
+                    ...(l.elevator !== undefined ? [{ label: 'Ascensor', value: l.elevator ? 'Sí' : 'No' }] : []),
+                    ...(l.orientation ? [{ label: 'Orientación', value: l.orientation }] : []),
+                    ...(l.heating ? [{ label: 'Calefacción', value: l.heating }] : []),
+                    ...(l.accessible ? [{ label: 'Accesibilidad', value: 'Adaptado a movilidad reducida' }] : []),
                     ...(l.deposit_months ? [{ label: 'Fianza', value: `${l.deposit_months} ${l.deposit_months === 1 ? 'mes' : 'meses'}` }] : []),
+                    ...(l.tenant_profile ? [{ label: 'Perfil de inquilino', value: l.tenant_profile }] : []),
                     { label: 'Zona', value: l.distrito ? `${l.zone_name} · ${l.distrito}` : l.zone_name },
                     { label: 'Dirección', value: l.exact_address ?? l.sources[0]?.address ?? 'No disponible' },
                   ].map(({ label, value }) => (
@@ -624,7 +778,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                           </td>
                           {/* Referencia */}
                           <td className="px-3 py-3">
-                            <span className="text-[11px] text-slate-400 font-mono">{src.reference}</span>
+                            <ReferenceDropdown references={src.references ?? (src.reference ? [{ label: src.portal, value: src.reference }] : [])} />
                           </td>
                           {/* Teléfono */}
                           <td className="px-3 py-3">
@@ -711,6 +865,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       const cfg = EVENT_CONFIG[ev.event] ?? EVENT_CONFIG.listed
                       const prev = arr[i + 1]
                       const delta = prev ? ev.price - prev.price : 0
+                      const src = l.sources.find((s) => s.id === ev.sourceId)
                       return (
                         <div key={i} className="relative flex-shrink-0 w-40">
                           {/* Punto sobre la línea */}
@@ -719,6 +874,11 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                             <p className="text-[10px] text-slate-600 mb-1.5">
                               {new Date(ev.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
                             </p>
+                            {src && (
+                              <p className="text-[10px] text-slate-400 font-medium truncate mb-1.5">
+                                {src.portal.charAt(0).toUpperCase() + src.portal.slice(1)}: {src.name}
+                              </p>
+                            )}
                             <span className={`inline-block text-[10px] font-semibold ${cfg.color} mb-2`}>{cfg.label}</span>
                             <p className="text-sm font-bold text-slate-200">{fmt(ev.price)} €</p>
                             {delta !== 0 && (
@@ -758,6 +918,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       const cfg = EVENT_CONFIG[ev.event] ?? EVENT_CONFIG.listed
                       const prev = [...l.priceHistory].reverse()[i + 1]
                       const delta = prev ? ev.price - prev.price : 0
+                      const src = l.sources.find((s) => s.id === ev.sourceId)
 
                       return (
                         <div key={i} className="flex gap-4 relative">
@@ -769,6 +930,11 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                                 <p className="text-[11px] text-slate-600 mt-0.5">
                                   {new Date(ev.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
                                 </p>
+                                {src && (
+                                  <p className="text-[11px] text-slate-500 mt-0.5">
+                                    {src.portal.charAt(0).toUpperCase() + src.portal.slice(1)}: {src.name}
+                                  </p>
+                                )}
                               </div>
                               <div className="text-right">
                                 <p className="text-sm font-bold text-slate-200">{fmt(ev.price)} €</p>
@@ -793,6 +959,91 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
           <div className="h-4" />
         </div>
       </div>
+
+      {activeModal === 'contacto' && (
+        <Modal title="Buscar contacto" onClose={() => setActiveModal(null)}>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {l.sources.map((src) => (
+              <div key={src.id} className="flex items-center justify-between gap-3 p-2.5 bg-[var(--c-surface)] rounded-xl">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-slate-200 truncate">{src.name}</p>
+                  <p className="text-[11px] text-slate-500">{src.portal}{src.phone ? ` · ${src.phone}` : ''}</p>
+                </div>
+                {src.phone && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <a href={`tel:${src.phone.replace(/\s/g, '')}`} className="w-7 h-7 rounded-full bg-blue-950/60 flex items-center justify-center text-blue-400 hover:bg-blue-900/60">
+                      <Phone size={12} />
+                    </a>
+                    <a href={`https://wa.me/${src.phone.replace(/[^0-9]/g, '')}`} target="_blank" rel="noopener noreferrer" className="w-7 h-7 rounded-full bg-emerald-950/60 flex items-center justify-center text-emerald-400 hover:bg-emerald-900/60">
+                      <MessageCircle size={12} />
+                    </a>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+
+      {activeModal === 'valorar' && (
+        <Modal title="Valoración estimada" onClose={() => setActiveModal(null)}>
+          <div className="space-y-3">
+            <div className="text-center py-3">
+              <p className="text-2xl font-bold text-slate-100">{fmt(estimatedValue)} €</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Estimación basada en {zoneComparables.length} comparable{zoneComparables.length === 1 ? '' : 's'} en {l.zone_name}
+              </p>
+            </div>
+            <div className="flex items-center justify-between text-xs px-1">
+              <span className="text-slate-500">Precio publicado</span>
+              <span className="text-slate-300 font-medium">{fmt(l.price)} €</span>
+            </div>
+            <div className="flex items-center justify-between text-xs px-1">
+              <span className="text-slate-500">Precio/m² medio zona</span>
+              <span className="text-slate-300 font-medium">{fmt(avgPriceSqm)} €/m²</span>
+            </div>
+            <div className="flex items-center justify-between text-xs px-1">
+              <span className="text-slate-500">Diferencia vs. estimación</span>
+              <span className={`font-semibold ${estimatedDeltaPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {estimatedDeltaPct >= 0 ? '+' : ''}{estimatedDeltaPct}%
+              </span>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {activeModal === 'nota' && (
+        <Modal title="Notas" onClose={() => setActiveModal(null)}>
+          <div className="space-y-3">
+            <textarea
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              placeholder="Escribe una nota sobre esta propiedad…"
+              rows={3}
+              className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-xl px-3 py-2 text-slate-300 resize-none"
+            />
+            <button
+              onClick={addNote}
+              disabled={!noteDraft.trim()}
+              className="w-full py-2 rounded-xl bg-amber-600 text-white text-xs font-semibold disabled:opacity-40 hover:bg-amber-500 transition-colors"
+            >
+              Guardar nota
+            </button>
+            {notes.length > 0 && (
+              <div className="space-y-2 max-h-56 overflow-y-auto pt-2 border-t border-[var(--c-border)]">
+                {notes.map((n, i) => (
+                  <div key={i} className="bg-[var(--c-surface)] rounded-xl p-2.5">
+                    <p className="text-xs text-slate-300 whitespace-pre-line">{n.text}</p>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                      {new Date(n.date).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
