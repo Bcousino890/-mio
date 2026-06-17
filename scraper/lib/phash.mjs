@@ -1,109 +1,30 @@
 import sharp from 'sharp';
-import imghash from 'imghash';
 
 /**
  * Calcula pHash (perceptual hash) de una URL de imagen.
- * Descarga el buffer en memoria, lo procesa con sharp, y calcula el hash sin guardar archivo.
+ * Por ahora deshabilitado: imghash 0.0.9 requiere archivo, no buffer.
+ * TODO: Migrar a biblioteca async-friendly (blockhash, dhash, etc.)
  *
  * @param {string} imageUrl - URL de la imagen
  * @param {object} options - {timeout_ms: 10000, crop_border_px: 0}
- * @returns {Promise<string|null>} - pHash como string hex (64 bits) o null si falla
+ * @returns {Promise<string|null>} - null por ahora (phashing deshabilitado)
  */
 export async function calculatePhashFromUrl(imageUrl, options = {}) {
-  const { timeout_ms = 10000, crop_border_px = 0 } = options;
-
-  if (!imageUrl) return null;
-
-  try {
-    // Fetch con timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout_ms);
-
-    const response = await fetch(imageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: controller.signal
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) return null;
-
-    // Leer buffer en memoria
-    const buffer = await response.arrayBuffer();
-
-    // Procesar con sharp (resize, potencialmente crop border si hay marca de agua)
-    let image = sharp(buffer);
-
-    if (crop_border_px > 0) {
-      const metadata = await image.metadata();
-      const { width, height } = metadata;
-      if (width && height) {
-        image = image.extract({
-          left: crop_border_px,
-          top: crop_border_px,
-          width: Math.max(1, width - 2 * crop_border_px),
-          height: Math.max(1, height - 2 * crop_border_px)
-        });
-      }
-    }
-
-    // Redimensionar a tamaño estándar para pHash (típicamente 8x8 para DCT)
-    const resized = await image.resize(8, 8, { fit: 'cover' }).raw().toBuffer({ resolveWithObject: true });
-
-    // Calcular pHash usando imghash
-    const hash = await imghash.hash.phash(Buffer.from(resized.data));
-
-    return hash;
-  } catch (error) {
-    // Log silencioso para errores de red/timeout, importante para no frenar el scraping
-    if (error.name === 'AbortError') {
-      console.debug(`[phash] timeout descargando ${imageUrl}`);
-    } else {
-      console.debug(`[phash] error: ${error.message}`);
-    }
-    return null;
-  }
+  // Phashing deshabilitado temporalmente - imghash 0.0.9 es callback-based y requiere archivos
+  // El scraping continúa sin phashing. Migrar a biblioteca moderna cuando sea posible.
+  return null;
 }
 
 /**
  * Calcula pHash para múltiples URLs en paralelo (con límite de concurrencia).
+ * Actualmente deshabilitado (phashing deshabilitado).
  * @param {string[]} imageUrls - Array de URLs
  * @param {number} concurrency - Máximo de descargas paralelas
  * @param {object} options - Opciones adicionales
- * @returns {Promise<string[]>} - Array de hashes (null para URLs que fallaron)
+ * @returns {Promise<string[]>} - Array vacío (phashing deshabilitado)
  */
 export async function calculatePhashBatch(imageUrls, concurrency = 3, options = {}) {
-  const results = [];
-  const queue = [...imageUrls];
-  const running = [];
-
-  while (queue.length > 0 || running.length > 0) {
-    // Llenar pool hasta concurrencia
-    while (running.length < concurrency && queue.length > 0) {
-      const url = queue.shift();
-      const promise = calculatePhashFromUrl(url, options)
-        .then(hash => {
-          const idx = running.indexOf(promise);
-          if (idx > -1) running.splice(idx, 1);
-          return hash;
-        })
-        .catch(() => {
-          const idx = running.indexOf(promise);
-          if (idx > -1) running.splice(idx, 1);
-          return null;
-        });
-      running.push(promise);
-    }
-
-    // Esperar que termine una tarea
-    if (running.length > 0) {
-      await Promise.race(running);
-    }
-  }
-
-  return results;
+  return [];
 }
 
 /**
