@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { detectCRMFromDetailPage } from './crm-detector.mjs'
+import { calculatePhashFromUrl } from './phash.mjs'
 
 const NAMED = {
   euro: '€', sup2: '²', sup3: '³', nbsp: ' ', amp: '&', quot: '"', apos: "'",
@@ -312,6 +313,28 @@ export function parseDetailPage(html, external_id) {
   // Detectar CRM de la agencia (si existe enlace adicional)
   const crmDetection = detectCRMFromDetailPage(html)
 
+  // ── Calcular pHash para fotos (en paralelo, sin descargar archivos) ────────
+  // Limitar a max 3 fotos en paralelo para no saturar red
+  let cover_phash = null
+  let photo_phashes = []
+  if (photos.length > 0) {
+    try {
+      const phashList = []
+      for (let i = 0; i < photos.length; i += 3) {
+        const batch = photos.slice(i, i + 3)
+        const batchHashes = await Promise.all(
+          batch.map(url => calculatePhashFromUrl(url, { timeout_ms: 8000, crop_border_px: 20 }))
+        )
+        phashList.push(...batchHashes)
+      }
+      photo_phashes = phashList.filter(h => h !== null)
+      cover_phash = photo_phashes.length > 0 ? photo_phashes[0] : null
+    } catch (e) {
+      // Si falla el cálculo de pHash, continúa sin él (no bloquea el scraping)
+      console.error(`  [phash] error calculando para ${external_id}: ${e.message}`)
+    }
+  }
+
   return {
     external_id,
     portal: 'idealista',
@@ -332,6 +355,8 @@ export function parseDetailPage(html, external_id) {
     photos, photo_tags,
     floor_plans,
     videos, virtual_tours,
+    cover_phash,
+    photo_phashes,
     // Información de CRM detectado
     agency_url: crmDetection?.agencyUrl ?? null,
     agency_crm: crmDetection?.crm ?? null,
