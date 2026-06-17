@@ -553,11 +553,19 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       const m = (l.title + ' ' + (f ?? '')).match(/piso|ático|atico|estudio|dúplex|duplex|chalet|loft|apartamento/i)
                       return m ? m[0].charAt(0).toUpperCase() + m[0].slice(1).replace('atico', 'ático').replace('duplex', 'dúplex') : 'Piso'
                     })() },
+                    ...(l.is_bank_owned ? [{ label: 'Categoría', value: 'Inmueble de banco' }] : []),
                     { label: 'Superficie construida', value: `${l.square_meters} m²` },
                     { label: 'Habitaciones', value: l.bedrooms > 0 ? `${l.bedrooms}` : 'Estudio' },
                     { label: 'Baños', value: `${l.bathrooms}` },
                     { label: 'Planta', value: l.floor ?? 'No especificada' },
+                    ...(l.exterior !== undefined ? [{ label: 'Interior/Exterior', value: l.exterior ? 'Exterior' : 'Interior' }] : []),
+                    ...(l.condition ? [{ label: 'Estado de conservación', value: l.condition }] : []),
+                    ...(l.elevator !== undefined ? [{ label: 'Ascensor', value: l.elevator ? 'Sí' : 'No' }] : []),
+                    ...(l.orientation ? [{ label: 'Orientación', value: l.orientation }] : []),
+                    ...(l.heating ? [{ label: 'Calefacción', value: l.heating }] : []),
+                    ...(l.accessible ? [{ label: 'Accesibilidad', value: 'Adaptado a movilidad reducida' }] : []),
                     ...(l.deposit_months ? [{ label: 'Fianza', value: `${l.deposit_months} ${l.deposit_months === 1 ? 'mes' : 'meses'}` }] : []),
+                    ...(l.tenant_profile ? [{ label: 'Perfil de inquilino', value: l.tenant_profile }] : []),
                     { label: 'Zona', value: l.distrito ? `${l.zone_name} · ${l.distrito}` : l.zone_name },
                     { label: 'Dirección', value: l.exact_address ?? l.sources[0]?.address ?? 'No disponible' },
                   ].map(({ label, value }) => (

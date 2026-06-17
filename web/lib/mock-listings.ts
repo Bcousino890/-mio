@@ -83,6 +83,15 @@ export type Listing = {
   stats?: ListingStats
   priceHistory: PriceEvent[]
   sources: Source[]
+  // Campos derivados del checklist de publicación de Idealista (se autocompletan en normalizeListings)
+  elevator?: boolean
+  orientation?: string
+  heating?: string
+  accessible?: boolean
+  is_bank_owned?: boolean
+  tenant_profile?: string
+  condition?: string
+  exterior?: boolean
 }
 
 export type EnergyCert = {
@@ -348,6 +357,68 @@ function genSourcePhotos(src: Source, allPhotos: string[]): string[] {
   return rotated.slice(0, count)
 }
 
+function parseElevator(features?: string[]): boolean | undefined {
+  if (!features) return undefined
+  if (features.some((f) => /con ascensor/i.test(f))) return true
+  if (features.some((f) => /sin ascensor/i.test(f))) return false
+  return undefined
+}
+
+function parseOrientation(features?: string[]): string | undefined {
+  const f = features?.find((ft) => /orientaci[oó]n/i.test(ft))
+  if (!f) return undefined
+  const dirs = f.replace(/orientaci[oó]n\s*/i, '').split(/,\s*/).filter(Boolean)
+  if (dirs.length === 0) return undefined
+  return dirs.map((d) => d.charAt(0).toUpperCase() + d.slice(1)).join(', ')
+}
+
+function parseHeating(features?: string[]): string | undefined {
+  const f = features?.find((ft) => /calefacci[oó]n/i.test(ft))
+  if (!f) return undefined
+  const rest = f.replace(/^calefacci[oó]n\s*:?\s*/i, '').trim()
+  if (!rest) return 'Sí'
+  return rest.charAt(0).toUpperCase() + rest.slice(1)
+}
+
+function parseAccessible(features?: string[]): boolean | undefined {
+  if (!features) return undefined
+  if (features.some((f) => /movilidad reducida/i.test(f))) return true
+  return undefined
+}
+
+function parseCondition(features?: string[]): string | undefined {
+  const f = features?.find((ft) => /segunda mano|nueva construcci[oó]n|a estrenar/i.test(ft))
+  if (!f) return undefined
+  if (/para reformar/i.test(f)) return 'A reformar'
+  if (/buen estado/i.test(f)) return 'Buen estado'
+  if (/a estrenar|nueva construcci[oó]n/i.test(f)) return 'A estrenar'
+  return f
+}
+
+function parseExterior(floor?: string): boolean | undefined {
+  if (!floor) return undefined
+  if (/exterior/i.test(floor)) return true
+  if (/interior/i.test(floor)) return false
+  return undefined
+}
+
+// Solo se marca cuando el texto scrapeado lo indica explícitamente: no se inventa la categoría.
+function parseBankOwned(features?: string[], description?: string): boolean | undefined {
+  const text = `${description ?? ''} ${(features ?? []).join(' ')}`
+  if (/inmueble de banco|vivienda de banco|piso de banco|procedente de (un )?banco/i.test(text)) return true
+  return undefined
+}
+
+// Heurística conservadora: solo etiqueta cuando el anuncio lo dice explícitamente,
+// para no atribuir restricciones de inquilino que no vienen del anunciante.
+function parseTenantProfile(operation: string, description?: string): string | undefined {
+  if (operation !== 'rent' || !description) return undefined
+  if (/no\s+estudiantes/i.test(description)) return 'No estudiantes'
+  if (/s[oó]lo\s+inquilinos?\s+con\s+n[oó]mina|requiere\s+n[oó]mina/i.test(description)) return 'Requiere nómina'
+  if (/estudiantes/i.test(description)) return 'Estudiantes bienvenidos'
+  return undefined
+}
+
 function genPhone(src: Source): string {
   const h = hashStr(src.id + src.name)
   const isMobile = h % 2 === 0
@@ -379,7 +450,19 @@ function normalizeListings(listings: Listing[]): Listing[] {
       ...e,
       sourceId: e.sourceId ?? sources[hashStr(l.id + e.date + String(i)) % sources.length]?.id,
     }))
-    return { ...l, sources, priceHistory }
+    return {
+      ...l,
+      sources,
+      priceHistory,
+      elevator: l.elevator ?? parseElevator(l.features),
+      orientation: l.orientation ?? parseOrientation(l.features),
+      heating: l.heating ?? parseHeating(l.features),
+      accessible: l.accessible ?? parseAccessible(l.features),
+      condition: l.condition ?? parseCondition(l.features),
+      exterior: l.exterior ?? parseExterior(l.floor),
+      is_bank_owned: l.is_bank_owned ?? parseBankOwned(l.features, l.description),
+      tenant_profile: l.tenant_profile ?? parseTenantProfile(l.operation, l.description),
+    }
   })
 }
 
