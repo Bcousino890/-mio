@@ -27,14 +27,13 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-echo "▶ Esperando a que PostgreSQL esté listo..."
+DB_HOST_PORT=$(echo "$DATABASE_URL" | sed -E 's#^[^@]*@##; s#/.*##')
+echo "▶ Esperando a que PostgreSQL esté listo en ${DB_HOST_PORT}..."
 for i in {1..30}; do
-  if psql "$DATABASE_URL" -c "SELECT 1" >/dev/null 2>&1; then
-    echo "✅ PostgreSQL listo"
-    break
-  fi
+  PG_ERR=$(psql "$DATABASE_URL" -c "SELECT 1" 2>&1 >/dev/null) && { echo "✅ PostgreSQL listo"; break; }
   if [ $i -eq 30 ]; then
-    echo "❌ Timeout esperando PostgreSQL"
+    echo "❌ Timeout esperando PostgreSQL (${DB_HOST_PORT})"
+    echo "   Último error: $PG_ERR"
     exit 1
   fi
   echo "  · Intento $i/30..."
