@@ -6,6 +6,7 @@ name: Deploy a CX33
 on:
   push:
     branches:
+      - main
       - claude/affectionate-albattani-leauui
     paths:
       - 'web/**'
