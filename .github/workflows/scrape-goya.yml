@@ -42,6 +42,37 @@ jobs:
           echo "Rent listings:"
           node -e "console.log(JSON.parse(require('fs').readFileSync('scraper/output/goya-rent-latest.json')).length + ' anuncios')"
 
+      - name: Reintentar fallidas - Alquiler
+        env:
+          PROXY_PROVIDER: smartproxy
+          SMARTPROXY_PROXY_HOST: eu.smartproxy.net
+          SMARTPROXY_PROXY_PORT: 3120
+          SMARTPROXY_PROXY_USER: smart-b04nrjtamr8a_area-ES_city-MADRID
+          SMARTPROXY_PROXY_PASS: ZLOutsGkCC5kgmwS
+        run: |
+          FAIL_LOG="scraper/output/goya-rent-latest.json.failed.json"
+          if [ -s "$FAIL_LOG" ] && [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$FAIL_LOG')).length)")" -gt 0 ]; then
+            echo "Reintentando fichas de alquiler fallidas..."
+            node scraper/scrape-zone.mjs \
+              --zone madrid/barrio-de-salamanca/goya \
+              --op rent \
+              --retry-failed "$FAIL_LOG" \
+              --emit-app scraper/output/goya-rent-retry.json
+
+            node << 'EOF'
+            const fs = require('fs');
+            const main = JSON.parse(fs.readFileSync('scraper/output/goya-rent-latest.json'));
+            const retry = JSON.parse(fs.readFileSync('scraper/output/goya-rent-retry.json'));
+            const seen = new Set(main.map(l => l.external_id));
+            const recovered = retry.filter(l => !seen.has(l.external_id));
+            const merged = [...main, ...recovered];
+            fs.writeFileSync('scraper/output/goya-rent-latest.json', JSON.stringify(merged, null, 2));
+            console.log(`  Recuperadas ${recovered.length}/${retry.length} fichas de alquiler. Total: ${merged.length}`);
+            EOF
+          else
+            echo "Sin fichas fallidas en alquiler."
+          fi
+
       - name: Scrape Goya Venta (691)
         env:
           PROXY_PROVIDER: smartproxy
@@ -58,6 +89,37 @@ jobs:
 
           echo "Sale listings:"
           node -e "console.log(JSON.parse(require('fs').readFileSync('scraper/output/goya-sale-latest.json')).length + ' anuncios')"
+
+      - name: Reintentar fallidas - Venta
+        env:
+          PROXY_PROVIDER: smartproxy
+          SMARTPROXY_PROXY_HOST: eu.smartproxy.net
+          SMARTPROXY_PROXY_PORT: 3120
+          SMARTPROXY_PROXY_USER: smart-b04nrjtamr8a_area-ES_city-MADRID
+          SMARTPROXY_PROXY_PASS: ZLOutsGkCC5kgmwS
+        run: |
+          FAIL_LOG="scraper/output/goya-sale-latest.json.failed.json"
+          if [ -s "$FAIL_LOG" ] && [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$FAIL_LOG')).length)")" -gt 0 ]; then
+            echo "Reintentando fichas de venta fallidas..."
+            node scraper/scrape-zone.mjs \
+              --zone madrid/barrio-de-salamanca/goya \
+              --op sale \
+              --retry-failed "$FAIL_LOG" \
+              --emit-app scraper/output/goya-sale-retry.json
+
+            node << 'EOF'
+            const fs = require('fs');
+            const main = JSON.parse(fs.readFileSync('scraper/output/goya-sale-latest.json'));
+            const retry = JSON.parse(fs.readFileSync('scraper/output/goya-sale-retry.json'));
+            const seen = new Set(main.map(l => l.external_id));
+            const recovered = retry.filter(l => !seen.has(l.external_id));
+            const merged = [...main, ...recovered];
+            fs.writeFileSync('scraper/output/goya-sale-latest.json', JSON.stringify(merged, null, 2));
+            console.log(`  Recuperadas ${recovered.length}/${retry.length} fichas de venta. Total: ${merged.length}`);
+            EOF
+          else
+            echo "Sin fichas fallidas en venta."
+          fi
 
       - name: Consolidate datasets
         run: |
@@ -93,8 +155,17 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add web/lib/listings-goya-full.json scraper/output/
-          git diff --cached --quiet || git commit -m "🤖 Auto: Update Goya dataset ($(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)") listings)"
-          git push origin main
+          git diff --cached --quiet && exit 0
+          git commit -m "🤖 Auto: Update Goya dataset ($(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)") listings)"
+          git fetch origin main
+          git rebase origin/main
+          for i in 1 2 3 4; do
+            git push origin main && break
+            echo "Push falló, reintentando ($i/4)..."
+            sleep $((i * 5))
+            git fetch origin main
+            git rebase origin/main
+          done
 
       - name: Summary
         run: |

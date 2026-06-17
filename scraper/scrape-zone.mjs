@@ -12,14 +12,17 @@
 //   node scrape-zone.mjs --zone madrid/barrio-de-salamanca/goya --op sale --dry-run --limit 3
 //
 // Flags:
-//   --zone <slug>   slug de Idealista (obligatorio)
-//   --op <rent|sale>operación (def. rent)
-//   --max-pages N   tope de páginas de listado (def. 60 = tope del portal)
-//   --limit N       en dry-run, nº máx de fichas a procesar
-//   --dry-run       no escribe en BD; imprime el JSON parseado
-//   --no-proxy      ignora el proxy aunque esté configurado
+//   --zone <slug>     slug de Idealista (obligatorio)
+//   --op <rent|sale>  operación (def. rent)
+//   --max-pages N     tope de páginas de listado (def. 60 = tope del portal)
+//   --limit N         en dry-run, nº máx de fichas a procesar
+//   --dry-run         no escribe en BD; imprime el JSON parseado
+//   --no-proxy        ignora el proxy aunque esté configurado
+//   --retries N       reintentos por ficha antes de darla por fallida (def. 4)
+//   --fail-log <path> dónde guardar los external_id que fallaron tras agotar
+//                      reintentos (def. <emit-app o output>.failed.json)
 // ─────────────────────────────────────────────────────────────────────────────
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { fetchHtml, SLEEP } from './lib/fetch.mjs'
 import { parseListPage, parseDetailPage, parseTotalCount } from './lib/parse.mjs'
 import { toAppListing } from './lib/to-listing.mjs'
@@ -38,6 +41,8 @@ const LIMIT = arg('limit') ? Number(arg('limit')) : Infinity
 const DRY = !!arg('dry-run')
 const USE_PROXY = !arg('no-proxy')
 const EMIT_APP = arg('emit-app')   // ruta donde volcar el JSON con tipo Listing[]
+const RETRIES = Number(arg('retries', 4))
+const FAIL_LOG = arg('fail-log', (EMIT_APP || 'scraper/output/scrape') + '.failed.json')
 
 if (!ZONE) {
   console.error('✗ Falta --zone (p.ej. madrid/barrio-de-salamanca/goya)')
@@ -50,12 +55,30 @@ const BASE = `https://www.idealista.com/${OP_PATH}/${ZONE}/`
 // Pausa aleatoria entre peticiones para no martillear el portal.
 const jitter = () => SLEEP(900 + Math.floor(Math.random() * 1100))
 
+// Reintenta una petición HTML con backoff exponencial (2s, 4s, 8s, 16s...).
+// Nunca tira una propiedad a la basura por un fallo puntual de red/bloqueo.
+async function fetchWithRetry(url, label, retries = RETRIES) {
+  let lastReason = 'desconocido'
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const res = await fetchHtml(url, { useProxy: USE_PROXY })
+    if (res.ok) return res
+    lastReason = res.reason
+    if (attempt < retries) {
+      const backoffMs = 2000 * 2 ** (attempt - 1)
+      console.error(`    ⟳ ${label}: intento ${attempt}/${retries} falló (${res.reason}), reintentando en ${backoffMs / 1000}s…`)
+      await SLEEP(backoffMs)
+    }
+  }
+  console.error(`    ✗ ${label}: agotados ${retries} intentos (${lastReason})`)
+  return { ok: false, reason: lastReason }
+}
+
 async function collectListings() {
   const seen = new Map()
   let total = null
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = page === 1 ? BASE : `${BASE}pagina-${page}.htm`
-    const res = await fetchHtml(url, { useProxy: USE_PROXY })
+    const res = await fetchWithRetry(url, `página ${page}`)
     if (!res.ok) {
       console.error(`  ✗ página ${page}: ${res.reason}`)
       break
@@ -79,16 +102,15 @@ async function collectListings() {
 }
 
 async function enrich(item) {
-  const res = await fetchHtml(item.source_url, { useProxy: USE_PROXY })
+  const res = await fetchWithRetry(item.source_url, `ficha ${item.external_id}`)
   if (!res.ok) {
-    console.error(`    ✗ ficha ${item.external_id}: ${res.reason}`)
-    return null
+    return { ok: false, external_id: item.external_id, reason: res.reason }
   }
   const detail = await parseDetailPage(res.html, item.external_id)
   // El precio de la ficha manda; si falta, usamos el de la lista.
   if (detail.price == null) detail.price = item.price
   if (detail.advertiser_name == null) detail.advertiser_name = item.advertiser_name
-  return detail
+  return { ok: true, detail }
 }
 
 async function upsertAll(rows) {
@@ -148,17 +170,42 @@ async function upsertAll(rows) {
 
 async function main() {
   console.error(`▶ Scrape ${ZONE} · ${OP} · ${DRY ? 'DRY-RUN' : 'BD'}${USE_PROXY ? '' : ' · sin proxy'}`)
-  const { items, total } = await collectListings()
+
+  let items, total
+  // Si se pasó --retry-failed, sólo reintentamos los external_id que quedaron
+  // pendientes de una corrida anterior (no se recorre el listado de nuevo).
+  const retryFailedPath = arg('retry-failed')
+  if (retryFailedPath) {
+    const prevFailed = JSON.parse(readFileSync(retryFailedPath, 'utf8'))
+    items = prevFailed.map((f) => ({ external_id: f.external_id, source_url: f.source_url, price: null, advertiser_name: null }))
+    total = items.length
+    console.error(`▶ Reintentando ${items.length} fichas fallidas de ${retryFailedPath}`)
+  } else {
+    ;({ items, total } = await collectListings())
+  }
   console.error(`▶ ${items.length} anuncios a enriquecer`)
 
   const rows = []
+  const failed = []
   for (let i = 0; i < items.length; i++) {
-    const detail = await enrich(items[i])
-    if (detail) {
+    const result = await enrich(items[i])
+    if (result.ok) {
+      const detail = result.detail
       rows.push(detail)
       console.error(`    ✓ [${i + 1}/${items.length}] ${detail.external_id} · ${detail.price ?? '?'} € · ${detail.square_meters ?? '?'} m² · ${detail.photos.length} fotos · ${detail.latitude ? 'geo✓' : 'geo✗'}`)
+    } else {
+      failed.push({ external_id: result.external_id, source_url: items[i].source_url, reason: result.reason })
     }
     await jitter()
+  }
+
+  if (failed.length > 0) {
+    writeFileSync(FAIL_LOG, JSON.stringify(failed, null, 2))
+    console.error(`⚠ ${failed.length} fichas no se pudieron scrapear tras ${RETRIES} intentos. IDs guardados en ${FAIL_LOG}`)
+    console.error(`  Reintenta con: node scrape-zone.mjs --zone ${ZONE} --op ${OP} --retry-failed ${FAIL_LOG} --emit-app <output>`)
+  } else if (existsSync(FAIL_LOG) && !retryFailedPath) {
+    // Corrida limpia sin fallos: no dejamos un fail-log obsoleto de una corrida anterior.
+    writeFileSync(FAIL_LOG, JSON.stringify([], null, 2))
   }
 
   if (EMIT_APP) {
