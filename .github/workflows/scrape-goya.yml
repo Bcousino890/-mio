@@ -1,0 +1,98 @@
+name: Scrape Goya Complete (Rent + Sale)
+
+on:
+  workflow_dispatch:  # Manual trigger desde GitHub UI
+  schedule:
+    - cron: '0 2 * * 0'  # Cada domingo a las 2 AM UTC (3 AM Madrid)
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 horas max
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: cd scraper && npm install
+
+      - name: Create output directory
+        run: mkdir -p scraper/output
+
+      - name: Scrape Goya Alquiler (596)
+        env:
+          PROXY_PROVIDER: smartproxy
+          SMARTPROXY_PROXY_HOST: eu.smartproxy.net
+          SMARTPROXY_PROXY_PORT: 3120
+          SMARTPROXY_PROXY_USER: smart-b04nrjtamr8a_area-ES_city-MADRID
+          SMARTPROXY_PROXY_PASS: ZLOutsGkCC5kgmwS
+        run: |
+          node scraper/scrape-zone.mjs \
+            --zone madrid/barrio-de-salamanca/goya \
+            --op rent \
+            --max-pages 60 \
+            --emit-app scraper/output/goya-rent-latest.json
+
+          echo "Rent listings:"
+          node -e "console.log(JSON.parse(require('fs').readFileSync('scraper/output/goya-rent-latest.json')).length + ' anuncios')"
+
+      - name: Scrape Goya Venta (691)
+        env:
+          PROXY_PROVIDER: smartproxy
+          SMARTPROXY_PROXY_HOST: eu.smartproxy.net
+          SMARTPROXY_PROXY_PORT: 3120
+          SMARTPROXY_PROXY_USER: smart-b04nrjtamr8a_area-ES_city-MADRID
+          SMARTPROXY_PROXY_PASS: ZLOutsGkCC5kgmwS
+        run: |
+          node scraper/scrape-zone.mjs \
+            --zone madrid/barrio-de-salamanca/goya \
+            --op sale \
+            --max-pages 60 \
+            --emit-app scraper/output/goya-sale-latest.json
+
+          echo "Sale listings:"
+          node -e "console.log(JSON.parse(require('fs').readFileSync('scraper/output/goya-sale-latest.json')).length + ' anuncios')"
+
+      - name: Consolidate datasets
+        run: |
+          node << 'EOF'
+          const fs = require('fs');
+          const rent = JSON.parse(fs.readFileSync('scraper/output/goya-rent-latest.json'));
+          const sale = JSON.parse(fs.readFileSync('scraper/output/goya-sale-latest.json'));
+          const combined = [...rent, ...sale];
+
+          // Deduplicación
+          const seen = new Set();
+          const deduped = combined.filter(l => {
+            if (seen.has(l.external_id)) return false;
+            seen.add(l.external_id);
+            return true;
+          });
+
+          console.log(`✅ Consolidado:`);
+          console.log(`  Alquiler: ${rent.length}`);
+          console.log(`  Venta: ${sale.length}`);
+          console.log(`  Total: ${deduped.length}`);
+
+          fs.writeFileSync('web/lib/listings-goya-full.json', JSON.stringify(deduped, null, 2));
+          EOF
+
+      - name: Commit and push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add web/lib/listings-goya-full.json scraper/output/
+          git diff --cached --quiet || git commit -m "🤖 Auto: Update Goya dataset ($(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)") listings)"
+          git push origin main
+
+      - name: Summary
+        run: |
+          echo "✅ Scraping Goya completado"
+          echo "📊 Total: $(node -e "console.log(JSON.parse(require('fs').readFileSync('web/lib/listings-goya-full.json')).length)") anuncios"
+          echo "📁 Archivo: web/lib/listings-goya-full.json"
