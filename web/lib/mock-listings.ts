@@ -2,6 +2,14 @@ export type PriceEvent = {
   date: string
   price: number
   event: 'listed' | 'price_drop' | 'price_increase' | 'relisted' | 'withdrawn'
+  // Fuente que publicó este evento (se autocompleta en normalizeListings)
+  sourceId?: string
+}
+
+export type SourceReference = {
+  /** Origen de la referencia: el portal donde se publica o "Web propia" del anunciante */
+  label: string
+  value: string
 }
 
 export type Source = {
@@ -15,6 +23,10 @@ export type Source = {
   url: string
   // Datos de la ficha "Comercializando" (se autocompletan en normalizeListings)
   reference?: string
+  // Un mismo anunciante puede tener varias referencias (su web propia + el portal)
+  references?: SourceReference[]
+  // Fotos publicadas específicamente por esta fuente (para el selector "Seleccionar fuente de fotos")
+  photos?: string[]
   phone?: string
   phone_contacts?: number
   bedrooms?: number
@@ -317,6 +329,25 @@ function genReference(src: Source): string {
   return `${prefix}${(h % 9_000_000 + 1_000_000)}`
 }
 
+function genReferences(src: Source, portalReference: string): SourceReference[] {
+  const portalLabel = src.portal.charAt(0).toUpperCase() + src.portal.slice(1)
+  const h = hashStr(src.id + src.name + 'own-ref')
+  const ownReference = `${(h % 900_000 + 100_000)}`
+  return [
+    { label: portalLabel, value: portalReference },
+    { label: 'Web propia', value: ownReference },
+  ]
+}
+
+function genSourcePhotos(src: Source, allPhotos: string[]): string[] {
+  if (allPhotos.length === 0) return []
+  const h = hashStr(src.id + 'photos')
+  const count = Math.max(Math.min(allPhotos.length, 3), allPhotos.length - (h % Math.min(4, allPhotos.length)))
+  const offset = h % allPhotos.length
+  const rotated = [...allPhotos.slice(offset), ...allPhotos.slice(0, offset)]
+  return rotated.slice(0, count)
+}
+
 function genPhone(src: Source): string {
   const h = hashStr(src.id + src.name)
   const isMobile = h % 2 === 0
@@ -326,21 +357,30 @@ function genPhone(src: Source): string {
 }
 
 function normalizeListings(listings: Listing[]): Listing[] {
-  return listings.map((l) => ({
-    ...l,
-    sources: l.sources.map((s) => ({
-      ...s,
-      reference: s.reference ?? genReference(s),
-      phone: s.phone ?? genPhone(s),
-      phone_contacts: s.phone_contacts ?? (hashStr(s.id) % 4),
-      bedrooms: s.bedrooms ?? l.bedrooms,
-      bathrooms: s.bathrooms ?? l.bathrooms,
-      built_area: s.built_area ?? l.square_meters,
-      plot_area: s.plot_area,
-      address: s.address ?? l.exact_address ?? l.zone_name,
-      is_particular: s.is_particular ?? (s.type === 'particular'),
-    })),
-  }))
+  return listings.map((l) => {
+    const sources = l.sources.map((s) => {
+      const reference = s.reference ?? genReference(s)
+      return {
+        ...s,
+        reference,
+        references: s.references ?? genReferences(s, reference),
+        photos: s.photos ?? genSourcePhotos(s, l.photos),
+        phone: s.phone ?? genPhone(s),
+        phone_contacts: s.phone_contacts ?? (hashStr(s.id) % 4),
+        bedrooms: s.bedrooms ?? l.bedrooms,
+        bathrooms: s.bathrooms ?? l.bathrooms,
+        built_area: s.built_area ?? l.square_meters,
+        plot_area: s.plot_area,
+        address: s.address ?? l.exact_address ?? l.zone_name,
+        is_particular: s.is_particular ?? (s.type === 'particular'),
+      }
+    })
+    const priceHistory = l.priceHistory.map((e, i) => ({
+      ...e,
+      sourceId: e.sourceId ?? sources[hashStr(l.id + e.date + String(i)) % sources.length]?.id,
+    }))
+    return { ...l, sources, priceHistory }
+  })
 }
 
 // Datos REALES scrapeados de Idealista (empezando por Goya). Si el fichero está
