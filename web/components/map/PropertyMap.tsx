@@ -1,6 +1,7 @@
 'use client'
 
 import 'leaflet/dist/leaflet.css'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
 import { useEffect, useRef } from 'react'
 import type { Listing } from '@/lib/mock-listings'
 
@@ -51,20 +52,68 @@ function markerHtml(l: Listing, isActive: boolean) {
   ">${dotHtml}${priceStr}</div>`
 }
 
+// leaflet.markercluster's UMD bundle reads the bare global `L` instead of
+// importing it, so `window.L` must be set before it loads. Memoized so the
+// load (and the global wiring) happens exactly once, even if effects that
+// call this run more than once (e.g. React StrictMode's double-invoke).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let leafletPromise: Promise<any> | null = null
+function loadLeaflet() {
+  if (!leafletPromise) {
+    leafletPromise = import('leaflet').then(async (L) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(window as any).L = L
+      await import('leaflet.markercluster')
+      return L
+    })
+  }
+  return leafletPromise
+}
+
+function clusterHtml(count: number) {
+  const size = count >= 100 ? 56 : count >= 25 ? 48 : count >= 10 ? 42 : 36
+  const inner = size - 12
+  const fontSize = size >= 48 ? 14 : 12
+  return `<div style="position:relative;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;">
+    <div style="position:absolute;inset:0;border-radius:50%;background:rgba(37,99,235,0.22);"></div>
+    <div style="
+      position:relative;
+      width:${inner}px;height:${inner}px;
+      border-radius:50%;
+      background:#2563eb;
+      color:#fff;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight:700;
+      font-size:${fontSize}px;
+      font-family:system-ui,-apple-system,sans-serif;
+      box-shadow:0 3px 10px rgba(37,99,235,0.45);
+      border:2px solid #fff;
+      cursor:pointer;
+    ">${count}</div>
+  </div>`
+}
+
 export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markersRef = useRef<Record<string, any>>({})
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clusterGroupRef = useRef<any>(null)
+  const initializingRef = useRef(false)
 
   useEffect(() => {
     if (!containerRef.current) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((containerRef.current as any)._leaflet_id) return
+    if (initializingRef.current) return
+    initializingRef.current = true
 
-    import('leaflet').then((L) => {
-      if (!containerRef.current) return
+    let cancelled = false
+
+    loadLeaflet().then(async (L) => {
+      if (cancelled || !containerRef.current) return
 
       const map = L.map(containerRef.current, {
         center: [40.4300, -3.6900],
@@ -83,6 +132,23 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
       L.control.zoom({ position: 'topright' }).addTo(map)
       L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map)
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const clusterGroup = (L as any).markerClusterGroup({
+        maxClusterRadius: 60,
+        showCoverageOnHover: false,
+        spiderfyOnMaxZoom: true,
+        zoomToBoundsOnClick: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        iconCreateFunction: (cluster: any) => {
+          const count = cluster.getChildCount()
+          return L.divIcon({
+            className: '',
+            html: clusterHtml(count),
+            iconSize: L.point(56, 56),
+          })
+        },
+      })
+
       listings.forEach((l) => {
         const icon = L.divIcon({
           className: '',
@@ -91,7 +157,6 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         })
 
         const marker = L.marker([l.latitude, l.longitude], { icon })
-          .addTo(map)
           .bindPopup(`
             <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
               <div style="font-weight:700;font-size:14px;color:#0f172a">${l.price.toLocaleString('es-ES')} €</div>
@@ -109,12 +174,17 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         marker.on('mouseout', () => onMarkerHover?.(null))
 
         markersRef.current[l.id] = marker
+        clusterGroup.addLayer(marker)
       })
 
+      map.addLayer(clusterGroup)
+      clusterGroupRef.current = clusterGroup
       mapRef.current = map
     })
 
     return () => {
+      cancelled = true
+      initializingRef.current = false
       if (mapRef.current) {
         mapRef.current.remove()
         mapRef.current = null
@@ -126,7 +196,7 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   // Update active marker style
   useEffect(() => {
     if (!mapRef.current) return
-    import('leaflet').then((L) => {
+    loadLeaflet().then((L) => {
       Object.entries(markersRef.current).forEach(([id, marker]) => {
         const l = listings.find((x) => x.id === id)
         if (!l) return
@@ -136,13 +206,16 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
           html: markerHtml(l, isActive),
           iconAnchor: [0, 0],
         }))
-        if (isActive) {
-          marker.openPopup()
-          marker.setZIndexOffset(1000)
-        } else {
-          marker.setZIndexOffset(0)
-        }
+        marker.setZIndexOffset(isActive ? 1000 : 0)
       })
+
+      const activeMarker = activeId ? markersRef.current[activeId] : null
+      if (activeMarker && clusterGroupRef.current) {
+        // Reveals the marker first (zooming/spiderfying out of its cluster if needed)
+        clusterGroupRef.current.zoomToShowLayer(activeMarker, () => {
+          activeMarker.openPopup()
+        })
+      }
     })
   }, [activeId, listings])
 
