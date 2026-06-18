@@ -76,6 +76,21 @@ jobs:
             echo ""
 
             echo ""
+            echo "── Diagnóstico: ¿el scrape pudo autenticarse en Postgres (host:5433)? ─"
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+              echo "  ✗ POSTGRES_PASSWORD no está definido en .env"
+            else
+              command -v psql >/dev/null 2>&1 || sudo apt-get install -y postgresql-client >/dev/null 2>&1
+              PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5433 -U casafari -d casafari -t -c "select 'conexión OK desde el host (5433)';" 2>&1 || echo "  ✗ Falló la conexión host->5433 con la POSTGRES_PASSWORD de .env"
+            fi
+            echo "  Contraseña real que usa el contenedor casafari-pg (env var con la que arrancó):"
+            docker exec casafari-pg printenv POSTGRES_PASSWORD 2>&1 | sed 's/./*/g'
+            echo "  ¿Coincide con la de .env? (longitudes, sin revelar valores):"
+            echo "  longitud .env:        ${#POSTGRES_PASSWORD}"
+            echo "  longitud contenedor:  $(docker exec casafari-pg printenv POSTGRES_PASSWORD 2>/dev/null | wc -c)"
+
+            echo ""
             echo "── Total acumulado en BD por zona/operación (hoy) ────"
             if [ -f .env ]; then set -a; source .env; set +a; fi
             docker exec casafari-pg psql -U casafari -d casafari -t -c "
