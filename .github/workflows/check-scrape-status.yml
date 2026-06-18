@@ -24,6 +24,10 @@ jobs:
           curl -sS -i -m 20 "https://crm.cremme.es/api/listings?limit=2" | head -c 2000
           echo ""
           echo ""
+          echo "── DIAG puntual: GET https://crm.cremme.es/api/listings?id=111695301 ──"
+          curl -sS -i -m 20 "https://crm.cremme.es/api/listings?id=111695301"
+          echo ""
+          echo ""
           echo "── GET https://crm.cremme.es/anuncios (headers + primeros bytes del HTML) ──"
           curl -sS -D - -m 20 "https://crm.cremme.es/anuncios" -o /tmp/anuncios.html
           echo "--- body (primeros 1500 chars) ---"
@@ -156,6 +160,13 @@ jobs:
             else
               echo "(sin summary log todavía)"
             fi
+
+            echo ""
+            echo "── DIAG puntual: fila(s) con external_id=111695301 en BD ─"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT id, portal, external_id, is_active, advertiser_type, zone_raw, last_seen_at
+              FROM listings WHERE external_id = '111695301';
+            " 2>&1 || echo "(no se pudo consultar la BD)"
 
             echo ""
             echo "── Listings actualizados en BD (última hora) ─────────"
