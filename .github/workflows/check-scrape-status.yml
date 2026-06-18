@@ -33,22 +33,39 @@ jobs:
 
             echo "── Lockfile ──────────────────────────────────────────"
             LOCKFILE="/tmp/casafari-scrape-salamanca-almagro.lock"
-            if [ -e "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
-              echo "▶ Scrape EN CURSO (PID $(cat "$LOCKFILE"))"
+            LOCK_PID="$(cat "$LOCKFILE" 2>/dev/null || true)"
+            if [ -e "$LOCKFILE" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+              echo "▶ Scrape EN CURSO (PID $LOCK_PID)"
+              echo "  proceso real con ese PID:"
+              ps -fp "$LOCK_PID" 2>&1 || echo "  (ps no encontró el PID, puede ser un PID reciclado)"
             else
               echo "○ No hay scrape corriendo en este momento"
             fi
 
             echo ""
-            echo "── Último log de lanzamiento ─────────────────────────"
-            ls -t scraper/output/launch-*.log 2>/dev/null | head -1 | xargs -r tail -20
+            echo "── Procesos node/scrape vivos ────────────────────────"
+            ps aux | grep -E 'node|scrape-zone|scrape-salamanca' | grep -v grep || echo "(ninguno)"
+
+            echo ""
+            echo "── Archivos en scraper/output/ (más recientes primero) ─"
+            ls -lat scraper/output/ 2>&1 | head -20
+
+            echo ""
+            echo "── Log de lanzamiento más ANTIGUO completo ───────────"
+            OLDEST_LAUNCH=$(ls -tr scraper/output/launch-*.log 2>/dev/null | head -1)
+            if [ -n "$OLDEST_LAUNCH" ]; then
+              echo "(${OLDEST_LAUNCH})"
+              cat "$OLDEST_LAUNCH"
+            else
+              echo "(no hay logs de lanzamiento)"
+            fi
 
             echo ""
             echo "── Último summary log ────────────────────────────────"
             LATEST_SUMMARY=$(ls -t scraper/output/salamanca-almagro-*.summary.log 2>/dev/null | head -1)
             if [ -n "$LATEST_SUMMARY" ]; then
               echo "(${LATEST_SUMMARY})"
-              tail -30 "$LATEST_SUMMARY"
+              tail -40 "$LATEST_SUMMARY"
             else
               echo "(sin summary log todavía)"
             fi
