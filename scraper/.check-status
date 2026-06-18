@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T15:10Z (usuario no ve cambios en crm.cremme.es/anuncios: verificar si el scrape sigue corriendo y si la app puede leer la BD)
+Última vez consultado: 2026-06-18T15:15Z (scrape completo confirmado en BD; ahora diagnosticar por qué casafari-app/api/listings no lo refleja en /anuncios)
