@@ -5,4 +5,4 @@ No tiene efecto en el código del scraper; solo existe para poder lanzar el
 job desde push, ya que la API de GitHub no permite disparar
 workflow_dispatch en este entorno.
 
-Última vez lanzado: 2026-06-18T02:45Z (pkill approach + 100 IPs Smartproxy)
+Última vez lanzado: 2026-06-18T03:10Z (YAML arreglado; sin proxy aún, pendiente whitelist de Smartproxy)
