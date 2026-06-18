@@ -151,6 +151,23 @@ jobs:
             " 2>&1 || echo "(no se pudo consultar la BD)"
 
             echo ""
+            echo "── Diagnóstico: ¿el deploy en curso está colgado? ────"
+            echo "Procesos npm/next/docker build vivos:"
+            ps aux | grep -E 'npm|next|docker.*build|docker-buildx' | grep -v grep || echo "(ninguno)"
+            echo ""
+            echo "Espacio en disco:"
+            df -h / 2>&1
+            echo ""
+            echo "Memoria:"
+            free -m 2>&1
+            echo ""
+            echo "Todos los contenedores (incluye los detenidos):"
+            docker ps -a --format "  {{.Names}}\t{{.Status}}\t{{.Image}}"
+            echo ""
+            echo "Últimas líneas del build de la imagen casafari-app (si hay buildkit en curso):"
+            docker buildx du 2>&1 | head -5 || true
+
+            echo ""
             echo "── Diagnóstico: ¿por qué no se ven los cambios en /anuncios? ─"
             echo "Estado de casafari-app:"
             docker ps --filter "name=casafari-app" --format "  {{.Names}}\t{{.Status}}"
