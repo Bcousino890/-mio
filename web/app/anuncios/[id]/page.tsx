@@ -233,7 +233,10 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
             operation: found.operation || 'rent',
             price,
             square_meters: found.square_meters || 0,
-            price_sqm: found.price_sqm || 0,
+            // price_sqm comes back from Postgres as a numeric (string), not a JS number —
+            // coerce it so downstream arithmetic (avgPriceSqm reduce, estimatedValue) doesn't
+            // silently string-concatenate instead of summing.
+            price_sqm: Number(found.price_sqm) || 0,
             bedrooms: found.bedrooms || 0,
             bathrooms: found.bathrooms || 1,
             zone_name: found.zone_name || found.zone_raw || 'Unknown',
@@ -290,7 +293,7 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                       ...transformed,
                       id: row.id,
                       price: row.price || 0,
-                      price_sqm: row.price_sqm || 0,
+                      price_sqm: Number(row.price_sqm) || 0,
                       square_meters: row.square_meters || 0,
                     }))
                 )
