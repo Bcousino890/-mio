@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T02:50Z (verificar si pkill mató el proceso viejo y si .env.scraper con proxy se creó)
+Última vez consultado: 2026-06-18T02:55Z (ver formato real de la API de Smartproxy antes de relanzar)
