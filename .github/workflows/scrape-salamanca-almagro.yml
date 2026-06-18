@@ -29,6 +29,24 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Configurar proxy Smartproxy en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            cat > .env.scraper << 'ENVEOF'
+            PROXY_PROVIDER=smartproxy
+            SMARTPROXY_PROXY_HOST=proxy.smartproxy.net
+            SMARTPROXY_PROXY_PORT=3120
+            SMARTPROXY_PROXY_USER=
+            SMARTPROXY_PROXY_PASS=9cf8f476185ea51d90a811dfedf19974
+            PROXY_COUNTRY=ES
+            ENVEOF
+            chmod 600 .env.scraper
+            echo "✅ .env.scraper creado (proxy Smartproxy configurado)"
+          EOF
+
       - name: Lanzar scrape en background en el VPS
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
