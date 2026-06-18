@@ -18,7 +18,6 @@ export async function GET(request: NextRequest) {
       SELECT
         external_id as id,
         external_id as property_id,
-        title,
         operation,
         price,
         square_meters,
@@ -42,10 +41,7 @@ export async function GET(request: NextRequest) {
         agency_domain,
         EXTRACT(DAY FROM (now() - last_seen_at))::int as days_on_market,
         description,
-        zone_raw,
-        exact_address,
-        barrio,
-        distrito
+        zone_raw
       FROM listings
       WHERE is_active = true
     `
