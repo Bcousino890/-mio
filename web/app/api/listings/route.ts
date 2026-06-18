@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
   const bedroomsMin = sp.get('bedrooms_min') ? Number(sp.get('bedrooms_min')) : null
   const bathroomsMin = sp.get('bathrooms_min') ? Number(sp.get('bathrooms_min')) : null
   const onlyDrops = sp.get('only_drops') === 'true'
-  const sort = SORT_CLAUSES[sp.get('sort') ?? 'recent'] ? sp.get('sort')! : 'recent'
+  const sortParam = sp.get('sort')
+  const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'recent'
 
   const page = Math.max(1, Number(sp.get('page')) || 1)
   const pageSize = Math.min(Math.max(1, Number(sp.get('page_size')) || 30), 200)
