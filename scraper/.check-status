@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T02:30Z (verificar si scrape relanzado con proxy está funcionando)
+Última vez consultado: 2026-06-18T02:40Z (verificar si scrape con kill -9 + proxy está activo)
