@@ -149,4 +149,19 @@ jobs:
               GROUP BY zone_raw, operation
               ORDER BY ultimo DESC;
             " 2>&1 || echo "(no se pudo consultar la BD)"
+
+            echo ""
+            echo "── Diagnóstico: ¿por qué no se ven los cambios en /anuncios? ─"
+            echo "Estado de casafari-app:"
+            docker ps --filter "name=casafari-app" --format "  {{.Names}}\t{{.Status}}"
+            echo ""
+            echo "DATABASE_URL que tiene el contenedor casafari-app (host y puerto, sin password):"
+            docker exec casafari-app printenv DATABASE_URL 2>&1 | sed -E 's#(postgres(ql)?://[^:]+):[^@]+@#\1:***@#'
+            echo ""
+            echo "Respuesta de /api/listings vista DESDE el contenedor casafari-app (localhost:3000):"
+            docker exec casafari-app wget -qO- "http://127.0.0.1:3000/api/listings?limit=2" 2>&1 | head -c 1500 || echo "  (falló el wget interno)"
+            echo ""
+            echo ""
+            echo "Últimas líneas de logs de casafari-app (errores de conexión a BD, etc.):"
+            docker logs casafari-app --tail 30 2>&1
           EOF
