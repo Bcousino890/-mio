@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T01:35Z (verificar mkdir -p scraper/output tras el deploy)
+Última vez consultado: 2026-06-18T01:40Z (leer stdout en vivo de goya/rent vía /proc)

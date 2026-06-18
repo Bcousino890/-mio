@@ -47,6 +47,16 @@ jobs:
             ps aux | grep -E 'node|scrape-zone|scrape-salamanca' | grep -v grep || echo "(ninguno)"
 
             echo ""
+            echo "── stdout en vivo del proceso scrape-zone.mjs (vía /proc, aunque el archivo ya no exista) ─"
+            ZONE_PID="$(pgrep -f 'node scraper/scrape-zone.mjs' | head -1)"
+            if [ -n "$ZONE_PID" ]; then
+              echo "(PID $ZONE_PID)"
+              tail -c 4000 "/proc/$ZONE_PID/fd/1" 2>&1 || echo "  (no se pudo leer /proc/$ZONE_PID/fd/1)"
+            else
+              echo "(no hay proceso scrape-zone.mjs corriendo)"
+            fi
+
+            echo ""
             echo "── Archivos en scraper/output/ (más recientes primero) ─"
             ls -lat scraper/output/ 2>&1 | head -20
 
