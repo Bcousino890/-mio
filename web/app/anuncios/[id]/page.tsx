@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, use } from 'react'
 import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import { mockListings } from '@/lib/mock-listings'
 import {
   ArrowLeft, MapPin, Bookmark, Calculator, FileText, UserSearch,
   ChevronRight, Building2, User,
@@ -13,7 +12,7 @@ import {
   Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
   Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink, ChevronDown, X,
 } from 'lucide-react'
-import type { SourceReference } from '@/lib/mock-listings'
+import type { SourceReference, Listing } from '@/lib/mock-listings'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -212,68 +211,93 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const [saved, setSaved] = useState(false)
   const [notes, setNotes] = useState<{ text: string; date: string }[]>([])
   const [noteDraft, setNoteDraft] = useState('')
-  const [listing, setListing] = useState<any | null>(undefined)
+  const [listing, setListing] = useState<Listing | null | undefined>(undefined)
+  const [zoneComparables, setZoneComparables] = useState<Listing[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchListing = async () => {
       try {
-        const response = await fetch(`/api/listings?limit=10000`)
+        const response = await fetch(`/api/listings?id=${encodeURIComponent(resolvedParams.id)}`)
         if (!response.ok) throw new Error('Failed to fetch listing')
         const result = await response.json()
-        if (result.success && Array.isArray(result.data)) {
-          const found = result.data.find((row: any) => String(row.id) === resolvedParams.id || String(row.external_id) === resolvedParams.id)
-          if (found) {
-            const listedDate = new Date().toISOString().split('T')[0]
-            const portal = found.portal || 'idealista'
-            const price = found.price || 0
-            const transformed = {
-              id: found.id || found.external_id,
-              property_id: found.property_id || found.external_id,
-              title: found.title || `Inmueble ${found.id}`,
-              operation: found.operation || 'rent',
-              price,
-              square_meters: found.square_meters || 0,
-              price_sqm: found.price_sqm || 0,
-              bedrooms: found.bedrooms || 0,
-              bathrooms: found.bathrooms || 1,
-              zone_name: found.zone_name || 'Unknown',
+        const found = result.success && Array.isArray(result.data) ? result.data[0] : null
+        if (found) {
+          const listedDate = new Date().toISOString().split('T')[0]
+          const portal = found.portal || 'idealista'
+          const price = found.price || 0
+          const transformed: Listing = {
+            id: found.id || found.external_id,
+            property_id: found.property_id || found.external_id,
+            title: found.title || `Inmueble ${found.id}`,
+            operation: found.operation || 'rent',
+            price,
+            square_meters: found.square_meters || 0,
+            price_sqm: found.price_sqm || 0,
+            bedrooms: found.bedrooms || 0,
+            bathrooms: found.bathrooms || 1,
+            zone_name: found.zone_name || found.zone_raw || 'Unknown',
+            portal,
+            source_type: 'portal' as const,
+            advertiser_type: found.advertiser_type || 'professional',
+            advertiser_name: found.advertiser_name || 'Idealista',
+            days_on_market: found.days_on_market || 0,
+            is_active: found.is_active !== false,
+            latitude: found.latitude || 40.43,
+            longitude: found.longitude || -3.68,
+            photos: Array.isArray(found.photos) ? found.photos : [],
+            source_url: found.source_url || '',
+            listing_count: 1,
+            portals: [portal],
+            price_drops: Number(found.price_drops) || 0,
+            rc_status: 'none' as const,
+            description: found.description || '',
+            features: Array.isArray(found.features) ? found.features : [],
+            priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
+            sources: [{
+              id: `${found.id}-${portal}`,
+              type: found.advertiser_type === 'particular' ? 'particular' : 'agency',
+              name: found.advertiser_name || 'Idealista',
               portal,
-              source_type: 'portal' as const,
-              advertiser_type: found.advertiser_type || 'professional',
-              advertiser_name: found.advertiser_name || 'Idealista',
-              days_on_market: found.days_on_market || 0,
-              is_active: found.is_active !== false,
-              latitude: found.latitude || 40.43,
-              longitude: found.longitude || -3.68,
-              photos: Array.isArray(found.photos) ? found.photos : [],
-              source_url: found.source_url || '',
-              listing_count: 1,
-              portals: [portal],
-              price_drops: 0,
-              rc_status: 'none' as const,
-              description: found.description || '',
-              features: Array.isArray(found.features) ? found.features : [],
-              priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
-              sources: [{
-                id: `${found.id}-${portal}`,
-                type: found.advertiser_type === 'particular' ? 'particular' : 'agency',
-                name: found.advertiser_name || 'Idealista',
-                portal,
-                price,
-                status: 'active' as const,
-                listed_at: listedDate,
-                url: found.source_url || '',
-                is_particular: found.advertiser_type === 'particular',
-                address: found.address || '',
-                bedrooms: found.bedrooms,
-                bathrooms: found.bathrooms,
-                built_area: found.square_meters,
-              }],
+              price,
+              status: 'active' as const,
+              listed_at: listedDate,
+              url: found.source_url || '',
+              is_particular: found.advertiser_type === 'particular',
+              address: found.address || '',
+              bedrooms: found.bedrooms,
+              bathrooms: found.bathrooms,
+              built_area: found.square_meters,
+            }],
+          }
+          setListing(transformed)
+
+          // Comparables reales en la misma zona (para la valoración estimada)
+          if (found.zone_raw) {
+            try {
+              const compParams = new URLSearchParams({
+                zone_raw: found.zone_raw,
+                operation: transformed.operation,
+                page_size: '50',
+              })
+              const compRes = await fetch(`/api/listings?${compParams.toString()}`)
+              const compResult = await compRes.json()
+              if (compResult.success && Array.isArray(compResult.data)) {
+                setZoneComparables(
+                  compResult.data
+                    .filter((row: any) => String(row.id) !== String(transformed.id))
+                    .map((row: any) => ({
+                      ...transformed,
+                      id: row.id,
+                      price: row.price || 0,
+                      price_sqm: row.price_sqm || 0,
+                      square_meters: row.square_meters || 0,
+                    }))
+                )
+              }
+            } catch {
+              // Comparables son un extra informativo: si falla, simplemente no se muestran.
             }
-            setListing(transformed)
-          } else {
-            setListing(null)
           }
         } else {
           setListing(null)
@@ -337,7 +361,6 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const activePhotoSource = photoSources.find((s) => s.id === selectedSourceId) ?? photoSources[0]
   const activePhotos = activePhotoSource?.photos ?? l.photos
 
-  const zoneComparables = mockListings.filter((x) => x.zone_name === l.zone_name && x.id !== l.id && x.operation === l.operation)
   const avgPriceSqm = zoneComparables.length > 0
     ? Math.round(zoneComparables.reduce((sum, x) => sum + x.price_sqm, 0) / zoneComparables.length)
     : l.price_sqm
