@@ -14,6 +14,10 @@ on:
       - 'infra/**'
       - 'scraper/**'
       - '.github/workflows/deploy.yml'
+      # Archivos centinela (solo disparan otros workflows vía push, no son
+      # cambios de código real): no deben forzar un rebuild+redeploy de la app.
+      - '!scraper/.check-status'
+      - '!scraper/.launch-salamanca-almagro'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
