@@ -113,59 +113,51 @@ async function enrich(item) {
   return { ok: true, detail }
 }
 
-async function upsertAll(rows) {
-  const { default: pg } = await import('pg')
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL })
-  await client.connect()
-  let inserted = 0, updated = 0
-  for (const r of rows) {
-    const q = `
-      INSERT INTO listings (
-        portal, source_type, external_id, source_url, operation,
-        advertiser_type, advertiser_name, price, bedrooms, bathrooms,
-        square_meters, zone_raw, address, latitude, longitude, blur_radius_m,
-        description, features, photos, cover_phash, photo_phashes, status, is_active, last_seen_at, updated_at,
-        agency_url, agency_crm, agency_reference_id, agency_domain
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,
-        $20,$21::text[], 'active', true, now(), now(),
-        $22,$23,$24,$25
-      )
-      ON CONFLICT (portal, external_id) DO UPDATE SET
-        price = EXCLUDED.price,
-        advertiser_type = EXCLUDED.advertiser_type,
-        advertiser_name = EXCLUDED.advertiser_name,
-        bedrooms = EXCLUDED.bedrooms,
-        bathrooms = EXCLUDED.bathrooms,
-        square_meters = EXCLUDED.square_meters,
-        address = EXCLUDED.address,
-        latitude = EXCLUDED.latitude,
-        longitude = EXCLUDED.longitude,
-        description = EXCLUDED.description,
-        features = EXCLUDED.features,
-        photos = EXCLUDED.photos,
-        cover_phash = EXCLUDED.cover_phash,
-        photo_phashes = EXCLUDED.photo_phashes,
-        agency_url = EXCLUDED.agency_url,
-        agency_crm = EXCLUDED.agency_crm,
-        agency_reference_id = EXCLUDED.agency_reference_id,
-        agency_domain = EXCLUDED.agency_domain,
-        status = 'active', is_active = true,
-        last_seen_at = now(), updated_at = now()
-      RETURNING (xmax = 0) AS inserted`
-    const vals = [
-      r.portal, r.source_type, r.external_id, r.source_url, r.operation,
-      r.advertiser_type, r.advertiser_name, r.price, r.bedrooms, r.bathrooms,
-      r.square_meters, ZONE, r.address, r.latitude, r.longitude, r.blur_radius_m,
-      r.description, JSON.stringify(r.features), JSON.stringify(r.photos),
-      r.cover_phash, r.photo_phashes,
-      r.agency_url, r.agency_crm, r.agency_reference_id, r.agency_domain,
-    ]
-    const { rows: rr } = await client.query(q, vals)
-    if (rr[0]?.inserted) inserted++; else updated++
-  }
-  await client.end()
-  return { inserted, updated }
+async function upsertOne(client, r) {
+  const q = `
+    INSERT INTO listings (
+      portal, source_type, external_id, source_url, operation,
+      advertiser_type, advertiser_name, price, bedrooms, bathrooms,
+      square_meters, zone_raw, address, latitude, longitude, blur_radius_m,
+      description, features, photos, cover_phash, photo_phashes, status, is_active, last_seen_at, updated_at,
+      agency_url, agency_crm, agency_reference_id, agency_domain
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,
+      $20,$21::text[], 'active', true, now(), now(),
+      $22,$23,$24,$25
+    )
+    ON CONFLICT (portal, external_id) DO UPDATE SET
+      price = EXCLUDED.price,
+      advertiser_type = EXCLUDED.advertiser_type,
+      advertiser_name = EXCLUDED.advertiser_name,
+      bedrooms = EXCLUDED.bedrooms,
+      bathrooms = EXCLUDED.bathrooms,
+      square_meters = EXCLUDED.square_meters,
+      address = EXCLUDED.address,
+      latitude = EXCLUDED.latitude,
+      longitude = EXCLUDED.longitude,
+      description = EXCLUDED.description,
+      features = EXCLUDED.features,
+      photos = EXCLUDED.photos,
+      cover_phash = EXCLUDED.cover_phash,
+      photo_phashes = EXCLUDED.photo_phashes,
+      agency_url = EXCLUDED.agency_url,
+      agency_crm = EXCLUDED.agency_crm,
+      agency_reference_id = EXCLUDED.agency_reference_id,
+      agency_domain = EXCLUDED.agency_domain,
+      status = 'active', is_active = true,
+      last_seen_at = now(), updated_at = now()
+    RETURNING (xmax = 0) AS inserted`
+  const vals = [
+    r.portal, r.source_type, r.external_id, r.source_url, r.operation,
+    r.advertiser_type, r.advertiser_name, r.price, r.bedrooms, r.bathrooms,
+    r.square_meters, ZONE, r.address, r.latitude, r.longitude, r.blur_radius_m,
+    r.description, JSON.stringify(r.features), JSON.stringify(r.photos),
+    r.cover_phash, r.photo_phashes,
+    r.agency_url, r.agency_crm, r.agency_reference_id, r.agency_domain,
+  ]
+  const { rows: rr } = await client.query(q, vals)
+  return !!rr[0]?.inserted
 }
 
 async function main() {
@@ -185,19 +177,42 @@ async function main() {
   }
   console.error(`▶ ${items.length} anuncios a enriquecer`)
 
+  // En modo BD escribimos cada ficha en cuanto se enriquece (no al final de
+  // toda la zona): una zona puede tardar horas, y antes la BD/el sitio se
+  // quedaban sin novedades hasta que terminaba el último anuncio.
+  const directToDb = !DRY && !EMIT_APP
+  if (directToDb && !process.env.DATABASE_URL) {
+    console.error('✗ Falta DATABASE_URL para escribir en BD (o usa --dry-run)')
+    process.exit(1)
+  }
+  let dbClient = null
+  if (directToDb) {
+    const { default: pg } = await import('pg')
+    dbClient = new pg.Client({ connectionString: process.env.DATABASE_URL })
+    await dbClient.connect()
+  }
+
   const rows = []
   const failed = []
+  let inserted = 0, updated = 0
   for (let i = 0; i < items.length; i++) {
     const result = await enrich(items[i])
     if (result.ok) {
       const detail = result.detail
-      rows.push(detail)
       console.error(`    ✓ [${i + 1}/${items.length}] ${detail.external_id} · ${detail.price ?? '?'} € · ${detail.square_meters ?? '?'} m² · ${detail.photos.length} fotos · ${detail.latitude ? 'geo✓' : 'geo✗'}`)
+      if (dbClient) {
+        const wasInserted = await upsertOne(dbClient, detail)
+        if (wasInserted) inserted++; else updated++
+      } else {
+        rows.push(detail)
+      }
     } else {
       failed.push({ external_id: result.external_id, source_url: items[i].source_url, reason: result.reason })
     }
     await jitter()
   }
+
+  if (dbClient) await dbClient.end()
 
   if (failed.length > 0) {
     writeFileSync(FAIL_LOG, JSON.stringify(failed, null, 2))
@@ -220,11 +235,6 @@ async function main() {
     return
   }
 
-  if (!process.env.DATABASE_URL) {
-    console.error('✗ Falta DATABASE_URL para escribir en BD (o usa --dry-run)')
-    process.exit(1)
-  }
-  const { inserted, updated } = await upsertAll(rows)
   console.error(`✅ Hecho: ${inserted} nuevos, ${updated} actualizados en \`listings\``)
 }
 
