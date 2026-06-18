@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T14:58Z (re-verificar /anuncios y /api/listings DESPUÉS del deploy del fix 57fef56 que quita el fallback a mockListings y fuerza dynamic='force-dynamic'; comprobar que ya no aparecen x-nextjs-cache/HIT ni s-maxage=31536000)
+Última vez consultado: 2026-06-18T15:01Z (la respuesta sigue con x-nextjs-cache: HIT / s-maxage=31536000 tras el deploy; comprobar si el HTML cacheado es el nuevo shell "Cargando anuncios" -inofensivo- o todavía fotos de Goya hardcodeadas)

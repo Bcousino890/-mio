@@ -29,8 +29,11 @@ jobs:
           echo "--- body (primeros 1500 chars) ---"
           head -c 1500 /tmp/anuncios.html
           echo ""
-          echo "--- ¿aparece 'mockListings' o un id de inmueble real en el HTML? ---"
+          echo "--- ¿aparece 'mockListings' o una URL de foto de Idealista (Goya hardcodeado) en el HTML? ---"
           grep -o "mockListings" /tmp/anuncios.html || echo "(no aparece 'mockListings' en el HTML)"
+          grep -o "img[0-9]*\.idealista\.com[^\"]*" /tmp/anuncios.html | head -3 || echo "(no aparece ninguna URL de img*.idealista.com en el HTML)"
+          echo "--- ¿aparece el texto 'Cargando anuncios' (shell vacío correcto, sin datos hardcodeados)? ---"
+          grep -o "Cargando anuncios" /tmp/anuncios.html || echo "(no aparece 'Cargando anuncios' en el HTML)"
 
       - name: Configurar SSH
         run: |
