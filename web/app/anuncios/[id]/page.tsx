@@ -212,17 +212,93 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const [saved, setSaved] = useState(false)
   const [notes, setNotes] = useState<{ text: string; date: string }[]>([])
   const [noteDraft, setNoteDraft] = useState('')
+  const [listing, setListing] = useState<any | null>(undefined)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
-    setSaved(savedIds.includes(resolvedParams.id))
-    const storedNotes = JSON.parse(localStorage.getItem(`casafari_notes_${resolvedParams.id}`) ?? '[]') as { text: string; date: string }[]
-    setNotes(storedNotes)
+    const fetchListing = async () => {
+      try {
+        const response = await fetch(`/api/listings?limit=10000`)
+        if (!response.ok) throw new Error('Failed to fetch listing')
+        const result = await response.json()
+        if (result.success && Array.isArray(result.data)) {
+          const found = result.data.find((row: any) => String(row.id) === resolvedParams.id || String(row.external_id) === resolvedParams.id)
+          if (found) {
+            const listedDate = new Date().toISOString().split('T')[0]
+            const portal = found.portal || 'idealista'
+            const price = found.price || 0
+            const transformed = {
+              id: found.id || found.external_id,
+              property_id: found.property_id || found.external_id,
+              title: found.title || `Inmueble ${found.id}`,
+              operation: found.operation || 'rent',
+              price,
+              square_meters: found.square_meters || 0,
+              price_sqm: found.price_sqm || 0,
+              bedrooms: found.bedrooms || 0,
+              bathrooms: found.bathrooms || 1,
+              zone_name: found.zone_name || 'Unknown',
+              portal,
+              source_type: 'portal' as const,
+              advertiser_type: found.advertiser_type || 'professional',
+              advertiser_name: found.advertiser_name || 'Idealista',
+              days_on_market: found.days_on_market || 0,
+              is_active: found.is_active !== false,
+              latitude: found.latitude || 40.43,
+              longitude: found.longitude || -3.68,
+              photos: Array.isArray(found.photos) ? found.photos : [],
+              source_url: found.source_url || '',
+              listing_count: 1,
+              portals: [portal],
+              price_drops: 0,
+              rc_status: 'none' as const,
+              description: found.description || '',
+              features: Array.isArray(found.features) ? found.features : [],
+              priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
+              sources: [{
+                id: `${found.id}-${portal}`,
+                type: found.advertiser_type === 'particular' ? 'particular' : 'agency',
+                name: found.advertiser_name || 'Idealista',
+                portal,
+                price,
+                status: 'active' as const,
+                listed_at: listedDate,
+                url: found.source_url || '',
+                is_particular: found.advertiser_type === 'particular',
+                address: found.address || '',
+                bedrooms: found.bedrooms,
+                bathrooms: found.bathrooms,
+                built_area: found.square_meters,
+              }],
+            }
+            setListing(transformed)
+          } else {
+            setListing(null)
+          }
+        } else {
+          setListing(null)
+        }
+      } catch (err) {
+        console.error('Error loading listing:', err)
+        setListing(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchListing()
   }, [resolvedParams.id])
+
+  useEffect(() => {
+    if (listing === undefined) return
+    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
+    setSaved(savedIds.includes(String(listing?.id ?? '')))
+    const storedNotes = JSON.parse(localStorage.getItem(`casafari_notes_${listing?.id}`) ?? '[]') as { text: string; date: string }[]
+    setNotes(storedNotes)
+  }, [listing?.id])
 
   function toggleSaved() {
     const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
-    const next = saved ? savedIds.filter((id) => id !== resolvedParams.id) : [...savedIds, resolvedParams.id]
+    const next = saved ? savedIds.filter((id) => id !== String(listing?.id)) : [...savedIds, String(listing?.id)]
     localStorage.setItem('casafari_saved_listings', JSON.stringify(next))
     setSaved(!saved)
   }
@@ -231,11 +307,17 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
     if (!noteDraft.trim()) return
     const next = [{ text: noteDraft.trim(), date: new Date().toISOString() }, ...notes]
     setNotes(next)
-    localStorage.setItem(`casafari_notes_${resolvedParams.id}`, JSON.stringify(next))
+    localStorage.setItem(`casafari_notes_${listing?.id}`, JSON.stringify(next))
     setNoteDraft('')
   }
 
-  const listing = mockListings.find((l) => l.id === resolvedParams.id)
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-slate-600">
+        <p className="text-sm font-medium">Cargando propiedad…</p>
+      </div>
+    )
+  }
 
   if (!listing) {
     return (
