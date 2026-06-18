@@ -56,6 +56,13 @@ jobs:
             set -e
             cd /opt/casafari
 
+            # scraper/output no está en git (se genera en runtime); el rsync
+            # --delete del paso anterior ya lo excluye, pero si por lo que
+            # sea no existe (primer deploy, o quedó borrado de una corrida
+            # vieja antes del exclude) hay que recrearlo o un scrape en
+            # curso muere con ENOENT al escribir su fail-log.
+            mkdir -p scraper/output
+
             # .env: si no existe lo crea desde la plantilla; si existe pero le
             # falta POSTGRES_PASSWORD (p.ej. de un intento previo fallido), lo completa.
             if [ ! -f .env ]; then
