@@ -12,6 +12,7 @@ on:
       - 'web/**'
       - 'db/**'
       - 'infra/**'
+      - 'scraper/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
