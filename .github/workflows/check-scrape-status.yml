@@ -57,6 +57,27 @@ jobs:
             fi
 
             echo ""
+            echo "── Proxy configurado (sin mostrar credenciales) ──────"
+            if [ -f .env.scraper ]; then
+              while IFS='=' read -r key val; do
+                if [ -n "$val" ]; then echo "  $key=<set>"; else echo "  $key=<vacío>"; fi
+              done < <(grep -E '^(PROXY_PROVIDER|GEONODE_PROXY_HOST|SMARTPROXY_PROXY_HOST)=' .env.scraper)
+            else
+              echo "  (no existe .env.scraper)"
+            fi
+
+            echo ""
+            echo "── Total acumulado en BD por zona/operación (hoy) ────"
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            docker exec casafari-pg psql -U casafari -d casafari -t -c "
+              SELECT zone_raw, operation, count(*) AS n, max(last_seen_at) AS ultimo
+              FROM listings
+              WHERE last_seen_at::date = current_date
+              GROUP BY zone_raw, operation
+              ORDER BY ultimo DESC;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+
+            echo ""
             echo "── Archivos en scraper/output/ (más recientes primero) ─"
             ls -lat scraper/output/ 2>&1 | head -20
 
