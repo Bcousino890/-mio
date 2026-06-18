@@ -35,20 +35,12 @@ jobs:
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             cd /opt/casafari
 
-            # Si hay un scrape anterior bloqueado, mátalo para poder relanzar
-            LOCKFILE="/tmp/casafari-scrape-salamanca-almagro.lock"
-            if [ -f "$LOCKFILE" ]; then
-              LOCK_PID="$(cat "$LOCKFILE" 2>/dev/null || true)"
-              if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
-                echo "⚠ Matando scrape anterior (PID $LOCK_PID) para relanzar con proxy..."
-                kill -9 "$LOCK_PID" || true
-                pkill -9 -P "$LOCK_PID" || true  # Matar procesos hijo también
-                sleep 1
-              fi
-              rm -f "$LOCKFILE"
-            fi
-            pkill -9 -f "scrape-zone.mjs" || true  # Matar cualquier nodo hijo suelto
-            sleep 1
+            # Matar cualquier scrape anterior sin piedad
+            echo "⚠ Matando cualquier scrape anterior..."
+            pkill -9 -f "scrape-salamanca-almagro.sh" || true
+            pkill -9 -f "scrape-zone.mjs" || true
+            rm -f /tmp/casafari-scrape-salamanca-almagro.lock
+            sleep 2
 
             # Crear .env.scraper con configuración de Smartproxy
             cat > .env.scraper << 'ENVEOF'
