@@ -18,6 +18,20 @@ jobs:
   status:
     runs-on: ubuntu-latest
     steps:
+      - name: Probar la URL pública real (desde internet, no desde el VPS)
+        run: |
+          echo "── GET https://crm.cremme.es/api/listings?limit=2 ──"
+          curl -sS -i -m 20 "https://crm.cremme.es/api/listings?limit=2" | head -c 2000
+          echo ""
+          echo ""
+          echo "── GET https://crm.cremme.es/anuncios (headers + primeros bytes del HTML) ──"
+          curl -sS -D - -m 20 "https://crm.cremme.es/anuncios" -o /tmp/anuncios.html
+          echo "--- body (primeros 1500 chars) ---"
+          head -c 1500 /tmp/anuncios.html
+          echo ""
+          echo "--- ¿aparece 'mockListings' o un id de inmueble real en el HTML? ---"
+          grep -o "mockListings" /tmp/anuncios.html || echo "(no aparece 'mockListings' en el HTML)"
+
       - name: Configurar SSH
         run: |
           mkdir -p ~/.ssh

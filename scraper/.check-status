@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T16:10Z (verificar que casafari-app esté healthy y /api/listings devuelva datos reales tras el fix de columnas inexistentes desplegado en 92029e0)
+Última vez consultado: 2026-06-18T16:25Z (probar https://crm.cremme.es/anuncios y /api/listings desde internet real, no desde el VPS, porque el usuario sigue sin verlo en su navegador)
