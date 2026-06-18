@@ -1,0 +1,8 @@
+Archivo centinela: un push que modifique este archivo dispara
+add-casafari-ssh-key.yml (ver el "on.push.paths" de ese workflow).
+
+No tiene efecto en el código del scraper; solo existe para poder lanzar el
+job desde push, ya que la API de GitHub no permite disparar
+workflow_dispatch en este entorno.
+
+Última vez lanzado: 2026-06-18T15:35Z (agregar clave pública ed25519 "casafari@hetzner" al authorized_keys del VPS)

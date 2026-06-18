@@ -1,0 +1,47 @@
+name: Add casafari SSH key (VPS)
+
+# Agrega la clave pública "casafari" (generada en la Mac de Benjamín, par
+# ed25519 dedicado a este proyecto) al authorized_keys del VPS. Se conecta
+# con la clave existente (secrets.VPS_SSH_KEY) y solo añade la línea nueva
+# si todavía no está presente (idempotente: un push repetido a este
+# centinela no duplica la entrada). No reemplaza ni quita ninguna clave
+# existente, así que la automatización actual sigue funcionando igual.
+#
+# Como con los otros workflows de este repo, se dispara con push a un
+# archivo centinela porque la API de GitHub no permite lanzar
+# workflow_dispatch en este entorno.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.add-casafari-ssh-key'
+
+jobs:
+  add-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Añadir clave pública "casafari" al authorized_keys
+        run: |
+          NEWKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKTNzr81HD9hRUvbzPbt3fOWlR6Ui4ozku+uKGJsWWWC casafari@hetzner"
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && \
+             grep -qF \"$NEWKEY\" ~/.ssh/authorized_keys || echo \"$NEWKEY\" >> ~/.ssh/authorized_keys && \
+             chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys && \
+             echo '✅ Clave casafari presente en authorized_keys' && \
+             echo '── Claves actuales ──' && cut -d' ' -f3 ~/.ssh/authorized_keys"
+
+      - name: Resumen
+        run: |
+          echo "La clave pública ed25519 'casafari@hetzner' quedó autorizada en el VPS."
+          echo "Benjamín ya puede conectarse directo con: ssh -i ~/.ssh/casafari_vps ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} -p ${{ secrets.VPS_PORT || 22 }}"
+          echo "La clave existente (VPS_SSH_KEY) sigue intacta: la automatización del scraper no se ve afectada."

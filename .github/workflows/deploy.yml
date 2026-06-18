@@ -19,6 +19,7 @@ on:
       - '!scraper/.check-status'
       - '!scraper/.launch-salamanca-almagro'
       - '!scraper/.fix-db-password'
+      - '!scraper/.add-casafari-ssh-key'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
