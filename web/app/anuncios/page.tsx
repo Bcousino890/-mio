@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useMemo, useEffect } from 'react'
-import dynamic from 'next/dynamic'
+import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
 import { mockListings } from '@/lib/mock-listings'
 import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search } from 'lucide-react'
 import type { Listing } from '@/lib/mock-listings'
 
-const PropertyMap = dynamic(() => import('@/components/map/PropertyMap'), { ssr: false })
+// Evita que Next.js cachee esta ruta como página estática (Full Route Cache):
+// el contenido real depende de un fetch en cliente, no de datos en build time.
+export const dynamic = 'force-dynamic'
+
+const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })
 
 type Operation = 'all' | 'sale' | 'rent'
 type AdvertiserFilter = 'all' | 'particular' | 'professional'
@@ -106,8 +110,7 @@ export default function AnunciosPage() {
   }, [])
 
   const filtered = useMemo(() => {
-    const dataToUse = listings.length > 0 ? listings : mockListings
-    return dataToUse
+    return listings
       .filter((l) => operation === 'all' || l.operation === operation)
       .filter((l) => advertiser === 'all' || l.advertiser_type === advertiser)
       .filter((l) => !onlyWithDrops || l.price_drops > 0)
@@ -235,14 +238,18 @@ export default function AnunciosPage() {
             <p className="text-xs text-slate-500">
               <span className="text-slate-300 font-semibold">{filtered.length}</span>
               {' '}de{' '}
-              <span className="text-slate-400">{mockListings.length}</span> anuncios
+              <span className="text-slate-400">{listings.length}</span> anuncios
               {showMap && <span className="text-slate-700"> en el mapa</span>}
             </p>
           </div>
 
           {/* Cards grid */}
           <div className="flex-1 overflow-y-auto px-3 py-3">
-            {filtered.length === 0 ? (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-48 text-slate-700">
+                <p className="text-sm font-medium">Cargando anuncios…</p>
+              </div>
+            ) : filtered.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-slate-700">
                 <p className="text-sm font-medium">Sin resultados</p>
                 <p className="text-xs mt-1">Ajusta los filtros para ver más anuncios</p>
