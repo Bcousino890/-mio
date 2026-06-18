@@ -29,20 +29,34 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Configurar proxy Smartproxy en el VPS
+      - name: Matar scrape anterior (si existe) y configurar proxy
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
             cd /opt/casafari
+
+            # Si hay un scrape anterior bloqueado, mátalo para poder relanzar
+            LOCKFILE="/tmp/casafari-scrape-salamanca-almagro.lock"
+            if [ -f "$LOCKFILE" ]; then
+              LOCK_PID="$(cat "$LOCKFILE" 2>/dev/null || true)"
+              if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+                echo "⚠ Matando scrape anterior (PID $LOCK_PID) para relanzar con proxy..."
+                kill "$LOCK_PID" || true
+                sleep 2
+              fi
+              rm -f "$LOCKFILE"
+            fi
+
+            # Crear .env.scraper con configuración de Smartproxy
             cat > .env.scraper << 'ENVEOF'
-            PROXY_PROVIDER=smartproxy
-            SMARTPROXY_PROXY_HOST=proxy.smartproxy.net
-            SMARTPROXY_PROXY_PORT=3120
-            SMARTPROXY_PROXY_USER=
-            SMARTPROXY_PROXY_PASS=9cf8f476185ea51d90a811dfedf19974
-            PROXY_COUNTRY=ES
-            ENVEOF
+PROXY_PROVIDER=smartproxy
+SMARTPROXY_PROXY_HOST=proxy.smartproxy.net
+SMARTPROXY_PROXY_PORT=3120
+SMARTPROXY_PROXY_USER=
+SMARTPROXY_PROXY_PASS=9cf8f476185ea51d90a811dfedf19974
+PROXY_COUNTRY=ES
+ENVEOF
             chmod 600 .env.scraper
             echo "✅ .env.scraper creado (proxy Smartproxy configurado)"
           EOF
