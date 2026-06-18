@@ -210,4 +210,31 @@ jobs:
             echo ""
             echo "Últimas líneas de logs de casafari-app (errores de conexión a BD, etc.):"
             docker logs casafari-app --tail 30 2>&1
+
+            echo ""
+            echo "── DIAG puntual: extracción de teléfono en particulares ─"
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT advertiser_type, count(*) AS total, count(phone) AS with_phone
+              FROM listings
+              GROUP BY advertiser_type
+              ORDER BY advertiser_type;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+            echo ""
+            echo "Muestra de particulares CON teléfono (si existen, para revisar formato):"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT external_id, phone
+              FROM listings
+              WHERE advertiser_type = 'particular' AND phone IS NOT NULL
+              LIMIT 5;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+            echo ""
+            echo "Muestra de particulares SIN teléfono (para tener external_id de referencia):"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT external_id, source_url, last_seen_at
+              FROM listings
+              WHERE advertiser_type = 'particular' AND phone IS NULL
+              ORDER BY last_seen_at DESC
+              LIMIT 5;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
           EOF
