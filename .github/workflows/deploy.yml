@@ -18,6 +18,7 @@ on:
       # cambios de código real): no deben forzar un rebuild+redeploy de la app.
       - '!scraper/.check-status'
       - '!scraper/.launch-salamanca-almagro'
+      - '!scraper/.fix-db-password'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
