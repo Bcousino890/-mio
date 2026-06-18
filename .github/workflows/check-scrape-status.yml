@@ -1,0 +1,66 @@
+name: Check scrape status (lee progreso en el VPS)
+
+# Permite verificar si el scrape de Salamanca+Almagro sigue corriendo y cuánto
+# avanzó, sin necesitar acceso SSH manual. Igual que scrape-salamanca-almagro.yml,
+# se dispara con push a un archivo centinela porque la API de GitHub no permite
+# lanzar workflow_dispatch en este entorno. Es de solo lectura: no toca el
+# scrape en curso, solo imprime su estado en el log del job.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.check-status'
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Leer estado del scrape en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+
+            echo "── Lockfile ──────────────────────────────────────────"
+            LOCKFILE="/tmp/casafari-scrape-salamanca-almagro.lock"
+            if [ -e "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
+              echo "▶ Scrape EN CURSO (PID $(cat "$LOCKFILE"))"
+            else
+              echo "○ No hay scrape corriendo en este momento"
+            fi
+
+            echo ""
+            echo "── Último log de lanzamiento ─────────────────────────"
+            ls -t scraper/output/launch-*.log 2>/dev/null | head -1 | xargs -r tail -20
+
+            echo ""
+            echo "── Último summary log ────────────────────────────────"
+            LATEST_SUMMARY=$(ls -t scraper/output/salamanca-almagro-*.summary.log 2>/dev/null | head -1)
+            if [ -n "$LATEST_SUMMARY" ]; then
+              echo "(${LATEST_SUMMARY})"
+              tail -30 "$LATEST_SUMMARY"
+            else
+              echo "(sin summary log todavía)"
+            fi
+
+            echo ""
+            echo "── Listings actualizados en BD (última hora) ─────────"
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            docker exec casafari-pg psql -U casafari -d casafari -t -c "
+              SELECT zone_raw, operation, count(*) AS n, max(last_seen_at) AS ultimo
+              FROM listings
+              WHERE last_seen_at > now() - interval '1 hour'
+              GROUP BY zone_raw, operation
+              ORDER BY ultimo DESC;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+          EOF

@@ -7,6 +7,16 @@ name: Scrape Salamanca + Almagro (escribe en BD de producción)
 # sigue corriendo en el VPS de forma independiente.
 on:
   workflow_dispatch: {}  # botón "Run workflow" manual (o trigger por API)
+  push:
+    branches:
+      - main
+    paths:
+      # La API de GitHub no permite disparar workflow_dispatch en este entorno
+      # (token sin ese scope). Este archivo centinela existe solo para poder
+      # lanzar el scrape hace un push (commitear un cambio aquí). El script
+      # de destino ya tiene su propio lockfile, así que un push accidental
+      # mientras hay un scrape en curso simplemente no hace nada (aborta).
+      - 'scraper/.launch-salamanca-almagro'
 
 jobs:
   launch:
