@@ -5,3 +5,4 @@ Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
 Última vez consultado: 2026-06-18T15:01Z (la respuesta sigue con x-nextjs-cache: HIT / s-maxage=31536000 tras el deploy; comprobar si el HTML cacheado es el nuevo shell "Cargando anuncios" -inofensivo- o todavía fotos de Goya hardcodeadas)
+Updated: 2026-06-18T15:24Z (fix: página de detalle ahora carga datos reales desde /api/listings en lugar de buscar en mockListings; esperar a que el deploy complete y verificar que /api/listings devuelve un anuncio real)
