@@ -78,6 +78,20 @@ jobs:
             " 2>&1 || echo "(no se pudo consultar la BD)"
 
             echo ""
+            echo "── Diagnóstico: reloj de Postgres vs filtro 'hoy' ────"
+            docker exec casafari-pg psql -U casafari -d casafari -t -c "SELECT now() AS ahora, current_date AS hoy_segun_pg, current_setting('TimeZone') AS tz;" 2>&1 || true
+
+            echo ""
+            echo "── Total acumulado en BD por zona/operación (TODO, sin filtro de fecha) ─"
+            docker exec casafari-pg psql -U casafari -d casafari -t -c "
+              SELECT zone_raw, operation, count(*) AS n, max(last_seen_at) AS ultimo, min(last_seen_at) AS primero
+              FROM listings
+              WHERE zone_raw LIKE 'madrid/barrio-de-salamanca%' OR zone_raw LIKE 'madrid/chamberi/almagro%'
+              GROUP BY zone_raw, operation
+              ORDER BY ultimo DESC;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+
+            echo ""
             echo "── Archivos en scraper/output/ (más recientes primero) ─"
             ls -lat scraper/output/ 2>&1 | head -20
 

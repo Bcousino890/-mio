@@ -4,4 +4,4 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T01:45Z (verificar si hay proxy configurado y total acumulado hoy)
+Última vez consultado: 2026-06-18T02:05Z (por qué el filtro "hoy" da 0 filas pese a 275+ upserts en stdout)
