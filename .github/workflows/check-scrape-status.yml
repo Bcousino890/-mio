@@ -67,6 +67,11 @@ jobs:
             fi
 
             echo ""
+            echo "── Diagnóstico: respuesta cruda de la API de Smartproxy (Extracción API) ─"
+            curl -sS -m 10 "https://www.smartproxy.org/web_v1/ip/get-ip-v3?app_key=9cf8f476185ea51d90a811dfedf19974&pt=9&num=3&ep=&cc=ES&state=&city=&life=30&lb=%5Cn&format=json&protocol=1" 2>&1 | head -c 2000 || echo "(no se pudo consultar la API de Smartproxy desde el VPS)"
+            echo ""
+
+            echo ""
             echo "── Total acumulado en BD por zona/operación (hoy) ────"
             if [ -f .env ]; then set -a; source .env; set +a; fi
             docker exec casafari-pg psql -U casafari -d casafari -t -c "

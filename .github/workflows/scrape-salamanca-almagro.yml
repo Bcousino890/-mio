@@ -42,15 +42,19 @@ jobs:
             rm -f /tmp/casafari-scrape-salamanca-almagro.lock
             sleep 2
 
-            # Crear .env.scraper con configuración de Smartproxy
-            cat > .env.scraper << 'ENVEOF'
-PROXY_PROVIDER=smartproxy
-SMARTPROXY_PROXY_HOST=proxy.smartproxy.net
-SMARTPROXY_PROXY_PORT=3120
-SMARTPROXY_PROXY_USER=
-SMARTPROXY_PROXY_PASS=9cf8f476185ea51d90a811dfedf19974
-PROXY_COUNTRY=ES
-ENVEOF
+            # Crear .env.scraper con configuración de Smartproxy. Usamos echo
+            # línea por línea (en vez de un heredoc anidado) porque un heredoc
+            # con el cuerpo sin indentar rompe el "block scalar" de YAML (la
+            # indentación dejaba de coincidir con la del run: | de este step)
+            # y eso hacía que GitHub rechazara el workflow entero con un error
+            # de parseo, sin ejecutar ningún job (así estuvo ~2h sin lanzar nada).
+            > .env.scraper
+            echo "PROXY_PROVIDER=smartproxy" >> .env.scraper
+            echo "SMARTPROXY_PROXY_HOST=proxy.smartproxy.net" >> .env.scraper
+            echo "SMARTPROXY_PROXY_PORT=3120" >> .env.scraper
+            echo "SMARTPROXY_PROXY_USER=" >> .env.scraper
+            echo "SMARTPROXY_PROXY_PASS=9cf8f476185ea51d90a811dfedf19974" >> .env.scraper
+            echo "PROXY_COUNTRY=ES" >> .env.scraper
             chmod 600 .env.scraper
             echo "✅ .env.scraper creado (proxy Smartproxy configurado)"
           EOF
