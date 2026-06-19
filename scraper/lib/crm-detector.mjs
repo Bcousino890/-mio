@@ -74,8 +74,14 @@ export function detectCRMFromUrl(url) {
 }
 
 /**
- * Extrae la URL del "enlace adicional" del HTML parseado de Idealista.
- * Busca el div con id="aditional-link" y retorna el href.
+ * Extrae la URL del "enlace adicional" (agency_url) del HTML de Idealista.
+ * El "enlace adicional" enlaza a la ficha de la agencia en su CRM.
+ *
+ * Buscamos en estos selectores (en orden de robustez):
+ * 1. id="aditional-link" (selector CSS estándar de Idealista)
+ * 2. class="aditional-link" (variante sin id)
+ * 3. class="additional-link" (posible variante en inglés)
+ * 4. Enlaces con aria-label o title que contengan "enlace" y href con dominio agencia
  *
  * Estructura esperada:
  *   <div id="aditional-link" class="aditional-link">
@@ -88,12 +94,32 @@ export function detectCRMFromUrl(url) {
 export function extractAdditionalLink(html) {
   if (!html) return null;
 
-  // Busca el div con id="aditional-link" y extrae el href del primer <a>
-  const match = html.match(
+  // 1. Busca el div con id="aditional-link" (selector más robusto)
+  let match = html.match(
     /id="aditional-link"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"/i
   );
+  if (match) return match[1];
 
-  return match ? match[1] : null;
+  // 2. Alternativa: class="aditional-link" (sin id)
+  match = html.match(
+    /class="aditional-link"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"/i
+  );
+  if (match) return match[1];
+
+  // 3. Alternativa: class="additional-link" (variante en inglés)
+  match = html.match(
+    /class="additional-link"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"/i
+  );
+  if (match) return match[1];
+
+  // 4. Búsqueda más permisiva: cualquier enlace con título o aria-label "enlace adicional"
+  match = html.match(
+    /<a[^>]*(?:title|aria-label)="[^"]*enlace[^"]*"[^>]*href="([^"]+)"/i
+  );
+  if (match) return match[1];
+
+  // TODO: Validar contra HTML real de Idealista si estos selectores capturan todos los casos
+  return null;
 }
 
 /**

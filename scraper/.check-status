@@ -4,4 +4,7 @@ check-scrape-status.yml (ver el "on.push.paths" de ese workflow).
 Es de solo lectura: solo imprime el estado del scrape en el log del job,
 no lanza ni detiene nada.
 
-Última vez consultado: 2026-06-18T15:15Z (scrape completo confirmado en BD; ahora diagnosticar por qué casafari-app/api/listings no lo refleja en /anuncios)
+Última vez consultado: 2026-06-18T15:01Z (la respuesta sigue con x-nextjs-cache: HIT / s-maxage=31536000 tras el deploy; comprobar si el HTML cacheado es el nuevo shell "Cargando anuncios" -inofensivo- o todavía fotos de Goya hardcodeadas)
+Updated: 2026-06-18T15:24Z (fix: página de detalle ahora carga datos reales desde /api/listings en lugar de buscar en mockListings; esperar a que el deploy complete y verificar que /api/listings devuelve un anuncio real)
+Updated: 2026-06-18T16:00Z (diag puntual: usuario reporta "Propiedad no encontrada" en /anuncios/111695301 pese a que el deploy con el fix ya está en producción; comprobar qué devuelve /api/listings?id=111695301 y si existe esa fila en la BD)
+Updated: 2026-06-18T17:00Z (diag puntual: usuario reporta que no ve teléfonos extraídos para particulares en /captacion; comprobar cuántas filas advertiser_type='particular' tienen phone IS NOT NULL en la BD, y si las que sí tienen teléfono lucen con formato sano, para saber si el regex de parseDetailPage en scraper/lib/parse.mjs nunca matcheó o si el hit rate es simplemente bajo)

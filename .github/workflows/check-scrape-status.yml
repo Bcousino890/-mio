@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - main
+      - claude/tender-hypatia-av518f
     paths:
       - 'scraper/.check-status'
 
@@ -17,6 +18,27 @@ jobs:
   status:
     runs-on: ubuntu-latest
     steps:
+      - name: Probar la URL pública real (desde internet, no desde el VPS)
+        run: |
+          echo "── GET https://crm.cremme.es/api/listings?limit=2 ──"
+          curl -sS -i -m 20 "https://crm.cremme.es/api/listings?limit=2" | head -c 2000
+          echo ""
+          echo ""
+          echo "── DIAG puntual: GET https://crm.cremme.es/api/listings?id=111695301 ──"
+          curl -sS -i -m 20 "https://crm.cremme.es/api/listings?id=111695301"
+          echo ""
+          echo ""
+          echo "── GET https://crm.cremme.es/anuncios (headers + primeros bytes del HTML) ──"
+          curl -sS -D - -m 20 "https://crm.cremme.es/anuncios" -o /tmp/anuncios.html
+          echo "--- body (primeros 1500 chars) ---"
+          head -c 1500 /tmp/anuncios.html
+          echo ""
+          echo "--- ¿aparece 'mockListings' o una URL de foto de Idealista (Goya hardcodeado) en el HTML? ---"
+          grep -o "mockListings" /tmp/anuncios.html || echo "(no aparece 'mockListings' en el HTML)"
+          grep -o "img[0-9]*\.idealista\.com[^\"]*" /tmp/anuncios.html | head -3 || echo "(no aparece ninguna URL de img*.idealista.com en el HTML)"
+          echo "--- ¿aparece el texto 'Cargando anuncios' (shell vacío correcto, sin datos hardcodeados)? ---"
+          grep -o "Cargando anuncios" /tmp/anuncios.html || echo "(no aparece 'Cargando anuncios' en el HTML)"
+
       - name: Configurar SSH
         run: |
           mkdir -p ~/.ssh
@@ -140,6 +162,13 @@ jobs:
             fi
 
             echo ""
+            echo "── DIAG puntual: fila(s) con external_id=111695301 en BD ─"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT id, portal, external_id, is_active, advertiser_type, zone_raw, last_seen_at
+              FROM listings WHERE external_id = '111695301';
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+
+            echo ""
             echo "── Listings actualizados en BD (última hora) ─────────"
             if [ -f .env ]; then set -a; source .env; set +a; fi
             docker exec casafari-pg psql -U casafari -d casafari -t -c "
@@ -149,6 +178,23 @@ jobs:
               GROUP BY zone_raw, operation
               ORDER BY ultimo DESC;
             " 2>&1 || echo "(no se pudo consultar la BD)"
+
+            echo ""
+            echo "── Diagnóstico: ¿el deploy en curso está colgado? ────"
+            echo "Procesos npm/next/docker build vivos:"
+            ps aux | grep -E 'npm|next|docker.*build|docker-buildx' | grep -v grep || echo "(ninguno)"
+            echo ""
+            echo "Espacio en disco:"
+            df -h / 2>&1
+            echo ""
+            echo "Memoria:"
+            free -m 2>&1
+            echo ""
+            echo "Todos los contenedores (incluye los detenidos):"
+            docker ps -a --format "  {{.Names}}\t{{.Status}}\t{{.Image}}"
+            echo ""
+            echo "Últimas líneas del build de la imagen casafari-app (si hay buildkit en curso):"
+            docker buildx du 2>&1 | head -5 || true
 
             echo ""
             echo "── Diagnóstico: ¿por qué no se ven los cambios en /anuncios? ─"
@@ -164,4 +210,31 @@ jobs:
             echo ""
             echo "Últimas líneas de logs de casafari-app (errores de conexión a BD, etc.):"
             docker logs casafari-app --tail 30 2>&1
+
+            echo ""
+            echo "── DIAG puntual: extracción de teléfono en particulares ─"
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT advertiser_type, count(*) AS total, count(phone) AS with_phone
+              FROM listings
+              GROUP BY advertiser_type
+              ORDER BY advertiser_type;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+            echo ""
+            echo "Muestra de particulares CON teléfono (si existen, para revisar formato):"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT external_id, phone
+              FROM listings
+              WHERE advertiser_type = 'particular' AND phone IS NOT NULL
+              LIMIT 5;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
+            echo ""
+            echo "Muestra de particulares SIN teléfono (para tener external_id de referencia):"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT external_id, source_url, last_seen_at
+              FROM listings
+              WHERE advertiser_type = 'particular' AND phone IS NULL
+              ORDER BY last_seen_at DESC
+              LIMIT 5;
+            " 2>&1 || echo "(no se pudo consultar la BD)"
           EOF

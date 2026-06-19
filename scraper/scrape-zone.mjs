@@ -26,6 +26,7 @@ import { writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { fetchHtml, SLEEP } from './lib/fetch.mjs'
 import { parseListPage, parseDetailPage, parseTotalCount } from './lib/parse.mjs'
 import { toAppListing } from './lib/to-listing.mjs'
+import { extractPhotosFromCRM } from './lib/crm-photo-extractor.mjs'
 
 function arg(name, def = undefined) {
   const i = process.argv.indexOf(`--${name}`)
@@ -110,6 +111,56 @@ async function enrich(item) {
   // El precio de la ficha manda; si falta, usamos el de la lista.
   if (detail.price == null) detail.price = item.price
   if (detail.advertiser_name == null) detail.advertiser_name = item.advertiser_name
+
+  // ── Enriquecimiento: obtener fotos adicionales del CRM de la agencia ────────
+  // Si detectamos URL de agencia y CRM, intentamos scrapear sus fotos (sin bloquear)
+  detail.agency_photos = []
+  detail.photo_source_status = 'idealista_only'
+  detail.agency_photo_count = 0
+  detail.agency_photos_fetched_at = null
+
+  if (detail.agency_url && detail.agency_crm && detail.agency_reference_id) {
+    try {
+      const agencyRes = await fetchWithRetry(
+        detail.agency_url,
+        `fotos CRM ${detail.agency_crm} (${detail.external_id})`,
+        2 // Menos reintentos para CRM (no es crítico)
+      )
+      if (agencyRes.ok) {
+        const agencyPhotos = await extractPhotosFromCRM(
+          detail.agency_crm,
+          agencyRes.html,
+          detail.agency_domain,
+          detail.agency_reference_id
+        )
+        if (agencyPhotos && agencyPhotos.length > 0) {
+          detail.agency_photos = agencyPhotos
+          detail.agency_photo_count = agencyPhotos.length
+          // Determinar estado de fotos
+          detail.photo_source_status = detail.photos.length > 0 ? 'both' : 'agency_only'
+          detail.agency_photos_fetched_at = new Date().toISOString()
+        } else {
+          // Extracción falló o no encontró fotos
+          detail.photo_source_status = detail.photos.length > 0 ? 'idealista_only' : 'failed'
+          detail.agency_photos_fetched_at = new Date().toISOString()
+        }
+      } else {
+        // Fetch del CRM falló
+        detail.photo_source_status = detail.photos.length > 0 ? 'idealista_only' : 'failed'
+        detail.agency_photos_fetched_at = new Date().toISOString()
+        console.error(`    ⚠ ${detail.agency_crm} fetch falló para ${detail.external_id}: ${agencyRes.reason}`)
+      }
+    } catch (e) {
+      // Error inesperado: fallback graceful
+      detail.photo_source_status = detail.photos.length > 0 ? 'idealista_only' : 'failed'
+      detail.agency_photos_fetched_at = new Date().toISOString()
+      console.error(`    ⚠ Error scrapeando ${detail.agency_crm} para ${detail.external_id}: ${e.message}`)
+    }
+
+    // Pausa obligatoria antes de siguiente CRM request (no martillear)
+    await jitter()
+  }
+
   return { ok: true, detail }
 }
 
@@ -117,19 +168,23 @@ async function upsertOne(client, r) {
   const q = `
     INSERT INTO listings (
       portal, source_type, external_id, source_url, operation,
-      advertiser_type, advertiser_name, price, bedrooms, bathrooms,
+      advertiser_type, advertiser_name, phone, reference, price, bedrooms, bathrooms,
       square_meters, zone_raw, address, latitude, longitude, blur_radius_m,
       description, features, photos, cover_phash, photo_phashes, status, is_active, last_seen_at, updated_at,
-      agency_url, agency_crm, agency_reference_id, agency_domain
+      agency_url, agency_crm, agency_reference_id, agency_domain,
+      agency_photos, photo_source_status, agency_photo_count, agency_photos_fetched_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,
-      $20,$21::text[], 'active', true, now(), now(),
-      $22,$23,$24,$25
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,
+      $22,$23::text[], 'active', true, now(), now(),
+      $24,$25,$26,$27,
+      $28::jsonb, $29, $30, $31
     )
     ON CONFLICT (portal, external_id) DO UPDATE SET
       price = EXCLUDED.price,
       advertiser_type = EXCLUDED.advertiser_type,
       advertiser_name = EXCLUDED.advertiser_name,
+      phone = EXCLUDED.phone,
+      reference = EXCLUDED.reference,
       bedrooms = EXCLUDED.bedrooms,
       bathrooms = EXCLUDED.bathrooms,
       square_meters = EXCLUDED.square_meters,
@@ -145,16 +200,21 @@ async function upsertOne(client, r) {
       agency_crm = EXCLUDED.agency_crm,
       agency_reference_id = EXCLUDED.agency_reference_id,
       agency_domain = EXCLUDED.agency_domain,
+      agency_photos = EXCLUDED.agency_photos,
+      photo_source_status = EXCLUDED.photo_source_status,
+      agency_photo_count = EXCLUDED.agency_photo_count,
+      agency_photos_fetched_at = EXCLUDED.agency_photos_fetched_at,
       status = 'active', is_active = true,
       last_seen_at = now(), updated_at = now()
     RETURNING (xmax = 0) AS inserted`
   const vals = [
     r.portal, r.source_type, r.external_id, r.source_url, r.operation,
-    r.advertiser_type, r.advertiser_name, r.price, r.bedrooms, r.bathrooms,
+    r.advertiser_type, r.advertiser_name, r.phone, r.reference, r.price, r.bedrooms, r.bathrooms,
     r.square_meters, ZONE, r.address, r.latitude, r.longitude, r.blur_radius_m,
     r.description, JSON.stringify(r.features), JSON.stringify(r.photos),
     r.cover_phash, r.photo_phashes,
     r.agency_url, r.agency_crm, r.agency_reference_id, r.agency_domain,
+    JSON.stringify(r.agency_photos || []), r.photo_source_status, r.agency_photo_count, r.agency_photos_fetched_at,
   ]
   const { rows: rr } = await client.query(q, vals)
   return !!rr[0]?.inserted
@@ -199,7 +259,11 @@ async function main() {
     const result = await enrich(items[i])
     if (result.ok) {
       const detail = result.detail
-      console.error(`    ✓ [${i + 1}/${items.length}] ${detail.external_id} · ${detail.price ?? '?'} € · ${detail.square_meters ?? '?'} m² · ${detail.photos.length} fotos · ${detail.latitude ? 'geo✓' : 'geo✗'}`)
+      const totalPhotos = detail.photos.length + detail.agency_photo_count
+      const photoInfo = detail.agency_photo_count > 0
+        ? `${detail.photos.length} Idealista + ${detail.agency_photo_count} ${detail.agency_crm}`
+        : `${detail.photos.length} fotos`
+      console.error(`    ✓ [${i + 1}/${items.length}] ${detail.external_id} · ${detail.price ?? '?'} € · ${detail.square_meters ?? '?'} m² · ${photoInfo} · ${detail.latitude ? 'geo✓' : 'geo✗'}`)
       if (dbClient) {
         const wasInserted = await upsertOne(dbClient, detail)
         if (wasInserted) inserted++; else updated++

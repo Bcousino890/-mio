@@ -1,0 +1,475 @@
+/**
+ * Panel de Filtros - Estilos y Animaciones
+ * ==========================================
+ */
+
+/* ━━━━━ Animaciones de entrada/salida ━━━━━ */
+
+@keyframes slideInFromBottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutToBottom {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes slideInFromTop {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes expandHeight {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: auto;
+    opacity: 1;
+  }
+}
+
+@keyframes collapseHeight {
+  from {
+    height: auto;
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+/* ━━━━━ Drawer modal (Mobile) ━━━━━ */
+
+.filter-drawer-enter {
+  animation: slideInFromBottom 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.filter-drawer-exit {
+  animation: slideOutToBottom 0.3s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+}
+
+.filter-overlay-enter {
+  animation: fadeIn 0.2s ease-in-out forwards;
+}
+
+.filter-overlay-exit {
+  animation: fadeOut 0.2s ease-in-out forwards;
+}
+
+/* ━━━━━ Filter Group Colapsable ━━━━━ */
+
+.filter-group {
+  border-bottom: 1px solid var(--c-border-card);
+}
+
+.filter-group:last-child {
+  border-bottom: none;
+}
+
+.filter-group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  user-select: none;
+}
+
+.filter-group-toggle:hover {
+  color: #e2e8f0;
+}
+
+.filter-group-toggle-icon {
+  display: inline-block;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 14px;
+  color: #64748b;
+}
+
+.filter-group-toggle[aria-expanded="true"] .filter-group-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.filter-group-content {
+  animation: expandHeight 0.2s ease-out forwards;
+  padding-bottom: 10px;
+}
+
+/* ━━━━━ Range Slider ━━━━━ */
+
+.range-slider-container {
+  position: relative;
+  padding: 16px 0 8px 0;
+}
+
+.range-slider-track {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--c-surface);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.range-slider-fill {
+  position: absolute;
+  height: 4px;
+  background: #3b82f6;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.range-slider-thumb {
+  position: absolute;
+  top: 8px;
+  width: 16px;
+  height: 16px;
+  background: #3b82f6;
+  border: 2px solid #1e293b;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  z-index: 4;
+}
+
+.range-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+}
+
+.range-slider-thumb:active {
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.8);
+}
+
+/* Input range styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  pointer-events: all;
+}
+
+/* Webkit browsers (Chrome, Safari) */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #3b82f6;
+  border: 2px solid #1e293b;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.8);
+}
+
+/* Firefox */
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #3b82f6;
+  border: 2px solid #1e293b;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+}
+
+input[type="range"]::-moz-range-thumb:active {
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.8);
+}
+
+/* ━━━━━ Radio Buttons & Checkboxes ━━━━━ */
+
+.filter-radio,
+.filter-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--c-border-card);
+  background: var(--c-surface);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filter-radio {
+  border-radius: 50%;
+}
+
+.filter-checkbox {
+  border-radius: 4px;
+}
+
+.filter-radio:hover,
+.filter-checkbox:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 4px rgba(59, 130, 246, 0.3);
+}
+
+.filter-radio:checked,
+.filter-checkbox:checked {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.filter-radio:checked::after,
+.filter-checkbox:checked::after {
+  content: '✓';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.filter-radio:focus,
+.filter-checkbox:focus {
+  outline: none;
+  ring: 2px solid rgba(59, 130, 246, 0.5);
+}
+
+/* ━━━━━ Select dropdown ━━━━━ */
+
+select.filter-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 16px;
+  padding-right: 28px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+select.filter-select:hover {
+  border-color: var(--c-border);
+}
+
+select.filter-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 4px rgba(59, 130, 246, 0.3);
+}
+
+/* ━━━━━ Buttons ━━━━━ */
+
+.filter-button {
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.filter-button:hover {
+  transform: translateY(-1px);
+}
+
+.filter-button:active {
+  transform: translateY(0);
+}
+
+.filter-button-primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.filter-button-primary:hover {
+  background: #2563eb;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.filter-button-secondary {
+  background: transparent;
+  color: #94a3b8;
+  border: 1px solid var(--c-border-card);
+}
+
+.filter-button-secondary:hover {
+  color: #e2e8f0;
+  border-color: var(--c-border);
+}
+
+/* ━━━━━ Badge de contador ━━━━━ */
+
+.filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: #3b82f6;
+  color: white;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* ━━━━━ Skeleton loading ━━━━━ */
+
+.filter-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--c-surface) 25%,
+    var(--c-card) 50%,
+    var(--c-surface) 75%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* ━━━━━ Responsive ━━━━━ */
+
+@media (max-width: 768px) {
+  /* Panel en drawer fullscreen */
+  .filter-panel-mobile {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: 0;
+    z-index: 50;
+    max-height: 85vh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  /* Reduce font sizes en mobile */
+  .filter-label {
+    font-size: 11px;
+  }
+
+  .filter-option-label {
+    font-size: 13px;
+  }
+
+  /* Stack inputs en dos columnas */
+  .filter-range-inputs {
+    flex-direction: column;
+  }
+
+  .filter-range-inputs input {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Desabilitar animaciones si el usuario lo prefiere */
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ━━━━━ Dark mode (por defecto) ━━━━━ */
+
+:root {
+  color-scheme: dark;
+}
+
+/* Asegura que los inputs heredan los colores correctos */
+input:not([type="range"]),
+select,
+textarea {
+  color-scheme: dark;
+}
+
+/* ━━━━━ Focus visible (a11y) ━━━━━ */
+
+.filter-control:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* ━━━━━ Print styles ━━━━━ */
+
+@media print {
+  .filter-panel {
+    display: none;
+  }
+}

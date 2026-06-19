@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, use } from 'react'
 import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import { mockListings } from '@/lib/mock-listings'
 import {
   ArrowLeft, MapPin, Bookmark, Calculator, FileText, UserSearch,
   ChevronRight, Building2, User,
@@ -13,7 +12,7 @@ import {
   Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
   Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink, ChevronDown, X,
 } from 'lucide-react'
-import type { SourceReference } from '@/lib/mock-listings'
+import type { SourceReference, Listing } from '@/lib/mock-listings'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -212,17 +211,121 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
   const [saved, setSaved] = useState(false)
   const [notes, setNotes] = useState<{ text: string; date: string }[]>([])
   const [noteDraft, setNoteDraft] = useState('')
+  const [listing, setListing] = useState<Listing | null | undefined>(undefined)
+  const [zoneComparables, setZoneComparables] = useState<Listing[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
-    setSaved(savedIds.includes(resolvedParams.id))
-    const storedNotes = JSON.parse(localStorage.getItem(`casafari_notes_${resolvedParams.id}`) ?? '[]') as { text: string; date: string }[]
-    setNotes(storedNotes)
+    const fetchListing = async () => {
+      try {
+        const response = await fetch(`/api/listings?id=${encodeURIComponent(resolvedParams.id)}`)
+        if (!response.ok) throw new Error('Failed to fetch listing')
+        const result = await response.json()
+        const found = result.success && Array.isArray(result.data) ? result.data[0] : null
+        if (found) {
+          const listedDate = new Date().toISOString().split('T')[0]
+          const portal = found.portal || 'idealista'
+          const price = found.price || 0
+          const transformed: Listing = {
+            id: found.id || found.external_id,
+            property_id: found.property_id || found.external_id,
+            title: found.title || `Inmueble ${found.id}`,
+            operation: found.operation || 'rent',
+            price,
+            square_meters: found.square_meters || 0,
+            // price_sqm comes back from Postgres as a numeric (string), not a JS number —
+            // coerce it so downstream arithmetic (avgPriceSqm reduce, estimatedValue) doesn't
+            // silently string-concatenate instead of summing.
+            price_sqm: Number(found.price_sqm) || 0,
+            bedrooms: found.bedrooms || 0,
+            bathrooms: found.bathrooms || 1,
+            zone_name: found.zone_name || found.zone_raw || 'Unknown',
+            portal,
+            source_type: 'portal' as const,
+            advertiser_type: found.advertiser_type || 'professional',
+            advertiser_name: found.advertiser_name || 'Idealista',
+            days_on_market: found.days_on_market || 0,
+            is_active: found.is_active !== false,
+            latitude: found.latitude || 40.43,
+            longitude: found.longitude || -3.68,
+            photos: Array.isArray(found.photos) ? found.photos : [],
+            source_url: found.source_url || '',
+            listing_count: 1,
+            portals: [portal],
+            price_drops: Number(found.price_drops) || 0,
+            rc_status: 'none' as const,
+            description: found.description || '',
+            features: Array.isArray(found.features) ? found.features : [],
+            priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
+            sources: [{
+              id: `${found.id}-${portal}`,
+              type: found.advertiser_type === 'particular' ? 'particular' : 'agency',
+              name: found.advertiser_name || 'Idealista',
+              portal,
+              price,
+              status: 'active' as const,
+              listed_at: listedDate,
+              url: found.source_url || '',
+              is_particular: found.advertiser_type === 'particular',
+              address: found.address || '',
+              bedrooms: found.bedrooms,
+              bathrooms: found.bathrooms,
+              built_area: found.square_meters,
+            }],
+          }
+          setListing(transformed)
+
+          // Comparables reales en la misma zona (para la valoración estimada)
+          if (found.zone_raw) {
+            try {
+              const compParams = new URLSearchParams({
+                zone_raw: found.zone_raw,
+                operation: transformed.operation,
+                page_size: '50',
+              })
+              const compRes = await fetch(`/api/listings?${compParams.toString()}`)
+              const compResult = await compRes.json()
+              if (compResult.success && Array.isArray(compResult.data)) {
+                setZoneComparables(
+                  compResult.data
+                    .filter((row: any) => String(row.id) !== String(transformed.id))
+                    .map((row: any) => ({
+                      ...transformed,
+                      id: row.id,
+                      price: row.price || 0,
+                      price_sqm: Number(row.price_sqm) || 0,
+                      square_meters: row.square_meters || 0,
+                    }))
+                )
+              }
+            } catch {
+              // Comparables son un extra informativo: si falla, simplemente no se muestran.
+            }
+          }
+        } else {
+          setListing(null)
+        }
+      } catch (err) {
+        console.error('Error loading listing:', err)
+        setListing(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchListing()
   }, [resolvedParams.id])
+
+  useEffect(() => {
+    if (listing === undefined) return
+    const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
+    setSaved(savedIds.includes(String(listing?.id ?? '')))
+    const storedNotes = JSON.parse(localStorage.getItem(`casafari_notes_${listing?.id}`) ?? '[]') as { text: string; date: string }[]
+    setNotes(storedNotes)
+  }, [listing?.id])
 
   function toggleSaved() {
     const savedIds = JSON.parse(localStorage.getItem('casafari_saved_listings') ?? '[]') as string[]
-    const next = saved ? savedIds.filter((id) => id !== resolvedParams.id) : [...savedIds, resolvedParams.id]
+    const next = saved ? savedIds.filter((id) => id !== String(listing?.id)) : [...savedIds, String(listing?.id)]
     localStorage.setItem('casafari_saved_listings', JSON.stringify(next))
     setSaved(!saved)
   }
@@ -231,11 +334,17 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
     if (!noteDraft.trim()) return
     const next = [{ text: noteDraft.trim(), date: new Date().toISOString() }, ...notes]
     setNotes(next)
-    localStorage.setItem(`casafari_notes_${resolvedParams.id}`, JSON.stringify(next))
+    localStorage.setItem(`casafari_notes_${listing?.id}`, JSON.stringify(next))
     setNoteDraft('')
   }
 
-  const listing = mockListings.find((l) => l.id === resolvedParams.id)
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-slate-600">
+        <p className="text-sm font-medium">Cargando propiedad…</p>
+      </div>
+    )
+  }
 
   if (!listing) {
     return (
@@ -251,11 +360,30 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
     ? Math.round(((l.priceHistory[0].price - l.price) / l.priceHistory[0].price) * 100)
     : 0
 
-  const photoSources = l.sources.filter((s) => (s.photos?.length ?? 0) > 0)
-  const activePhotoSource = photoSources.find((s) => s.id === selectedSourceId) ?? photoSources[0]
-  const activePhotos = activePhotoSource?.photos ?? l.photos
+  // ── PHOTO SOURCE SELECTOR ──
+  // Selector de fotos por fuente (Idealista, Agencia, Todas)
+  // Estado: selectedSourceId = 'all' | specific source.id
+  // El selector se muestra solo si hay múltiples fuentes con fotos
+  //
+  // CÓMO EXTENDER ESTO:
+  // 1. API: En web/app/api/listings/route.ts, agregar una query que pueble
+  //    source.photos con fotos específicas de esa fuente (si la DB los divide por fuente)
+  // 2. O: En el componente, agregar lógica de mapeo: Idealista → fotos.filter(f => f.source === 'idealista')
+  // 3. Si hay fotos sin fuente asignada, van a "Todas"
 
-  const zoneComparables = mockListings.filter((x) => x.zone_name === l.zone_name && x.id !== l.id && x.operation === l.operation)
+  const hasMultiplePhotoSources = l.sources.some((s) => (s.photos?.length ?? 0) > 0)
+  const photoSources = hasMultiplePhotoSources
+    ? l.sources.filter((s) => (s.photos?.length ?? 0) > 0)
+    : l.sources
+
+  const allPhotos = l.photos
+  const selectedPhotoSource = selectedSourceId === 'all' || !selectedSourceId
+    ? null
+    : photoSources.find((s) => s.id === selectedSourceId)
+  const activePhotos = selectedPhotoSource && selectedPhotoSource.photos?.length
+    ? selectedPhotoSource.photos
+    : allPhotos
+
   const avgPriceSqm = zoneComparables.length > 0
     ? Math.round(zoneComparables.reduce((sum, x) => sum + x.price_sqm, 0) / zoneComparables.length)
     : l.price_sqm
@@ -323,21 +451,37 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 </div>
               ) : null}
 
-              {/* Selector de fuente de fotos */}
+              {/* Selector de fuente de fotos con tabs/pills - solo si hay múltiples fuentes */}
               {mediaTab === 'fotos' && photoSources.length > 1 && (
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-slate-500 whitespace-nowrap">Seleccionar fuente de fotos</label>
-                  <select
-                    value={activePhotoSource?.id}
-                    onChange={(e) => { setSelectedSourceId(e.target.value); setPhotoIdx(0) }}
-                    className="flex-1 text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {/* Opción "Todas" */}
+                  <button
+                    onClick={() => { setSelectedSourceId('all'); setPhotoIdx(0) }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all whitespace-nowrap flex-shrink-0 ${
+                      selectedSourceId === 'all' || !selectedSourceId
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'border-[var(--c-border-card)] text-slate-500 hover:text-slate-300 bg-[var(--c-surface)]'
+                    }`}
                   >
-                    {photoSources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.photos!.length})
-                      </option>
-                    ))}
-                  </select>
+                    Todas
+                    <span className="text-[10px] opacity-70">({allPhotos.length})</span>
+                  </button>
+
+                  {/* Opciones por fuente */}
+                  {photoSources.map((source) => (
+                    <button
+                      key={source.id}
+                      onClick={() => { setSelectedSourceId(source.id); setPhotoIdx(0) }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all whitespace-nowrap flex-shrink-0 ${
+                        selectedSourceId === source.id
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'border-[var(--c-border-card)] text-slate-500 hover:text-slate-300 bg-[var(--c-surface)]'
+                      }`}
+                    >
+                      <span>{source.name}</span>
+                      <span className="text-[10px] opacity-70">({source.photos?.length ?? 0})</span>
+                    </button>
+                  ))}
                 </div>
               )}
 

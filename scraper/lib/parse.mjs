@@ -277,6 +277,8 @@ export async function parseDetailPage(html, external_id) {
   }
 
   // ── Anunciante (particular vs profesional) desde `config` ───────────────────
+  // Extrae el nombre completo del anunciante (agencia o particular).
+  // Prioridad: config.adProfessionalName > config.adCommercialName > firstName+lastName > fallback HTML
   const cfg = (k) => {
     const m = config && config.match(new RegExp(`${k}\\s*:\\s*"([^"]*)"`))
     return m ? decode(m[1]) : null
@@ -286,36 +288,71 @@ export async function parseDetailPage(html, external_id) {
   const lastName = cfg('adLastName')
   const isOffice = config ? /isOfficeContactType\s*:\s*true/.test(config) : false
   let advertiser_name, advertiser_type
+
   if (profName || isOffice) {
+    // Profesional (agencia)
     advertiser_name = profName || 'Profesional'
     advertiser_type = 'professional'
   } else if (firstName != null || /<span\s+class="particular"/.test(html)) {
+    // Particular
     advertiser_name = [firstName, lastName].filter(Boolean).join(' ').trim() || 'Particular'
     advertiser_type = 'particular'
   } else {
-    // Respaldo al heurístico anterior.
+    // Respaldo: buscar en HTML si config no tiene datos claros
+    // Selectores CSS robustos para nombres de anunciantes:
+    // - class="professional-name" (nombre de profesional)
+    // - class="advertiser-name" (nombre genérico del anunciante)
+    // - img[alt] en logo-branding (nombre de agencia)
     const advM = html.match(/class="professional-name"[^>]*>\s*<[^>]*>\s*([^<]+)/) ||
-                 html.match(/class="advertiser-name">\s*([^<]+)/)
+                 html.match(/class="advertiser-name">\s*([^<]+)/) ||
+                 html.match(/class="logo-branding"[^>]*alt="([^"]*)"/)
     advertiser_name = advM ? decode(advM[1]) : null
     advertiser_type = /professional/i.test(html) && advertiser_name ? 'professional'
       : /anunciante particular|particular/i.test(html) ? 'particular' : 'unknown'
   }
+  // TODO: Validar contra HTML real de Idealista para confirmar selectores CSS
 
-  // Teléfono del anunciante (visible en el SSR sin sesión cuando existe).
-  // El número se renderiza como texto plano justo antes del span
-  // "phone-type-info"; los atributos appcallback_target_phone/href="tel:" solo
-  // aparecen en otros formatos de ficha, así que quedan como respaldo.
+  // Teléfono del anunciante: número de contacto completo y formateado.
+  // Buscamos en varios lugares del HTML de Idealista (SSR sin sesión):
+  // 1. Texto plano antes de span class="phone-type-info" (selector más robusto)
+  // 2. Atributos data-* o appcallback_target_phone (alternativas)
+  // 3. Enlaces href="tel:" (fallback final)
+  // El número se normaliza y se formatea (ej: "666 12 34 56" para números de 9 dígitos)
   const phoneM = html.match(/(\d[\d\s.]{6,14}\d)\s*<span[^>]*class="phone-type-info/) ||
                  html.match(/appcallback_target_phone="(\d{6,})"/) ||
+                 html.match(/data-phone="([^"]+)"/) ||
                  html.match(/href="tel:(\+?\d{6,})"/)
   let phone = phoneM ? phoneM[1].replace(/[^\d+]/g, '') : null
-  if (phone) phone = phone.replace(/^\+?34/, '')
-  if (phone && phone.length === 9) phone = phone.replace(/(\d{3})(\d{2})(\d{2})(\d{2})/, '$1 $2 $3 $4')
-  else if (phone) phone = phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
 
-  // Referencia del anuncio.
-  const refM = html.match(/class="txt-ref">\s*([A-Za-z0-9\-]+)\s*</)
-  const reference = refM ? refM[1].trim() : external_id
+  // Normalizar: eliminar prefijo de España (+34 o 0034) si existe
+  if (phone) {
+    phone = phone.replace(/^\+?34/, '').replace(/^0/, '')
+  }
+
+  // Formatear a patrón español (XXX XX XX XX o similar)
+  if (phone && phone.length === 9) {
+    phone = phone.replace(/(\d{3})(\d{2})(\d{2})(\d{2})/, '$1 $2 $3 $4')
+  } else if (phone && phone.length > 0) {
+    // Para otros formatos, intentar formato genérico: XXX XXX XXX
+    phone = phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')
+  }
+  // TODO: Validar contra HTML real de Idealista si los selectores CSS siguen siendo válidos
+
+  // Referencia del anuncio: número/código único de referencia en Idealista.
+  // Buscamos en varios selectores CSS estándar del portal:
+  // 1. class="txt-ref" (más robusto, es la clase estándar de Idealista)
+  // 2. class="ref-help" o divs con "Referencia del anuncio"
+  // 3. Fallback al external_id si no encuentra nada
+  let reference = external_id
+  const refM = html.match(/class="txt-ref"[^>]*>\s*([A-Za-z0-9\-]+)\s*</)
+  if (refM) {
+    reference = refM[1].trim()
+  } else {
+    // Alternativa: buscar en <div> o <span> que contenga la ref (e.g., "W-0462UX")
+    const altRefM = html.match(/(?:class="ref-help"[^>]*>[\s\S]*?<span[^>]*>|ref-help[^>]*>)\s*([A-Za-z0-9\-]+)/)
+    if (altRefM) reference = altRefM[1].trim()
+  }
+  // TODO: Validar contra HTML real de Idealista si el patrón txt-ref sigue siendo estándar
 
   // ── Certificado energético (consumo + emisiones + imagen CEE) ───────────────
   const consM = html.match(/Consumo:\s*<\/span>\s*<span class="icon-energy-c-([a-g])"/i)
@@ -399,8 +436,14 @@ export async function parseDetailPage(html, external_id) {
     }
   }
 
-  // Detectar CRM de la agencia (si existe enlace adicional)
+  // Detectar CRM de la agencia (si existe enlace adicional).
+  // El "enlace adicional" o "agency_url" es la URL de la ficha de la agencia en su CRM.
+  // Buscamos en:
+  // 1. div id="aditional-link" con <a href="..."> (selector CSS más robusto de Idealista)
+  // 2. Enlaces con clase "additional-link" (variantes)
+  // 3. Extractar automáticamente el CRM (Mobilia, Inmoweb, Level, etc.)
   const crmDetection = detectCRMFromDetailPage(html)
+  // TODO: Validar que extractAdditionalLink en crm-detector captura todos los patrones de Idealista
 
   // ── Calcular pHash para fotos (en paralelo, sin descargar archivos) ────────
   // Limitar a max 3 fotos en paralelo para no saturar red
