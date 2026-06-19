@@ -92,59 +92,39 @@ export async function GET(request: NextRequest) {
     }
 
     // Advanced filter conditions
-    // TODO: Implement location search with fuzzy matching or autocomplete
-    // if (location) {
-    //   const locationTerm = addParam(`%${location}%`)
-    //   conditions.push(`(l.zone_raw ILIKE ${locationTerm} OR l.address ILIKE ${locationTerm})`)
-    // }
+    // Location search: zone_raw or address (text search)
+    if (location) {
+      const locationTerm = addParam(`%${location}%`)
+      conditions.push(`(l.zone_raw ILIKE ${locationTerm} OR l.address ILIKE ${locationTerm})`)
+    }
 
-    // TODO: Implement characteristics filtering (stored as JSONB array in l.features)
-    // Characteristics should be checked if all requested characteristics are present
-    // if (characteristics && characteristics.length > 0) {
-    //   const charConditions = characteristics.map(c => `l.features @> '["${c}"]'::jsonb`).join(' AND ')
-    //   conditions.push(`(${charConditions})`)
-    // }
+    // Characteristics filtering: features is JSONB array, check if all requested are present
+    if (characteristics && characteristics.length > 0) {
+      characteristics.forEach(c => {
+        conditions.push(`l.features @> ${addParam(JSON.stringify([c]))}::jsonb`)
+      })
+    }
 
-    // TODO: Implement property type filtering
-    // This may require a property_type column or derived from other fields
-    // if (propertyType && propertyType.length > 0) {
-    //   conditions.push(`l.property_type IN (${propertyType.map(t => addParam(t)).join(',')})`)
-    // }
+    // Property type filtering
+    if (propertyType && propertyType.length > 0) {
+      const typeParams = propertyType.map(t => addParam(t))
+      conditions.push(`l.property_type IN (${typeParams.join(',')})`)
+    }
 
-    // TODO: Implement furnished status filtering
-    // if (furnished) {
-    //   conditions.push(`l.furnished = ${addParam(furnished === 'true')}`)
-    // }
+    // Price per sqm filtering (computed, not stored)
+    if (pricePerSqmMin !== null || pricePerSqmMax !== null) {
+      const priceSqm = `(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END)`
+      if (pricePerSqmMin !== null) conditions.push(`${priceSqm} >= ${addParam(pricePerSqmMin)}`)
+      if (pricePerSqmMax !== null) conditions.push(`${priceSqm} <= ${addParam(pricePerSqmMax)}`)
+    }
 
-    // TODO: Implement year built filtering
-    // if (yearBuiltMin !== null) {
-    //   conditions.push(`l.year_built >= ${addParam(yearBuiltMin)}`)
-    // }
-    // if (yearBuiltMax !== null) {
-    //   conditions.push(`l.year_built <= ${addParam(yearBuiltMax)}`)
-    // }
+    // Energy rating filtering
+    if (energyRating) {
+      conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
+    }
 
-    // TODO: Implement price per sqm filtering
-    // if (pricePerSqmMin !== null || pricePerSqmMax !== null) {
-    //   const priceSqm = `(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END)`
-    //   if (pricePerSqmMin !== null) conditions.push(`${priceSqm} >= ${addParam(pricePerSqmMin)}`)
-    //   if (pricePerSqmMax !== null) conditions.push(`${priceSqm} <= ${addParam(pricePerSqmMax)}`)
-    // }
-
-    // TODO: Implement view filtering
-    // if (view) {
-    //   conditions.push(`l.view = ${addParam(view)}`)
-    // }
-
-    // TODO: Implement orientation filtering
-    // if (orientation) {
-    //   conditions.push(`l.orientation = ${addParam(orientation)}`)
-    // }
-
-    // TODO: Implement energy rating filtering
-    // if (energyRating) {
-    //   conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
-    // }
+    // Note: furnished, view, orientation, and year_built require additional DB columns
+    // They are parsed from query params but not yet implemented in the schema
 
     // Filtros de ubicación normalizada (migración 0019)
     // Notas:
