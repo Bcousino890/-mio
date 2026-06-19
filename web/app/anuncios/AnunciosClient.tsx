@@ -88,6 +88,11 @@ export default function AnunciosClient() {
   const [filters, setFilters] = useState<FilterState>({
     operation: 'all',
     advertiserType: 'all',
+    advertiserFilter: {
+      mode: 'all',
+      particularOptions: { onlyParticular: false, isPrivateByAgency: false, wasPrivateByAgency: false },
+      agencyOptions: { agencyId: null, agencyName: null, exclusive: false, exclusiveMode: 'both', excludeAgencyId: null }
+    },
     propertyTypes: [],
     price: { min: null, max: null },
     squareMeters: { min: null, max: null },
@@ -105,6 +110,9 @@ export default function AnunciosClient() {
     characteristics: [],
     location: null,
     distance: null,
+    selected_district_id: null,
+    selected_zone_id: null,
+    selected_subzone_id: null,
   })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -196,6 +204,9 @@ export default function AnunciosClient() {
         if (filters.energyRating) params.set('energy_rating', filters.energyRating)
         if (filters.view) params.set('view', filters.view)
         if (filters.orientation) params.set('orientation', filters.orientation)
+        if (filters.selected_district_id) params.set('district_id', filters.selected_district_id)
+        if (filters.selected_zone_id) params.set('zone_id', filters.selected_zone_id)
+        if (filters.selected_subzone_id) params.set('subzone_id', filters.selected_subzone_id)
 
         const response = await fetch(`/api/listings?${params.toString()}`, { signal: controller.signal })
         if (!response.ok) throw new Error('Failed to fetch listings')
@@ -233,6 +244,11 @@ export default function AnunciosClient() {
     setFilters({
       operation: 'all',
       advertiserType: 'all',
+      advertiserFilter: {
+        mode: 'all',
+        particularOptions: { onlyParticular: false, isPrivateByAgency: false, wasPrivateByAgency: false },
+        agencyOptions: { agencyId: null, agencyName: null, exclusive: false, exclusiveMode: 'both', excludeAgencyId: null }
+      },
       propertyTypes: [],
       price: { min: null, max: null },
       squareMeters: { min: null, max: null },
@@ -250,6 +266,9 @@ export default function AnunciosClient() {
       characteristics: [],
       location: null,
       distance: null,
+      selected_district_id: null,
+      selected_zone_id: null,
+      selected_subzone_id: null,
     })
     setShowFiltersPanel(false)
   }
