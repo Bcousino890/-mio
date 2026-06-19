@@ -117,20 +117,21 @@ async function upsertOne(client, r) {
   const q = `
     INSERT INTO listings (
       portal, source_type, external_id, source_url, operation,
-      advertiser_type, advertiser_name, phone, price, bedrooms, bathrooms,
+      advertiser_type, advertiser_name, phone, reference, price, bedrooms, bathrooms,
       square_meters, zone_raw, address, latitude, longitude, blur_radius_m,
       description, features, photos, cover_phash, photo_phashes, status, is_active, last_seen_at, updated_at,
       agency_url, agency_crm, agency_reference_id, agency_domain
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,
-      $21,$22::text[], 'active', true, now(), now(),
-      $23,$24,$25,$26
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,
+      $22,$23::text[], 'active', true, now(), now(),
+      $24,$25,$26,$27
     )
     ON CONFLICT (portal, external_id) DO UPDATE SET
       price = EXCLUDED.price,
       advertiser_type = EXCLUDED.advertiser_type,
       advertiser_name = EXCLUDED.advertiser_name,
       phone = EXCLUDED.phone,
+      reference = EXCLUDED.reference,
       bedrooms = EXCLUDED.bedrooms,
       bathrooms = EXCLUDED.bathrooms,
       square_meters = EXCLUDED.square_meters,
@@ -151,7 +152,7 @@ async function upsertOne(client, r) {
     RETURNING (xmax = 0) AS inserted`
   const vals = [
     r.portal, r.source_type, r.external_id, r.source_url, r.operation,
-    r.advertiser_type, r.advertiser_name, r.phone, r.price, r.bedrooms, r.bathrooms,
+    r.advertiser_type, r.advertiser_name, r.phone, r.reference, r.price, r.bedrooms, r.bathrooms,
     r.square_meters, ZONE, r.address, r.latitude, r.longitude, r.blur_radius_m,
     r.description, JSON.stringify(r.features), JSON.stringify(r.photos),
     r.cover_phash, r.photo_phashes,
