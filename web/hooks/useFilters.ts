@@ -2,10 +2,26 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import type { FilterState } from '@/components/filters/FilterPanel'
+import type { AdvertiserFilterState } from '@/components/filters/FilterAdvertiserSection'
 
 const INITIAL_STATE: FilterState = {
   operation: 'all',
   advertiserType: 'all',
+  advertiserFilter: {
+    mode: 'all',
+    particularOptions: {
+      onlyParticular: false,
+      isPrivateByAgency: false,
+      wasPrivateByAgency: false,
+    },
+    agencyOptions: {
+      agencyId: null,
+      agencyName: null,
+      exclusive: false,
+      exclusiveMode: 'both',
+      excludeAgencyId: null,
+    },
+  },
   propertyTypes: [],
   price: { min: null, max: null },
   squareMeters: { min: null, max: null },
@@ -23,6 +39,10 @@ const INITIAL_STATE: FilterState = {
   characteristics: [],
   location: null,
   distance: null,
+  // Nuevos campos normalizados para cascada distrito → zona → subzona (migración 0019)
+  selected_district_id: null,
+  selected_zone_id: null,
+  selected_subzone_id: null,
 }
 
 const STORAGE_KEY = 'casafari:filters:current'
@@ -80,6 +100,45 @@ export function useFilters(initialFilters?: Partial<FilterState>) {
       const type = filters.advertiserType === 'particular' ? 'particular' : 'professional'
       params.set('advertiser_type', type)
     }
+
+    // Nuevos parámetros para el filtro mejorado de anunciante
+    if (filters.advertiserFilter.mode !== 'all') {
+      params.set('advertiser_mode', filters.advertiserFilter.mode)
+
+      // Sub-opciones de particulares
+      if (filters.advertiserFilter.mode === 'particular') {
+        if (filters.advertiserFilter.particularOptions.onlyParticular) {
+          params.set('only_particular', 'true')
+        }
+        // TODO: cuando se agreguen columnas a BD
+        // if (filters.advertiserFilter.particularOptions.isPrivateByAgency) {
+        //   params.set('is_private_by_agency', 'true')
+        // }
+        // if (filters.advertiserFilter.particularOptions.wasPrivateByAgency) {
+        //   params.set('was_private_by_agency', 'true')
+        // }
+      }
+
+      // Sub-opciones de agencias
+      if (filters.advertiserFilter.mode === 'agency') {
+        if (filters.advertiserFilter.agencyOptions.agencyId) {
+          params.set('agency_id', filters.advertiserFilter.agencyOptions.agencyId)
+        }
+        if (filters.advertiserFilter.agencyOptions.exclusiveMode !== 'both') {
+          params.set(
+            'exclusive_mode',
+            filters.advertiserFilter.agencyOptions.exclusiveMode
+          )
+        }
+        if (filters.advertiserFilter.agencyOptions.excludeAgencyId) {
+          params.set(
+            'exclude_agency_id',
+            filters.advertiserFilter.agencyOptions.excludeAgencyId
+          )
+        }
+      }
+    }
+
     if (filters.propertyTypes.length > 0) {
       params.set('property_types', filters.propertyTypes.join(','))
     }
@@ -110,6 +169,11 @@ export function useFilters(initialFilters?: Partial<FilterState>) {
       params.set('characteristics', filters.characteristics.join(','))
     }
 
+    // Nuevos parámetros de ubicación normalizada (migración 0019)
+    if (filters.selected_district_id) params.set('district_id', filters.selected_district_id)
+    if (filters.selected_zone_id) params.set('zone_id', filters.selected_zone_id)
+    if (filters.selected_subzone_id) params.set('subzone_id', filters.selected_subzone_id)
+
     return params
   }, [filters])
 
@@ -133,6 +197,47 @@ export function useFilters(initialFilters?: Partial<FilterState>) {
       updates.advertiserType = advType as 'all' | 'particular' | 'professional'
     }
 
+    // Cargar filtro mejorado de anunciante desde URL
+    const advertiserMode = params.get('advertiser_mode')
+    if (advertiserMode && ['all', 'particular', 'agency'].includes(advertiserMode)) {
+      const advertiserFilter: AdvertiserFilterState = {
+        ...INITIAL_STATE.advertiserFilter,
+        mode: advertiserMode as 'all' | 'particular' | 'agency',
+      }
+
+      // Sub-opciones particulares
+      if (advertiserMode === 'particular') {
+        advertiserFilter.particularOptions = {
+          onlyParticular: params.get('only_particular') === 'true',
+          // TODO: cuando se agreguen columnas a BD
+          // isPrivateByAgency: params.get('is_private_by_agency') === 'true',
+          // wasPrivateByAgency: params.get('was_private_by_agency') === 'true',
+          isPrivateByAgency: false,
+          wasPrivateByAgency: false,
+        }
+      }
+
+      // Sub-opciones agencias
+      if (advertiserMode === 'agency') {
+        const agencyId = params.get('agency_id')
+        const exclusiveMode = params.get('exclusive_mode')
+
+        advertiserFilter.agencyOptions = {
+          agencyId: agencyId || null,
+          agencyName: null, // Se establecerá desde la lista de agencias
+          exclusive: false,
+          exclusiveMode: (
+            exclusiveMode && ['both', 'only', 'only_non'].includes(exclusiveMode)
+              ? (exclusiveMode as 'both' | 'only' | 'only_non')
+              : 'both'
+          ),
+          excludeAgencyId: params.get('exclude_agency_id') || null,
+        }
+      }
+
+      updates.advertiserFilter = advertiserFilter
+    }
+
     const propTypes = params.get('property_types')
     if (propTypes) {
       updates.propertyTypes = propTypes.split(',')
@@ -145,6 +250,22 @@ export function useFilters(initialFilters?: Partial<FilterState>) {
         min: priceMin ? parseInt(priceMin) : null,
         max: priceMax ? parseInt(priceMax) : null,
       }
+    }
+
+    // Cargar parámetros de ubicación normalizada (migración 0019)
+    const districtId = params.get('district_id')
+    if (districtId) {
+      updates.selected_district_id = districtId
+    }
+
+    const zoneId = params.get('zone_id')
+    if (zoneId) {
+      updates.selected_zone_id = zoneId
+    }
+
+    const subzoneId = params.get('subzone_id')
+    if (subzoneId) {
+      updates.selected_subzone_id = subzoneId
     }
 
     // ... más parámetros según sea necesario

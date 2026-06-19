@@ -42,6 +42,10 @@ export async function GET(request: NextRequest) {
   const yearBuiltMax = sp.get('year_built_max') ? Number(sp.get('year_built_max')) : null
   const pricePerSqmMin = sp.get('price_per_sqm_min') ? Number(sp.get('price_per_sqm_min')) : null
   const pricePerSqmMax = sp.get('price_per_sqm_max') ? Number(sp.get('price_per_sqm_max')) : null
+  // Nuevos parámetros de ubicación normalizada (migración 0019)
+  const districtId = sp.get('district_id')?.trim()
+  const zoneId = sp.get('zone_id')?.trim()
+  const subzoneId = sp.get('subzone_id')?.trim()
 
   const sortParam = sp.get('sort')
   const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'recent'
@@ -141,6 +145,21 @@ export async function GET(request: NextRequest) {
     // if (energyRating) {
     //   conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
     // }
+
+    // Filtros de ubicación normalizada (migración 0019)
+    // Notas:
+    // - district_id, zone_id, subzone_id están denormalizados en listings
+    // - Se pueden combinar: filtrar por distrito + zona + subzona
+    // - Si se proporciona subzone_id, automáticamente está dentro de zone_id y district_id
+    if (districtId) {
+      conditions.push(`l.district_id = ${addParam(districtId)}`)
+    }
+    if (zoneId) {
+      conditions.push(`l.zone_id = ${addParam(zoneId)}`)
+    }
+    if (subzoneId) {
+      conditions.push(`l.subzone_id = ${addParam(subzoneId)}`)
+    }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`
 

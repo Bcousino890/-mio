@@ -8,11 +8,14 @@ import FilterRangeSlider from './FilterRangeSlider'
 import FilterSelect from './FilterSelect'
 import FilterSearchBox from './FilterSearchBox'
 import FilterGroupToggle from './FilterGroupToggle'
+import FilterAdvertiserSection, { AdvertiserFilterState } from './FilterAdvertiserSection'
+import FilterLocationSection from './FilterLocationSection'
 
 export interface FilterState {
   // Operación y tipo de anunciante
   operation: 'all' | 'sale' | 'rent'
   advertiserType: 'all' | 'particular' | 'professional'
+  advertiserFilter: AdvertiserFilterState
 
   // Tipo de propiedad
   propertyTypes: string[]
@@ -38,6 +41,15 @@ export interface FilterState {
   // Ubicación
   location: string | null
   distance: number | null
+  // Nuevos campos normalizados para cascada distrito → zona → subzona (migración 0019)
+  selected_district_id: string | null
+  selected_zone_id: string | null
+  selected_subzone_id: string | null
+}
+
+interface Agency {
+  id: string
+  name: string
 }
 
 interface FilterPanelProps {
@@ -47,6 +59,8 @@ interface FilterPanelProps {
   onClear: () => void
   isOpen: boolean
   onClose: () => void
+  agencies?: Agency[]
+  isLoadingAgencies?: boolean
 }
 
 const PROPERTY_TYPES = [
@@ -109,6 +123,7 @@ function calculateActiveFilters(filters: FilterState): number {
 
   if (filters.operation !== 'all') count++
   if (filters.advertiserType !== 'all') count++
+  if (filters.advertiserFilter.mode !== 'all') count++
   if (filters.propertyTypes.length > 0) count++
   if (filters.price.min !== null || filters.price.max !== null) count++
   if (filters.bedrooms.min !== null || filters.bedrooms.max !== null) count++
@@ -125,6 +140,10 @@ function calculateActiveFilters(filters: FilterState): number {
   if (filters.yearBuilt.min !== null || filters.yearBuilt.max !== null) count++
   if (filters.parcelSize.min !== null || filters.parcelSize.max !== null) count++
   if (filters.daysOnMarket.min !== null || filters.daysOnMarket.max !== null) count++
+  // Nuevos campos de ubicación normalizada (migración 0019)
+  if (filters.selected_district_id !== null) count++
+  if (filters.selected_zone_id !== null) count++
+  if (filters.selected_subzone_id !== null) count++
 
   return count
 }
@@ -136,6 +155,8 @@ export default function FilterPanel({
   onClear,
   isOpen,
   onClose,
+  agencies = [],
+  isLoadingAgencies = false,
 }: FilterPanelProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     new Set(['operacion', 'propiedad', 'precio'])
@@ -225,24 +246,43 @@ export default function FilterPanel({
               />
             </FilterGroupToggle>
 
-            {/* ━━━ PARTICULAR / AGENCIA ━━━ */}
+            {/* ━━━ UBICACIÓN NORMALIZADA (DISTRITO → ZONA → SUBZONA) ━━━ */}
+            <FilterGroupToggle
+              id="ubicacion_cascada"
+              label="Ubicación (Cascada)"
+              isExpanded={expandedGroups.has('ubicacion_cascada')}
+              onToggle={toggleGroup}
+            >
+              <FilterLocationSection
+                districtId={filters.selected_district_id}
+                zoneId={filters.selected_zone_id}
+                subzoneId={filters.selected_subzone_id}
+                onDistrictChange={(id) =>
+                  handleChange({ selected_district_id: id })
+                }
+                onZoneChange={(id) =>
+                  handleChange({ selected_zone_id: id })
+                }
+                onSubzoneChange={(id) =>
+                  handleChange({ selected_subzone_id: id })
+                }
+              />
+            </FilterGroupToggle>
+
+            {/* ━━━ PARTICULAR / AGENCIA (MEJORADO) ━━━ */}
             <FilterGroupToggle
               id="anunciante"
               label="Tipo de Anunciante"
               isExpanded={expandedGroups.has('anunciante')}
               onToggle={toggleGroup}
             >
-              <FilterRadioGroup
-                name="advertiserType"
-                value={filters.advertiserType}
-                onChange={(value) =>
-                  handleChange({ advertiserType: value as 'all' | 'particular' | 'professional' })
+              <FilterAdvertiserSection
+                value={filters.advertiserFilter}
+                onChange={(advertiserFilter) =>
+                  handleChange({ advertiserFilter })
                 }
-                options={[
-                  { id: 'all', label: 'Todos' },
-                  { id: 'particular', label: 'Particular' },
-                  { id: 'professional', label: 'Agencia' },
-                ]}
+                agencies={agencies}
+                isLoadingAgencies={isLoadingAgencies}
               />
             </FilterGroupToggle>
 
