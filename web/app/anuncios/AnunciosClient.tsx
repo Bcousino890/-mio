@@ -109,9 +109,32 @@ export default function AnunciosClient() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
+  const [agencies, setAgencies] = useState<Array<{ name: string; listing_count: number; portal: string }>>([])
+  const [isLoadingAgencies, setIsLoadingAgencies] = useState(false)
 
   const combinedActive = hoverId ?? activeId
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Load agencies on mount
+  useEffect(() => {
+    const loadAgencies = async () => {
+      try {
+        setIsLoadingAgencies(true)
+        const response = await fetch('/api/listings/agencies')
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success && Array.isArray(result.data)) {
+            setAgencies(result.data)
+          }
+        }
+      } catch (err) {
+        console.error('Error loading agencies:', err)
+      } finally {
+        setIsLoadingAgencies(false)
+      }
+    }
+    loadAgencies()
+  }, [])
 
   // Debounce free-text search
   useEffect(() => {
@@ -368,6 +391,8 @@ export default function AnunciosClient() {
             onClear={handleClearFilters}
             isOpen={showFiltersPanel}
             onClose={() => setShowFiltersPanel(false)}
+            agencies={agencies}
+            isLoadingAgencies={isLoadingAgencies}
           />
         )}
 

@@ -11,10 +11,12 @@ export async function GET(request: NextRequest) {
 
   try {
     let query = `
-      SELECT DISTINCT
-        l.advertiser_name as name,
+      SELECT
+        COALESCE(l.advertiser_name, 'Unknown') as name,
         l.portal,
-        COUNT(*) as listing_count
+        COUNT(*) as listing_count,
+        -- Use advertiser_name + portal as composite id (URL-safe)
+        CONCAT(REPLACE(LOWER(COALESCE(l.advertiser_name, 'unknown')), ' ', '-'), '_', l.portal) as id
       FROM listings l
       WHERE l.is_active = true
         AND l.advertiser_type = 'professional'
@@ -37,9 +39,16 @@ export async function GET(request: NextRequest) {
 
     const result = await pool.query(query, params)
 
+    const agencies = result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      portal: row.portal,
+      listing_count: row.listing_count
+    }))
+
     return NextResponse.json({
       success: true,
-      data: result.rows,
+      data: agencies,
     })
   } catch (error) {
     console.error('Error fetching agencies:', error)
