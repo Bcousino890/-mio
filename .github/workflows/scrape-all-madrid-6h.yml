@@ -1,0 +1,195 @@
+name: Scrape All Madrid Zones (every 6 hours)
+
+# Scrape todos los distritos/zonas principales de Madrid cada 6 horas
+# para capturar nuevos anuncios. Utiliza SSH al VPS para escribir a
+# DATABASE_URL de producción (igual que scrape-salamanca-almagro.yml).
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 */6 * * *'  # 00:00, 06:00, 12:00, 18:00 UTC (01:00, 07:00, 13:00, 19:00 Madrid)
+
+jobs:
+  scrape-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 horas máximo (scraping en background en VPS, pero permitir tiempo)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Setup Node.js (runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (runner)
+        run: cd scraper && npm install
+
+      - name: Get list of zones to scrape
+        id: zones
+        run: |
+          # Obtener todas las zonas con is_scrape_target = true desde la BD del VPS
+          cat > /tmp/get-zones.sh << 'ZONES_SCRIPT'
+          #!/bin/bash
+          source ~/.bashrc 2>/dev/null
+          cd /opt/casafari
+          node << 'NODE_CODE'
+          const db = require('pg');
+          const pool = new db.Pool({
+            connectionString: process.env.DATABASE_URL
+          });
+          (async () => {
+            try {
+              const res = await pool.query(`
+                SELECT z.id, z.slug, z.idealista_slug, d.slug as district_slug
+                FROM zones z
+                JOIN districts d ON z.district_id = d.id
+                WHERE z.is_scrape_target = true
+                ORDER BY d.code, z.slug
+              `);
+              console.log(JSON.stringify(res.rows, null, 2));
+              await pool.end();
+            } catch (err) {
+              console.error('Error:', err.message);
+              process.exit(1);
+            }
+          })();
+          NODE_CODE
+          ZONES_SCRIPT
+
+          # Ejecutar en VPS para obtener lista
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash /tmp/get-zones.sh > /tmp/zones.json
+
+          cat /tmp/zones.json
+          echo "zones_json=$(cat /tmp/zones.json | jq -c .)" >> $GITHUB_OUTPUT
+
+      - name: Setup environment and kill previous scrapes
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            cd /opt/casafari
+
+            # Matar scrapes anteriores si hay
+            echo "⚠ Matando scrapes anteriores si existen..."
+            pkill -9 -f "scrape-zone.mjs" || true
+            rm -f /tmp/casafari-scrape-*.lock
+            sleep 2
+
+            # Crear .env.scraper con configuración Smartproxy
+            > .env.scraper
+            echo "PROXY_PROVIDER=smartproxy" >> .env.scraper
+            echo "SMARTPROXY_PROXY_HOST=eu.smartproxy.net" >> .env.scraper
+            echo "SMARTPROXY_PROXY_PORT=3120" >> .env.scraper
+            echo "SMARTPROXY_PROXY_USER=smart-b04nrjtamr8a_area-ES_city-MADRID" >> .env.scraper
+            echo "SMARTPROXY_PROXY_PASS=ZLOutsGkCC5kgmwS" >> .env.scraper
+            chmod 600 .env.scraper
+
+            mkdir -p scraper/output
+            echo "✅ Entorno preparado en VPS"
+          EOF
+
+      - name: Scrape all zones in background
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+
+            # Asegurar permisos
+            chmod +x scraper/scrape-zone.mjs 2>/dev/null || true
+
+            # Las zonas a scrapear (con ambas operaciones: rent + sale)
+            ZONES=(
+              "madrid/barrio-de-salamanca"
+              "madrid/chamberi"
+              "madrid/retiro"
+            )
+
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            LOG_DIR="scraper/output/batch-$TIMESTAMP"
+            mkdir -p "$LOG_DIR"
+
+            echo "▶ Iniciando scraping por lotes en background..."
+            echo "  Timestamp: $TIMESTAMP"
+            echo "  Zonas: ${ZONES[@]}"
+            echo "  Logs: $LOG_DIR/"
+
+            # Script de lotes que correrá en background
+            cat > /tmp/scrape-batch.sh << 'BATCH_SCRIPT'
+            #!/bin/bash
+            set -e
+
+            ZONES=("madrid/barrio-de-salamanca" "madrid/chamberi" "madrid/retiro")
+            TIMESTAMP="$1"
+            LOG_DIR="scraper/output/batch-$TIMESTAMP"
+
+            cd /opt/casafari
+            source .env.scraper
+
+            for ZONE in "${ZONES[@]}"; do
+              for OP in rent sale; do
+                echo "[$TIMESTAMP] Scraping $ZONE ($OP)..."
+                LOG_FILE="$LOG_DIR/${ZONE//\//-}_$OP.log"
+
+                node scraper/scrape-zone.mjs \
+                  --zone "$ZONE" \
+                  --op "$OP" \
+                  --max-pages 60 \
+                  >> "$LOG_FILE" 2>&1 || {
+                  echo "ERROR in $ZONE ($OP): check $LOG_FILE"
+                  continue
+                }
+
+                echo "✓ $ZONE ($OP) completado"
+              done
+            done
+
+            echo "✅ Batch de scraping completado en $LOG_DIR"
+            BATCH_SCRIPT
+
+            chmod +x /tmp/scrape-batch.sh
+
+            # Lanzar en background con nohup
+            nohup bash /tmp/scrape-batch.sh "$TIMESTAMP" \
+              > "$LOG_DIR/batch.log" 2>&1 < /dev/null &
+
+            PID=$!
+            disown
+
+            sleep 3
+            if kill -0 "$PID" 2>/dev/null; then
+              echo "▶ Scraping lanzado en background (PID $PID)"
+              echo "  Logs disponibles en: $LOG_DIR/ del VPS"
+            else
+              echo "✗ El proceso no arrancó"
+              exit 1
+            fi
+          EOF
+
+      - name: Summary
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════════╗"
+          echo "║ ✅ SCRAPING DE MADRID CADA 6 HORAS CONFIGURADO               ║"
+          echo "╚═══════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📅 CRONOGRAMA:"
+          echo "  • Frecuencia: Cada 6 horas (00:00, 06:00, 12:00, 18:00 UTC)"
+          echo "  • Zonas: Barrio de Salamanca + Chamberí + Retiro"
+          echo "  • Operaciones: Rent + Sale por zona"
+          echo "  • Entorno: VPS (production DATABASE_URL)"
+          echo ""
+          echo "📊 DETALLES DE EJECUCIÓN:"
+          echo "  • El scraping se lanza en background (nohup) en el VPS"
+          echo "  • Logs disponibles en /opt/casafari/scraper/output/batch-*/"
+          echo "  • Base de datos se actualiza en tiempo real"
+          echo "  • Nuevos anuncios visibles en https://crm.cremme.es/anuncios"
+          echo ""
