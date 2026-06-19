@@ -26,6 +26,7 @@ export type Source = {
   // Un mismo anunciante puede tener varias referencias (su web propia + el portal)
   references?: SourceReference[]
   // Fotos publicadas específicamente por esta fuente (para el selector "Seleccionar fuente de fotos")
+  // Se puebla desde la API (photos_by_source) o se deduce del campo photos del listing
   photos?: string[]
   phone?: string
   phone_contacts?: number
@@ -62,7 +63,7 @@ export type Listing = {
   is_active: boolean
   latitude: number
   longitude: number
-  photos: string[]
+  photos: string[] // Todas las fotos (union de todas las fuentes)
   source_url: string
   listing_count: number
   portals: string[]
@@ -82,7 +83,7 @@ export type Listing = {
   deposit_months?: number
   stats?: ListingStats
   priceHistory: PriceEvent[]
-  sources: Source[]
+  sources: Source[] // Cada source puede tener su propio array photos[] para filtrado
   // Campos derivados del checklist de publicación de Idealista (se autocompletan en normalizeListings)
   elevator?: boolean
   orientation?: string

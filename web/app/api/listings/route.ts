@@ -107,7 +107,9 @@ export async function GET(request: NextRequest) {
         EXTRACT(DAY FROM (now() - l.last_seen_at))::int as days_on_market,
         l.description,
         l.zone_raw,
-        (SELECT COUNT(*) FROM listing_changes lc WHERE lc.listing_id = l.id AND lc.change_type = 'price_down') as price_drops
+        (SELECT COUNT(*) FROM listing_changes lc WHERE lc.listing_id = l.id AND lc.change_type = 'price_down') as price_drops,
+        -- Backward compatible: empty object for now, will be populated when photos are tagged by source
+        jsonb_build_object(l.portal, COALESCE(l.photos, '[]'::jsonb)) as photos_by_source
       FROM listings l
       ${whereClause}
       ORDER BY ${SORT_CLAUSES[sort]}

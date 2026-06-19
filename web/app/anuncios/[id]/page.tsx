@@ -360,9 +360,29 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
     ? Math.round(((l.priceHistory[0].price - l.price) / l.priceHistory[0].price) * 100)
     : 0
 
-  const photoSources = l.sources.filter((s) => (s.photos?.length ?? 0) > 0)
-  const activePhotoSource = photoSources.find((s) => s.id === selectedSourceId) ?? photoSources[0]
-  const activePhotos = activePhotoSource?.photos ?? l.photos
+  // ── PHOTO SOURCE SELECTOR ──
+  // Selector de fotos por fuente (Idealista, Agencia, Todas)
+  // Estado: selectedSourceId = 'all' | specific source.id
+  // El selector se muestra solo si hay múltiples fuentes con fotos
+  //
+  // CÓMO EXTENDER ESTO:
+  // 1. API: En web/app/api/listings/route.ts, agregar una query que pueble
+  //    source.photos con fotos específicas de esa fuente (si la DB los divide por fuente)
+  // 2. O: En el componente, agregar lógica de mapeo: Idealista → fotos.filter(f => f.source === 'idealista')
+  // 3. Si hay fotos sin fuente asignada, van a "Todas"
+
+  const hasMultiplePhotoSources = l.sources.some((s) => (s.photos?.length ?? 0) > 0)
+  const photoSources = hasMultiplePhotoSources
+    ? l.sources.filter((s) => (s.photos?.length ?? 0) > 0)
+    : l.sources
+
+  const allPhotos = l.photos
+  const selectedPhotoSource = selectedSourceId === 'all' || !selectedSourceId
+    ? null
+    : photoSources.find((s) => s.id === selectedSourceId)
+  const activePhotos = selectedPhotoSource && selectedPhotoSource.photos?.length
+    ? selectedPhotoSource.photos
+    : allPhotos
 
   const avgPriceSqm = zoneComparables.length > 0
     ? Math.round(zoneComparables.reduce((sum, x) => sum + x.price_sqm, 0) / zoneComparables.length)
@@ -431,21 +451,37 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                 </div>
               ) : null}
 
-              {/* Selector de fuente de fotos */}
+              {/* Selector de fuente de fotos con tabs/pills - solo si hay múltiples fuentes */}
               {mediaTab === 'fotos' && photoSources.length > 1 && (
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-slate-500 whitespace-nowrap">Seleccionar fuente de fotos</label>
-                  <select
-                    value={activePhotoSource?.id}
-                    onChange={(e) => { setSelectedSourceId(e.target.value); setPhotoIdx(0) }}
-                    className="flex-1 text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {/* Opción "Todas" */}
+                  <button
+                    onClick={() => { setSelectedSourceId('all'); setPhotoIdx(0) }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all whitespace-nowrap flex-shrink-0 ${
+                      selectedSourceId === 'all' || !selectedSourceId
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'border-[var(--c-border-card)] text-slate-500 hover:text-slate-300 bg-[var(--c-surface)]'
+                    }`}
                   >
-                    {photoSources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.photos!.length})
-                      </option>
-                    ))}
-                  </select>
+                    Todas
+                    <span className="text-[10px] opacity-70">({allPhotos.length})</span>
+                  </button>
+
+                  {/* Opciones por fuente */}
+                  {photoSources.map((source) => (
+                    <button
+                      key={source.id}
+                      onClick={() => { setSelectedSourceId(source.id); setPhotoIdx(0) }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all whitespace-nowrap flex-shrink-0 ${
+                        selectedSourceId === source.id
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'border-[var(--c-border-card)] text-slate-500 hover:text-slate-300 bg-[var(--c-surface)]'
+                      }`}
+                    >
+                      <span>{source.name}</span>
+                      <span className="text-[10px] opacity-70">({source.photos?.length ?? 0})</span>
+                    </button>
+                  ))}
                 </div>
               )}
 
