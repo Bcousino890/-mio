@@ -1,0 +1,224 @@
+casafari-mio/
+│
+├─ DOCUMENTACIÓN PRINCIPAL (7 archivos)
+│  ├─ QUICK_START.sh                    [EJECUTAR PRIMERO] Automatiza todo
+│  ├─ QUICK_REFERENCE.md                 Referencia rápida (10-15 min)
+│  ├─ DISTRICT_ZONE_STRUCTURE_README.md  Overview visual (20-25 min)
+│  ├─ IMPLEMENTATION_GUIDE.md            Paso a paso (30 min + ejecución)
+│  ├─ NORMALIZATION_SUMMARY.md           Resumen ejecutivo (15 min)
+│  ├─ FILES_INDEX.md                     Índice de todos los archivos
+│  └─ DELIVERY_CHECKLIST.md              Validación de entrega
+│
+├─ db/
+│  ├─ migrations/
+│  │  ├─ 0001_extensions.sql            [Existente]
+│  │  ├─ 0002_zones.sql                 [Existente, vieja estructura]
+│  │  ├─ ...
+│  │  ├─ 0018_add_agency_photos_columns.sql [Existente]
+│  │  └─ 0019_normalized_district_zone_subzone.sql [NUEVO] ← EJECUTAR ESTA
+│  │
+│  ├─ NORMALIZED_ZONES_ARCHITECTURE.md  [NUEVO] Arquitectura detallada
+│  ├─ queries-example.sql               [NUEVO] 12 queries + migración
+│  ├─ test-zone-resolution.mjs          [NUEVO] Tests del resolver
+│  └─ ... (otros archivos existentes)
+│
+├─ scraper/
+│  ├─ lib/
+│  │  ├─ fetch.mjs                      [Existente]
+│  │  ├─ parse.mjs                      [Existente]
+│  │  ├─ to-listing.mjs                 [Existente]
+│  │  ├─ crm-photo-extractor.mjs        [Existente]
+│  │  └─ zone-resolver.mjs              [NUEVO] ← Resolver de zonas
+│  │
+│  ├─ scrape-zone.mjs                   [ACTUALIZAR] Ver SCRAPER_INTEGRATION.md
+│  ├─ SCRAPER_INTEGRATION.md            [NUEVO] Cómo integrar resolver
+│  └─ ... (otros scripts existentes)
+│
+└─ ... (otros directorios del proyecto)
+
+================================================================================
+RESUMEN DE CAMBIOS
+================================================================================
+
+NUEVOS ARCHIVOS (12 total):
+  RAÍZ (7):
+    1. QUICK_START.sh                          [script bash]
+    2. QUICK_REFERENCE.md                      [documentación]
+    3. DISTRICT_ZONE_STRUCTURE_README.md       [documentación]
+    4. IMPLEMENTATION_GUIDE.md                 [documentación]
+    5. NORMALIZATION_SUMMARY.md                [documentación]
+    6. FILES_INDEX.md                          [documentación]
+    7. DELIVERY_CHECKLIST.md                   [documentación]
+
+  db/ (4):
+    8. db/migrations/0019_normalized_district_zone_subzone.sql
+    9. db/NORMALIZED_ZONES_ARCHITECTURE.md
+    10. db/queries-example.sql
+    11. db/test-zone-resolution.mjs
+
+  scraper/ (1):
+    12. scraper/lib/zone-resolver.mjs
+
+ARCHIVOS MODIFICADOS (1):
+    scraper/SCRAPER_INTEGRATION.md (instrucciones para actualizar scrape-zone.mjs)
+
+ARCHIVOS SIN CAMBIOS:
+    - Todos los demás (backward compatible 100%)
+
+================================================================================
+CÓMO USAR ESTOS ARCHIVOS
+================================================================================
+
+PASO 1: Entender
+  Leer: QUICK_REFERENCE.md (10 min)
+
+PASO 2: Preparar
+  Revisar: DISTRICT_ZONE_STRUCTURE_README.md (20 min)
+
+PASO 3: Implementar
+  Ejecutar: ./QUICK_START.sh (2 min)
+
+PASO 4: Integrar Scraper
+  Seguir: scraper/SCRAPER_INTEGRATION.md (15 min)
+
+PASO 5: Validar
+  Ejecutar: node db/test-zone-resolution.mjs (2 min)
+
+PASO 6: Scrapear
+  Ejecutar: node scraper/scrape-zone.mjs --zone ... --op rent
+
+================================================================================
+ÍNDICE POR PROPÓSITO
+================================================================================
+
+¿ENTENDER LA ESTRUCTURA?
+  → DISTRICT_ZONE_STRUCTURE_README.md
+
+¿IMPLEMENTAR RÁPIDO?
+  → QUICK_START.sh + QUICK_REFERENCE.md
+
+¿VER QUERIES DE EJEMPLO?
+  → db/queries-example.sql
+
+¿ENTENDER DECISIONES DE DISEÑO?
+  → db/NORMALIZED_ZONES_ARCHITECTURE.md
+
+¿INTEGRAR EN SCRAPER?
+  → scraper/SCRAPER_INTEGRATION.md
+
+¿TROUBLESHOOTING?
+  → IMPLEMENTATION_GUIDE.md (sección "Troubleshooting")
+
+¿REVISAR STATS?
+  → db/queries-example.sql (sección 12)
+
+¿MIGRAR DATOS HISTÓRICOS?
+  → db/queries-example.sql (sección 10)
+
+================================================================================
+LÍNEAS DE CÓDIGO AGREGADAS
+================================================================================
+
+SQL:
+  db/migrations/0019_normalized_district_zone_subzone.sql : ~400 líneas
+  db/queries-example.sql                                  : ~350 líneas
+  TOTAL SQL                                               : ~750 líneas
+
+JavaScript:
+  scraper/lib/zone-resolver.mjs                           : ~130 líneas
+  db/test-zone-resolution.mjs                             : ~150 líneas
+  TOTAL JavaScript                                        : ~280 líneas
+
+Markdown (documentación):
+  6 archivos principales (QUICK_START + QUICK_REFERENCE + etc.)
+  2 archivos en db/
+  1 archivo en scraper/
+  TOTAL Markdown                                          : ~2.000 líneas
+
+================================================================================
+CHECKLIST DE IMPLEMENTACIÓN
+================================================================================
+
+PREPARACIÓN (5 min):
+  [ ] Leer QUICK_REFERENCE.md
+  [ ] Revisar DISTRICT_ZONE_STRUCTURE_README.md
+  [ ] Validar que DATABASE_URL está configurado
+
+BD (5 min):
+  [ ] chmod +x QUICK_START.sh
+  [ ] ./QUICK_START.sh
+  [ ] Verificar que dice "RESULTADO: X passed, 0 failed"
+
+SCRAPER (15 min):
+  [ ] Leer scraper/SCRAPER_INTEGRATION.md
+  [ ] Copiar código en scrape-zone.mjs (5 líneas)
+  [ ] Importar zone-resolver.mjs
+  [ ] Crear cache
+  [ ] Pasar IDs al INSERT
+
+VALIDACIÓN (5 min):
+  [ ] node db/test-zone-resolution.mjs
+  [ ] node scraper/scrape-zone.mjs --zone madrid/barrio-de-salamanca --dry-run --limit 3
+
+PRODUCCIÓN (variable):
+  [ ] Scrapear zona pequeña
+  [ ] Validar district_id, zone_id, subzone_id asignados
+  [ ] Expandir a otras zonas
+
+TOTAL TIEMPO: ~30 minutos
+
+================================================================================
+SOPORTE RÁPIDO
+================================================================================
+
+P: ¿Por dónde empiezo?
+R: Ejecuta ./QUICK_START.sh y sigue las instrucciones
+
+P: ¿Qué es lo más importante?
+R: Migración SQL (0019_*.sql) + zone-resolver.mjs + SCRAPER_INTEGRATION.md
+
+P: ¿Cuánto tiempo toma?
+R: 30 minutos (15 min lectura, 10 min ejecución, 5 min integración)
+
+P: ¿Qué pasa si algo falla?
+R: Ver IMPLEMENTATION_GUIDE.md sección "Troubleshooting"
+
+P: ¿Es retrocompatible?
+R: 100% compatible. Tabla vieja "zones" se mantiene en paralelo.
+
+P: ¿Debo ejecutar TODOS los archivos?
+R: No. Solo:
+   - db/migrations/0019_*.sql (obligatorio)
+   - zone-resolver.mjs (copiar)
+   - Integrar scraper (5 líneas de código)
+
+================================================================================
+REFERENCIAS CRUZADAS
+================================================================================
+
+zone-resolver.mjs
+  ← usa: db/test-zone-resolution.mjs
+  ← integrar en: scraper/scrape-zone.mjs (ver SCRAPER_INTEGRATION.md)
+
+db/test-zone-resolution.mjs
+  ← valida: zone-resolver.mjs
+  ← requiere: db/migrations/0019_*.sql ejecutada
+
+db/queries-example.sql
+  ← usa: db/migrations/0019_*.sql (tablas creadas)
+  ← incluye: sección 10 (migración de datos históricos)
+
+scraper/SCRAPER_INTEGRATION.md
+  ← cómo usar: zone-resolver.mjs
+  ← donde integrar: scraper/scrape-zone.mjs
+
+IMPLEMENTATION_GUIDE.md
+  ← cómo ejecutar: db/migrations/0019_*.sql
+  ← troubleshooting: si algo falla
+
+================================================================================
+FIN DE ESTRUCTURA
+================================================================================
+
+Última actualización: 2026-06-19
+Status: Todos los archivos listos
