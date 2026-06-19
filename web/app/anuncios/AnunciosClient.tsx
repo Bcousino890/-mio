@@ -3,9 +3,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
+import FilterPanel from '@/components/filters/FilterPanel'
 import { mockListings } from '@/lib/mock-listings'
-import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search, ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
 import type { Listing } from '@/lib/mock-listings'
+import type { FilterState } from '@/components/filters/FilterPanel'
 
 const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })
 
@@ -21,19 +23,6 @@ const SORT_LABELS: Record<SortKey, string> = {
 }
 
 const PAGE_SIZE = 30
-
-type RangeFilters = {
-  priceMin: string
-  priceMax: string
-  sqmMin: string
-  sqmMax: string
-  bedroomsMin: string
-  bathroomsMin: string
-}
-
-const EMPTY_RANGES: RangeFilters = {
-  priceMin: '', priceMax: '', sqmMin: '', sqmMax: '', bedroomsMin: '', bathroomsMin: '',
-}
 
 function transformRow(row: any): Listing {
   const portal = row.portal || 'idealista'
@@ -96,8 +85,27 @@ export default function AnunciosClient() {
   const [showFiltersPanel, setShowFiltersPanel] = useState(false)
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
-  const [ranges, setRanges] = useState<RangeFilters>(EMPTY_RANGES)
-  const [draftRanges, setDraftRanges] = useState<RangeFilters>(EMPTY_RANGES)
+  const [filters, setFilters] = useState<FilterState>({
+    operation: 'all',
+    advertiserType: 'all',
+    propertyTypes: [],
+    price: { min: null, max: null },
+    squareMeters: { min: null, max: null },
+    pricePerSqm: { min: null, max: null },
+    bedrooms: { min: null, max: null },
+    bathrooms: { min: null, max: null },
+    yearBuilt: { min: null, max: null },
+    daysOnMarket: { min: null, max: null },
+    parcelSize: { min: null, max: null },
+    floor: null,
+    view: null,
+    orientation: null,
+    furnished: null,
+    energyRating: null,
+    characteristics: [],
+    location: null,
+    distance: null,
+  })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -116,9 +124,24 @@ export default function AnunciosClient() {
   }, [searchInput])
 
   // Reset to page 1 whenever a filter (other than page itself) changes
-  useEffect(() => { setPage(1) }, [operation, advertiser, onlyWithDrops, sortBy, ranges])
+  useEffect(() => { setPage(1) }, [operation, advertiser, onlyWithDrops, sortBy, filters])
 
-  const activeFilterCount = Object.values(ranges).filter(Boolean).length
+  const getActiveFilterCount = (): number => {
+    let count = 0
+    if (filters.price.min !== null || filters.price.max !== null) count++
+    if (filters.squareMeters.min !== null || filters.squareMeters.max !== null) count++
+    if (filters.bedrooms.min !== null) count++
+    if (filters.bathrooms.min !== null) count++
+    if (filters.location) count++
+    if (filters.characteristics.length > 0) count++
+    if (filters.propertyTypes.length > 0) count++
+    if (filters.furnished !== null) count++
+    if (filters.yearBuilt.min !== null || filters.yearBuilt.max !== null) count++
+    if (filters.energyRating) count++
+    return count
+  }
+
+  const activeFilterCount = getActiveFilterCount()
 
   // Fetch listings whenever filters/sort/page change
   useEffect(() => {
@@ -134,12 +157,22 @@ export default function AnunciosClient() {
         if (advertiser !== 'all') params.set('advertiser_type', advertiser)
         if (onlyWithDrops) params.set('only_drops', 'true')
         if (search) params.set('q', search)
-        if (ranges.priceMin) params.set('price_min', ranges.priceMin)
-        if (ranges.priceMax) params.set('price_max', ranges.priceMax)
-        if (ranges.sqmMin) params.set('sqm_min', ranges.sqmMin)
-        if (ranges.sqmMax) params.set('sqm_max', ranges.sqmMax)
-        if (ranges.bedroomsMin) params.set('bedrooms_min', ranges.bedroomsMin)
-        if (ranges.bathroomsMin) params.set('bathrooms_min', ranges.bathroomsMin)
+        // Advanced filters
+        if (filters.price.min !== null) params.set('price_min', filters.price.min.toString())
+        if (filters.price.max !== null) params.set('price_max', filters.price.max.toString())
+        if (filters.squareMeters.min !== null) params.set('sqm_min', filters.squareMeters.min.toString())
+        if (filters.squareMeters.max !== null) params.set('sqm_max', filters.squareMeters.max.toString())
+        if (filters.bedrooms.min !== null) params.set('bedrooms_min', filters.bedrooms.min.toString())
+        if (filters.bathrooms.min !== null) params.set('bathrooms_min', filters.bathrooms.min.toString())
+        if (filters.location) params.set('location', filters.location)
+        if (filters.characteristics.length > 0) params.set('characteristics', filters.characteristics.join(','))
+        if (filters.propertyTypes.length > 0) params.set('property_type', filters.propertyTypes.join(','))
+        if (filters.furnished !== null) params.set('furnished', filters.furnished ? 'true' : 'false')
+        if (filters.yearBuilt.min !== null) params.set('year_built_min', filters.yearBuilt.min.toString())
+        if (filters.yearBuilt.max !== null) params.set('year_built_max', filters.yearBuilt.max.toString())
+        if (filters.energyRating) params.set('energy_rating', filters.energyRating)
+        if (filters.view) params.set('view', filters.view)
+        if (filters.orientation) params.set('orientation', filters.orientation)
 
         const response = await fetch(`/api/listings?${params.toString()}`, { signal: controller.signal })
         if (!response.ok) throw new Error('Failed to fetch listings')
@@ -163,15 +196,40 @@ export default function AnunciosClient() {
     }
     fetchListings()
     return () => controller.abort()
-  }, [page, sortBy, operation, advertiser, onlyWithDrops, search, ranges])
+  }, [page, sortBy, operation, advertiser, onlyWithDrops, search, filters])
 
   const openFiltersPanel = useCallback(() => {
-    setDraftRanges(ranges)
     setShowFiltersPanel((v) => !v)
-  }, [ranges])
+  }, [])
 
-  const applyFilters = () => { setRanges(draftRanges); setShowFiltersPanel(false) }
-  const clearFilters = () => { setDraftRanges(EMPTY_RANGES); setRanges(EMPTY_RANGES); setShowFiltersPanel(false) }
+  const handleApplyFilters = () => {
+    setShowFiltersPanel(false)
+  }
+
+  const handleClearFilters = () => {
+    setFilters({
+      operation: 'all',
+      advertiserType: 'all',
+      propertyTypes: [],
+      price: { min: null, max: null },
+      squareMeters: { min: null, max: null },
+      pricePerSqm: { min: null, max: null },
+      bedrooms: { min: null, max: null },
+      bathrooms: { min: null, max: null },
+      yearBuilt: { min: null, max: null },
+      daysOnMarket: { min: null, max: null },
+      parcelSize: { min: null, max: null },
+      floor: null,
+      view: null,
+      orientation: null,
+      furnished: null,
+      energyRating: null,
+      characteristics: [],
+      location: null,
+      distance: null,
+    })
+    setShowFiltersPanel(false)
+  }
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
@@ -242,117 +300,22 @@ export default function AnunciosClient() {
           Bajadas
         </button>
 
-        {/* Más filtros */}
-        <div className="relative">
-          <button
-            onClick={openFiltersPanel}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-              activeFilterCount > 0
-                ? 'bg-blue-950/60 border-blue-800/40 text-blue-400'
-                : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-600 hover:text-slate-400'
-            }`}
-          >
-            Más filtros
-            {activeFilterCount > 0 && (
-              <span className="text-[10px] bg-blue-600 text-white rounded-full w-4 h-4 flex items-center justify-center">{activeFilterCount}</span>
-            )}
-            <ChevronDown size={11} className={`transition-transform ${showFiltersPanel ? 'rotate-180' : ''}`} />
-          </button>
-          {showFiltersPanel && (
-            <div className="absolute left-0 top-full mt-1.5 z-50 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl shadow-xl shadow-black/40 p-4 w-80">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold text-slate-300">Filtros avanzados</h3>
-                <button onClick={() => setShowFiltersPanel(false)} className="text-slate-500 hover:text-slate-300">
-                  <X size={14} />
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[11px] text-slate-500 block mb-1">Precio (€)</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      placeholder="Mín"
-                      value={draftRanges.priceMin}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, priceMin: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    />
-                    <span className="text-slate-600">—</span>
-                    <input
-                      type="number"
-                      placeholder="Máx"
-                      value={draftRanges.priceMax}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, priceMax: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-slate-500 block mb-1">Superficie (m²)</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      placeholder="Mín"
-                      value={draftRanges.sqmMin}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, sqmMin: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    />
-                    <span className="text-slate-600">—</span>
-                    <input
-                      type="number"
-                      placeholder="Máx"
-                      value={draftRanges.sqmMax}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, sqmMax: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] text-slate-500 block mb-1">Habitaciones mín.</label>
-                    <select
-                      value={draftRanges.bedroomsMin}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, bedroomsMin: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    >
-                      <option value="">Cualquiera</option>
-                      {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}+</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-500 block mb-1">Baños mín.</label>
-                    <select
-                      value={draftRanges.bathroomsMin}
-                      onChange={(e) => setDraftRanges((r) => ({ ...r, bathroomsMin: e.target.value }))}
-                      className="w-full text-xs bg-[var(--c-surface)] border border-[var(--c-border-card)] rounded-lg px-2.5 py-1.5 text-slate-300"
-                    >
-                      <option value="">Cualquiera</option>
-                      {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}+</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 mt-4">
-                <button
-                  onClick={clearFilters}
-                  className="flex-1 py-1.5 rounded-lg text-xs font-medium text-slate-400 border border-[var(--c-border-card)] hover:text-slate-200 transition-colors"
-                >
-                  Limpiar
-                </button>
-                <button
-                  onClick={applyFilters}
-                  className="flex-1 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-                >
-                  Aplicar
-                </button>
-              </div>
-            </div>
+        {/* Más filtros button */}
+        <button
+          onClick={openFiltersPanel}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+            activeFilterCount > 0
+              ? 'bg-blue-950/60 border-blue-800/40 text-blue-400'
+              : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          Más filtros
+          {activeFilterCount > 0 && (
+            <span className="text-[10px] bg-blue-600 text-white rounded-full w-4 h-4 flex items-center justify-center">
+              {activeFilterCount}
+            </span>
           )}
-        </div>
+        </button>
 
         {/* Sort dropdown */}
         <div className="relative ml-auto">
@@ -396,6 +359,17 @@ export default function AnunciosClient() {
 
       {/* ── Main content ── */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Desktop Filter Panel Sidebar */}
+        {showFiltersPanel && (
+          <FilterPanel
+            filters={filters}
+            onFilterChange={setFilters}
+            onApply={handleApplyFilters}
+            onClear={handleClearFilters}
+            isOpen={showFiltersPanel}
+            onClose={() => setShowFiltersPanel(false)}
+          />
+        )}
 
         {/* Property list */}
         <div className={`flex flex-col overflow-hidden transition-all duration-300 ${showMap ? 'w-[52%]' : 'w-full'}`}>

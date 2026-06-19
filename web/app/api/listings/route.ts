@@ -29,6 +29,20 @@ export async function GET(request: NextRequest) {
   const bedroomsMin = sp.get('bedrooms_min') ? Number(sp.get('bedrooms_min')) : null
   const bathroomsMin = sp.get('bathrooms_min') ? Number(sp.get('bathrooms_min')) : null
   const onlyDrops = sp.get('only_drops') === 'true'
+
+  // Advanced filter parameters
+  const location = sp.get('location')?.trim()
+  const characteristics = sp.get('characteristics')?.split(',').filter(Boolean) // comma-separated
+  const propertyType = sp.get('property_type')?.split(',').filter(Boolean) // comma-separated
+  const furnished = sp.get('furnished') // 'true' | 'false'
+  const view = sp.get('view') // e.g., 'sea', 'mountain', 'city'
+  const orientation = sp.get('orientation') // e.g., 'north', 'south', 'east', 'west'
+  const energyRating = sp.get('energy_rating') // e.g., 'A', 'B', 'C', 'D', 'E'
+  const yearBuiltMin = sp.get('year_built_min') ? Number(sp.get('year_built_min')) : null
+  const yearBuiltMax = sp.get('year_built_max') ? Number(sp.get('year_built_max')) : null
+  const pricePerSqmMin = sp.get('price_per_sqm_min') ? Number(sp.get('price_per_sqm_min')) : null
+  const pricePerSqmMax = sp.get('price_per_sqm_max') ? Number(sp.get('price_per_sqm_max')) : null
+
   const sortParam = sp.get('sort')
   const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'recent'
 
@@ -72,6 +86,61 @@ export async function GET(request: NextRequest) {
     if (onlyDrops) {
       conditions.push(`EXISTS (SELECT 1 FROM listing_changes lc WHERE lc.listing_id = l.id AND lc.change_type = 'price_down')`)
     }
+
+    // Advanced filter conditions
+    // TODO: Implement location search with fuzzy matching or autocomplete
+    // if (location) {
+    //   const locationTerm = addParam(`%${location}%`)
+    //   conditions.push(`(l.zone_raw ILIKE ${locationTerm} OR l.address ILIKE ${locationTerm})`)
+    // }
+
+    // TODO: Implement characteristics filtering (stored as JSONB array in l.features)
+    // Characteristics should be checked if all requested characteristics are present
+    // if (characteristics && characteristics.length > 0) {
+    //   const charConditions = characteristics.map(c => `l.features @> '["${c}"]'::jsonb`).join(' AND ')
+    //   conditions.push(`(${charConditions})`)
+    // }
+
+    // TODO: Implement property type filtering
+    // This may require a property_type column or derived from other fields
+    // if (propertyType && propertyType.length > 0) {
+    //   conditions.push(`l.property_type IN (${propertyType.map(t => addParam(t)).join(',')})`)
+    // }
+
+    // TODO: Implement furnished status filtering
+    // if (furnished) {
+    //   conditions.push(`l.furnished = ${addParam(furnished === 'true')}`)
+    // }
+
+    // TODO: Implement year built filtering
+    // if (yearBuiltMin !== null) {
+    //   conditions.push(`l.year_built >= ${addParam(yearBuiltMin)}`)
+    // }
+    // if (yearBuiltMax !== null) {
+    //   conditions.push(`l.year_built <= ${addParam(yearBuiltMax)}`)
+    // }
+
+    // TODO: Implement price per sqm filtering
+    // if (pricePerSqmMin !== null || pricePerSqmMax !== null) {
+    //   const priceSqm = `(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END)`
+    //   if (pricePerSqmMin !== null) conditions.push(`${priceSqm} >= ${addParam(pricePerSqmMin)}`)
+    //   if (pricePerSqmMax !== null) conditions.push(`${priceSqm} <= ${addParam(pricePerSqmMax)}`)
+    // }
+
+    // TODO: Implement view filtering
+    // if (view) {
+    //   conditions.push(`l.view = ${addParam(view)}`)
+    // }
+
+    // TODO: Implement orientation filtering
+    // if (orientation) {
+    //   conditions.push(`l.orientation = ${addParam(orientation)}`)
+    // }
+
+    // TODO: Implement energy rating filtering
+    // if (energyRating) {
+    //   conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
+    // }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`
 
