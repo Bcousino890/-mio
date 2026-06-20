@@ -14,6 +14,7 @@ import {
   Sun,
   Moon,
   Globe,
+  MapPinned,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
 
@@ -61,11 +62,21 @@ const modules = [
     icon: Globe,
     description: 'Mercado inmobiliario · Chile',
   },
+  {
+    href: '/chile/catastro',
+    label: 'Catastro Chile',
+    icon: MapPinned,
+    description: 'Mapa catastral + Rol SII real',
+  },
 ]
 
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
+
+  const activeHref = modules
+    .filter((m) => pathname === m.href || pathname.startsWith(m.href + '/'))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href
 
   return (
     <aside
@@ -92,7 +103,7 @@ export default function Sidebar() {
         </p>
         <ul className="space-y-0.5">
           {modules.map(({ href, label, icon: Icon, description, badge }) => {
-            const active = pathname === href || pathname.startsWith(href + '/')
+            const active = href === activeHref
             return (
               <li key={href}>
                 <Link
