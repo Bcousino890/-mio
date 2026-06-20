@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
+import Link from 'next/link'
 import PageShell from '@/components/PageShell'
-import { Globe, Star } from 'lucide-react'
+import { Globe, Star, MapPinned } from 'lucide-react'
 import { CHILE_COMUNAS, CHILE_PRIORITY_COMUNAS, CHILE_REGIONS, groupByRegion } from '@/lib/chile-zones'
 
 export default function ChilePage() {
@@ -10,6 +11,15 @@ export default function ChilePage() {
     <PageShell
       title="Chile"
       subtitle={`Alcance de cobertura · ${CHILE_COMUNAS.length} comunas · ${CHILE_PRIORITY_COMUNAS.length} prioritarias para scraping`}
+      action={
+        <Link
+          href="/chile/catastro"
+          className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+        >
+          <MapPinned size={13} />
+          Ver mapa de catastro
+        </Link>
+      }
     >
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
