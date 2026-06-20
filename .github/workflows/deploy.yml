@@ -57,50 +57,18 @@ jobs:
             ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/"
 
       # 4. Ejecutar el deploy en el VPS
+      #
+      # Importante: NO se usa `bash -s << EOF` (heredoc por stdin). Si algún
+      # comando dentro del script remoto hereda stdin (p.ej. `docker compose
+      # exec`, incluso con `-T`, en un bucle como el de post-deploy.sh), puede
+      # robarle bytes al pipe SSH antes de que el propio `bash -s` los lea,
+      # descartando en silencio el resto del script sin ningún error — así
+      # se perdía el bloque de deploy de web-cousino tras el deploy del CRM.
+      # Al ejecutar un archivo real por ruta (sincronizado por rsync), bash
+      # lo lee con su propio open(), no comparte el pipe de stdin con sus
+      # hijos. `-n` además redirige stdin del cliente ssh desde /dev/null.
       - name: Deploy
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
-            set -e
-            cd /opt/casafari
-
-            # scraper/output no está en git (se genera en runtime); el rsync
-            # --delete del paso anterior ya lo excluye, pero si por lo que
-            # sea no existe (primer deploy, o quedó borrado de una corrida
-            # vieja antes del exclude) hay que recrearlo o un scrape en
-            # curso muere con ENOENT al escribir su fail-log.
-            mkdir -p scraper/output
-
-            # .env: si no existe lo crea desde la plantilla; si existe pero le
-            # falta POSTGRES_PASSWORD (p.ej. de un intento previo fallido), lo completa.
-            if [ ! -f .env ]; then
-              cp .env.example .env
-              echo "📄 .env creado desde .env.example"
-            fi
-            if ! grep -q '^POSTGRES_PASSWORD=..*' .env; then
-              if grep -q '^POSTGRES_PASSWORD=' .env; then
-                sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
-              else
-                echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
-              fi
-              echo "🔑 POSTGRES_PASSWORD generado aleatoriamente"
-            fi
-
-            # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
-            if docker ps --format '{{.Names}}' | grep -q casafari-app; then
-              echo "▶ Deploy incremental (app ya existe)"
-              bash infra/deploy.sh
-            else
-              echo "▶ Primera instalación: bootstrap completo"
-              bash infra/bootstrap.sh
-            fi
-
-            # Sitio público web-cousino (independiente, sin DB).
-            if docker ps --format '{{.Names}}' | grep -q casafari-cousino-app; then
-              echo "▶ Deploy incremental web-cousino (app ya existe)"
-              bash infra/deploy-cousino.sh
-            else
-              echo "▶ Primera instalación web-cousino: bootstrap completo"
-              bash infra/bootstrap-cousino.sh
-            fi
-          EOF
+          ssh -n -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "bash /opt/casafari/infra/remote-deploy.sh"
