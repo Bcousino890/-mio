@@ -6,6 +6,12 @@ name: Diag sii-upload (lee logs reales del VPS)
 # del VPS para capturar el error real (que nginx/el navegador no muestran).
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
+      - claude/lucid-mendel-bngty2
+    paths:
+      - '.github/.diag-sii-upload-trigger'
 
 jobs:
   diag:
