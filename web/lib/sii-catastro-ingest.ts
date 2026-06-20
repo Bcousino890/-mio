@@ -493,6 +493,14 @@ export async function ingestSiiCatastroComuna({
   if (!dbUrl) return { ok: false, counts, error: 'DATABASE_URL no configurada' }
 
   const client = new Client({ connectionString: dbUrl })
+  // Sin este listener, un error de conexión (socket reseteado, etc.) que
+  // llegue mientras no hay query pendiente se emite como 'error' en el
+  // Client; sin handler, Node lo relanza como excepción no capturada y
+  // mata TODO el proceso (no solo esta request) — eso explica un 502 con
+  // cero bytes de respuesta (el proceso entero muere a mitad de la subida).
+  client.on('error', (err) => {
+    console.error(`Error de conexión PG en ingesta SII (comuna ${comunaCode}):`, err)
+  })
 
   try {
     await client.connect()

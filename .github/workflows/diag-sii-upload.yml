@@ -86,11 +86,23 @@ jobs:
             docker logs casafari-app --tail 40 2>&1
 
             echo ""
-            echo "── nginx: ¿hay límites de body size o timeouts configurados? ─"
-            docker exec casafari-nginx cat /etc/nginx/conf.d/*.conf 2>&1 | grep -i -E "client_max_body_size|proxy_read_timeout|proxy_connect_timeout|proxy_send_timeout" || echo "  (no se encontraron directivas de límite/timeout, o el contenedor se llama distinto)"
-            echo ""
-            echo "Contenedores nginx/proxy disponibles (por si el nombre no es casafari-nginx):"
-            docker ps --format "{{.Names}}" | grep -i -E "nginx|proxy|caddy|traefik" || echo "  (ninguno con esos nombres)"
+            echo "── nginx real (autodetectado por puerto publicado 80, igual que infra/deploy.sh) ─"
+            SHARED_NGINX="$(docker ps --filter "publish=80" --format '{{.Names}}' | head -1)"
+            echo "Contenedor nginx detectado: ${SHARED_NGINX:-<ninguno>}"
+            if [ -n "$SHARED_NGINX" ]; then
+              echo ""
+              echo "Directivas de límite/timeout en casafari.conf:"
+              docker exec "$SHARED_NGINX" grep -i -E "client_max_body_size|proxy_read_timeout|proxy_connect_timeout|proxy_send_timeout" /etc/nginx/conf.d/casafari.conf 2>&1 || echo "  (no encontradas, o casafari.conf no existe en el contenedor)"
+              echo ""
+              echo "Contenido completo de casafari.conf:"
+              docker exec "$SHARED_NGINX" cat /etc/nginx/conf.d/casafari.conf 2>&1 || echo "  (no se pudo leer casafari.conf)"
+              echo ""
+              echo "¿Algún otro conf.d declara server_name crm.cremme.es (vhost duplicado/conflicto)? ─"
+              docker exec "$SHARED_NGINX" sh -c 'grep -l "crm.cremme.es" /etc/nginx/conf.d/*.conf 2>/dev/null' || echo "  (solo aparece en un archivo, o no se encontró ninguno)"
+              echo ""
+              echo "client_max_body_size a nivel global (nginx.conf / conf.d), por si hay un default más chico fuera de la location:"
+              docker exec "$SHARED_NGINX" sh -c 'grep -rn "client_max_body_size" /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf 2>/dev/null' || echo "  (no se encontró ninguna directiva client_max_body_size en ningún archivo)"
+            fi
 
             rm -f /tmp/test-sii.txt
           EOF
