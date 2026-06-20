@@ -5,12 +5,14 @@ import nextDynamicImport from 'next/dynamic'
 import PageShell from '@/components/PageShell'
 import { MapPinned } from 'lucide-react'
 import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
+import SiiRolSearchPanel from '@/components/chile/SiiRolSearchPanel'
 
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
 
 const ZONES = [
-  { id: 'vitacura', label: 'Vitacura', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura' },
-  { id: 'zapallar', label: 'Zapallar', center: { lat: -32.5538, lng: -71.4633 }, comuna: 'Zapallar' },
+  { id: 'vitacura', label: 'Vitacura', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura', siiComunaCode: null },
+  { id: 'zapallar', label: 'Zapallar', center: { lat: -32.5538, lng: -71.4633 }, comuna: 'Zapallar', siiComunaCode: null },
+  { id: 'las-condes', label: 'Las Condes', center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes', siiComunaCode: '15108' },
 ] as const
 
 export default function CatastroPage() {
@@ -61,15 +63,20 @@ export default function CatastroPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-hidden h-[560px]">
-        <CadastreMap parcels={parcels} pins={pins} center={zone.center} zoom={17} />
+      <div className={zone.siiComunaCode ? 'grid grid-cols-3 gap-4' : ''}>
+        <div className={`rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-hidden h-[560px] ${zone.siiComunaCode ? 'col-span-2' : ''}`}>
+          <CadastreMap parcels={parcels} pins={pins} center={zone.center} zoom={17} />
+        </div>
+        {zone.siiComunaCode && <SiiRolSearchPanel comunaCode={zone.siiComunaCode} comunaLabel={zone.label} />}
       </div>
 
       <div className="mt-4 flex items-center gap-2 text-xs text-slate-600">
         <MapPinned size={12} className="text-slate-700" />
         <span>
-          Datos de demostración (<code className="font-mono">web/lib/mock-chile-cadastre.ts</code>) — misma forma que producirán
-          la ingesta de IDE Chile y el scraper de Portalinmobiliario una vez conectados a la base de datos en vivo.
+          Polígonos y pines: datos de demostración (<code className="font-mono">web/lib/mock-chile-cadastre.ts</code>) — misma
+          forma que producirán la ingesta de IDE Chile y el scraper de Portalinmobiliario una vez conectados a la base de
+          datos en vivo.
+          {zone.siiComunaCode && ' El buscador de Rol SII a la derecha sí usa datos reales ya ingeridos para esta comuna.'}
         </span>
       </div>
     </PageShell>
