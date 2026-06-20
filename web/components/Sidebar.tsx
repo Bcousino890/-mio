@@ -15,64 +15,85 @@ import {
   Moon,
   Globe,
   MapPinned,
+  type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
 
-const modules = [
-  {
-    href: '/dashboard',
-    label: 'Dashboard',
-    icon: LayoutDashboard,
-    description: 'Resumen general',
-  },
-  {
-    href: '/anuncios',
-    label: 'Anuncios',
-    icon: Building2,
-    description: 'Mercado completo deduplicado',
-  },
-  {
-    href: '/oportunidades',
-    label: 'Oportunidades',
-    icon: TrendingUp,
-    description: 'Inversión · precio/m² bajo',
-    badge: 'NEW',
-  },
-  {
-    href: '/captacion',
-    label: 'Captación',
-    icon: Users,
-    description: 'Leads · exclusivas rotas',
-  },
-  {
-    href: '/mercado',
-    label: 'Mercado',
-    icon: BarChart3,
-    description: '€/m² · heatmap · TOM',
-  },
-  {
-    href: '/zonas',
-    label: 'Zonas & Scraping',
-    icon: MapPin,
-    description: 'Cobertura por zona',
-  },
-  {
-    href: '/chile',
-    label: 'Chile',
-    icon: Globe,
-    description: 'Mercado inmobiliario · Chile',
-  },
-  {
-    href: '/chile/catastro',
-    label: 'Catastro Chile',
-    icon: MapPinned,
-    description: 'Mapa catastral + Rol SII real',
-  },
-]
+const COUNTRIES = [
+  { id: 'es', label: 'España', flag: '🇪🇸', homeHref: '/dashboard' },
+  { id: 'cl', label: 'Chile', flag: '🇨🇱', homeHref: '/chile' },
+] as const
+
+interface ModuleItem {
+  href: string
+  label: string
+  icon: LucideIcon
+  description: string
+  badge?: string
+}
+
+const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
+  es: [
+    {
+      href: '/dashboard',
+      label: 'Dashboard',
+      icon: LayoutDashboard,
+      description: 'Resumen general',
+    },
+    {
+      href: '/anuncios',
+      label: 'Anuncios',
+      icon: Building2,
+      description: 'Mercado completo deduplicado',
+    },
+    {
+      href: '/oportunidades',
+      label: 'Oportunidades',
+      icon: TrendingUp,
+      description: 'Inversión · precio/m² bajo',
+      badge: 'NEW',
+    },
+    {
+      href: '/captacion',
+      label: 'Captación',
+      icon: Users,
+      description: 'Leads · exclusivas rotas',
+    },
+    {
+      href: '/mercado',
+      label: 'Mercado',
+      icon: BarChart3,
+      description: '€/m² · heatmap · TOM',
+    },
+    {
+      href: '/zonas',
+      label: 'Zonas & Scraping',
+      icon: MapPin,
+      description: 'Cobertura por zona',
+    },
+  ],
+  cl: [
+    {
+      href: '/chile',
+      label: 'Chile',
+      icon: Globe,
+      description: 'Mercado inmobiliario · Chile',
+    },
+    {
+      href: '/chile/catastro',
+      label: 'Catastro Chile',
+      icon: MapPinned,
+      description: 'Mapa catastral + Rol SII real',
+    },
+  ],
+}
 
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
+
+  const country = pathname.startsWith('/chile') ? 'cl' : 'es'
+  const modules = MODULES_BY_COUNTRY[country]
 
   const activeHref = modules
     .filter((m) => pathname === m.href || pathname.startsWith(m.href + '/'))
@@ -93,6 +114,24 @@ export default function Sidebar() {
             <div className="text-sm font-semibold text-slate-100 leading-none">casafari</div>
             <div className="text-[10px] text-slate-500 leading-none mt-0.5">mio · Madrid</div>
           </div>
+        </div>
+      </div>
+
+      {/* Country switch */}
+      <div className="px-2 pt-3">
+        <div className="flex items-center gap-1 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg p-1">
+          {COUNTRIES.map((c) => (
+            <Link
+              key={c.id}
+              href={c.homeHref}
+              className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${
+                country === c.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span>{c.flag}</span>
+              {c.label}
+            </Link>
+          ))}
         </div>
       </div>
 
