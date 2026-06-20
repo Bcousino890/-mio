@@ -20,7 +20,11 @@
 import { writeFileSync } from 'node:fs'
 import { fetchHtml, SLEEP } from './lib/fetch.mjs'
 import { parseListPage, parseDetailPage } from './lib/parse.mjs'
-import { toAppListing } from './lib/to-listing.mjs'
+import {
+  parseListPage as parseListPagePI,
+  parseDetailPage as parseDetailPagePI,
+} from './lib/parse-portalinmobiliario.mjs'
+import { toAppListing, toAppListingCl } from './lib/to-listing.mjs'
 import { cleanPhotos } from './lib/watermark-removal.mjs'
 
 function arg(name, def = undefined) {
@@ -73,6 +77,17 @@ const PORTAL_CONFIG = {
     ua: 'Mozilla/5.0 (compatible; CasafariBot/1.0)',
     watermarkHint: 'habitaclia',
   },
+  // Portalinmobiliario.com (Mercado Libre Chile) — módulo Chile.
+  // baseUrl/estructura de URL de listado NO CONFIRMADOS contra el sitio real
+  // (el sandbox de investigación bloqueó el fetch directo); a validar en el
+  // spike de producción. `zone` aquí se espera como slug de comuna (ver
+  // scraper/lib/chile-comunas.mjs), no como slug jerárquico tipo Idealista.
+  portalinmobiliario: {
+    baseUrl: (op) => `https://www.portalinmobiliario.com/${op === 'sale' ? 'venta' : 'arriendo'}/propiedades`,
+    parse: parseListPagePI,
+    profile: 'portalinmobiliario',
+    watermarkHint: 'portalinmobiliario',
+  },
 }
 
 async function scrapePortal(portal, zone, op) {
@@ -94,7 +109,7 @@ async function scrapePortal(portal, zone, op) {
     const pageUrl = page === 1 ? url : `${url}pagina-${page}.htm`
 
     console.log(`  → Página ${page}...`)
-    const res = await fetchHtml(pageUrl, { useProxy: USE_PROXY })
+    const res = await fetchHtml(pageUrl, { useProxy: USE_PROXY, profile: config.profile })
 
     if (!res.ok) {
       console.error(`    ✗ Error: ${res.reason}`)
@@ -135,20 +150,21 @@ async function scrapeDetailPages(listings, portal) {
     const listing = listings[i]
     console.log(`    [${i + 1}/${listings.length}] ${listing.external_id}...`)
 
-    // Idealista detail page scraping
-    if (portal === 'idealista') {
-      const res = await fetchHtml(listing.source_url, { useProxy: USE_PROXY })
+    // Idealista / Portalinmobiliario detail page scraping
+    if (portal === 'idealista' || portal === 'portalinmobiliario') {
+      const res = await fetchHtml(listing.source_url, { useProxy: USE_PROXY, profile: config.profile })
       if (!res.ok) {
         console.error(`      ✗ ${res.reason}`)
         continue
       }
 
-      const detail = await parseDetailPage(res.html, listing.external_id)
+      const detailParser = portal === 'portalinmobiliario' ? parseDetailPagePI : parseDetailPage
+      const detail = await detailParser(res.html, listing.external_id)
       if (detail && detail.photos) {
         // Apply watermark removal
         detail.photos = cleanPhotos(detail.photos, config.watermarkHint)
       }
-      detailed.push(detail)
+      detailed.push(detail ?? listing)
     } else {
       console.log(`      ⚠ Detail parsing for ${portal} not yet implemented`)
       detailed.push(listing)
@@ -176,8 +192,9 @@ async function main() {
       console.log(`\n  → Descargando detalles...`)
       const detailed = await scrapeDetailPages(listings, portal)
 
+      const toListing = portal === 'portalinmobiliario' ? toAppListingCl : toAppListing
       allDetailed = allDetailed.concat(
-        detailed.map((d) => toAppListing(d, { zoneSlug: ZONE }))
+        detailed.map((d) => toListing(d, { zoneSlug: ZONE }))
       )
     } catch (err) {
       console.error(`✗ Error en ${portal}:`, err.message)
