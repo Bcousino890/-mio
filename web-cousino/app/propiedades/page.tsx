@@ -1,6 +1,18 @@
 import type { Metadata } from "next";
 import PropertyListClient from "@/components/PropertyListClient";
-import { properties, type Country } from "@/lib/properties";
+import {
+  properties,
+  type Country,
+  type PropertyType,
+} from "@/lib/properties";
+
+const PROPERTY_TYPES: PropertyType[] = [
+  "Villa",
+  "Penthouse",
+  "Piso de lujo",
+  "Finca",
+  "Mansión",
+];
 
 export const metadata: Metadata = {
   title: "Propiedades de Lujo en España y Chile | Benjamín Cousiño",
@@ -11,13 +23,18 @@ export const metadata: Metadata = {
 export default async function PropiedadesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ country?: string }>;
+  searchParams: Promise<{ country?: string; type?: string }>;
 }) {
   const params = await searchParams;
   const initialCountry: Country | "TODOS" =
     params.country === "ESPAÑA" || params.country === "CHILE"
       ? params.country
       : "TODOS";
+  const initialType: PropertyType | "TODOS" = PROPERTY_TYPES.includes(
+    params.type as PropertyType
+  )
+    ? (params.type as PropertyType)
+    : "TODOS";
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-14 lg:px-10">
@@ -36,6 +53,7 @@ export default async function PropiedadesPage({
         <PropertyListClient
           properties={properties}
           initialCountry={initialCountry}
+          initialType={initialType}
         />
       </div>
     </div>

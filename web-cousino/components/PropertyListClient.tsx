@@ -26,12 +26,14 @@ type SortOption = "relevancia" | "precio-asc" | "precio-desc";
 export default function PropertyListClient({
   properties,
   initialCountry,
+  initialType = "TODOS",
 }: {
   properties: Property[];
   initialCountry: Country | "TODOS";
+  initialType?: PropertyType | "TODOS";
 }) {
   const [country, setCountry] = useState<Country | "TODOS">(initialCountry);
-  const [type, setType] = useState<PropertyType | "TODOS">("TODOS");
+  const [type, setType] = useState<PropertyType | "TODOS">(initialType);
   const [priceRangeIndex, setPriceRangeIndex] = useState(0);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortOption>("relevancia");
