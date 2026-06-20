@@ -1,7 +1,13 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { UploadCloud, Loader2, CheckCircle2, XCircle, FileWarning } from 'lucide-react'
+
+interface Comuna {
+  id: string
+  name: string
+  region: string
+}
 
 interface IngestResult {
   comunaCode: string
@@ -28,6 +34,23 @@ export default function SiiUploadPanel() {
   const [uploading, setUploading] = useState(false)
   const [response, setResponse] = useState<UploadResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [comunas, setComunas] = useState<Comuna[]>([])
+  const [selectedComunaId, setSelectedComunaId] = useState<string>('')
+  const [loading, setLoading] = useState(true)
+  const [dragActive, setDragActive] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/admin/chile-comunas')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) setComunas(data.comunas)
+        setLoading(false)
+      })
+      .catch((err) => {
+        console.error('Error loading comunas:', err)
+        setLoading(false)
+      })
+  }, [])
 
   function handleFilesSelected(selected: FileList | null) {
     if (!selected) return
@@ -40,14 +63,34 @@ export default function SiiUploadPanel() {
     setFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
+  function handleDrag(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true)
+    } else if (e.type === 'dragleave') {
+      setDragActive(false)
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    if (e.dataTransfer.files) {
+      handleFilesSelected(e.dataTransfer.files)
+    }
+  }
+
   async function handleUpload() {
-    if (files.length === 0) return
+    if (files.length === 0 || !selectedComunaId) return
     setUploading(true)
     setError(null)
     setResponse(null)
     try {
       const formData = new FormData()
       for (const f of files) formData.append('files', f)
+      formData.append('comunaId', selectedComunaId)
       const res = await fetch('/api/admin/sii-upload', { method: 'POST', body: formData })
       const json: UploadResponse = await res.json()
       if (!res.ok && !json.error) throw new Error('Error al subir los archivos')
@@ -69,10 +112,28 @@ export default function SiiUploadPanel() {
         <p className="text-sm font-semibold text-slate-200">Subir archivos SII (Detalle Catastral / Rol de Cobro)</p>
       </div>
       <p className="text-[11px] text-slate-600 mb-3">
-        Descarga manual desde sii.cl → &quot;Descarga de Información Vigente por Comuna&quot;. Acepta el .zip tal cual lo
-        entrega el SII, o los archivos sueltos (BRTMPCATASN*, BRTMPCATASNL*, BRTMPCATASA*, BRTMPCATASAL*, BRTMPROLSEM*).
-        La comuna se detecta automáticamente del nombre de archivo — se pueden subir varias comunas a la vez.
+        Descarga desde sii.cl → &quot;Descarga de Información Vigente por Comuna&quot; o &quot;Información Histórica por Año&quot;.
+        Acepta el .zip tal cual lo entrega el SII, o los archivos sueltos. Selecciona la comuna primero.
       </p>
+
+      <div className="mb-4">
+        <label className="block text-xs font-medium text-slate-400 mb-1">Comuna *</label>
+        <select
+          value={selectedComunaId}
+          onChange={(e) => setSelectedComunaId(e.target.value)}
+          disabled={loading}
+          className="w-full px-3 py-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 text-sm focus:outline-none focus:border-blue-500"
+        >
+          <option value="">
+            {loading ? 'Cargando comunas...' : 'Selecciona una comuna'}
+          </option>
+          {comunas.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name} ({c.region})
+            </option>
+          ))}
+        </select>
+      </div>
 
       <input
         ref={inputRef}
@@ -82,35 +143,50 @@ export default function SiiUploadPanel() {
         onChange={(e) => handleFilesSelected(e.target.files)}
       />
 
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        className="w-full border border-dashed border-[var(--c-border-strong)] rounded-lg py-4 text-xs text-slate-500 hover:text-slate-300 hover:border-blue-500 transition-colors mb-3"
+      <div
+        onDragEnter={handleDrag}
+        onDragLeave={handleDrag}
+        onDragOver={handleDrag}
+        onDrop={handleDrop}
+        onClick={() => selectedComunaId && inputRef.current?.click()}
+        className={`w-full border border-dashed rounded-lg py-4 text-xs text-center transition-colors mb-3 cursor-pointer ${
+          !selectedComunaId
+            ? 'border-[var(--c-border-strong)] text-slate-600 bg-opacity-50 cursor-not-allowed'
+            : dragActive
+              ? 'border-blue-400 bg-blue-500 bg-opacity-10 text-blue-300'
+              : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-blue-500'
+        }`}
       >
-        Click para elegir archivos (.zip o sueltos) — sin límite de tamaño relevante (hasta 300MB por subida)
-      </button>
+        {!selectedComunaId
+          ? 'Selecciona una comuna primero'
+          : 'Arrastra archivos aquí o click para elegir (.zip o sueltos) — hasta 300MB'}
+      </div>
 
       {files.length > 0 && (
-        <div className="space-y-1 mb-3 max-h-40 overflow-y-auto">
-          {files.map((f, i) => (
-            <div key={`${f.name}-${i}`} className="flex items-center justify-between bg-[var(--c-hover)] rounded-md px-2 py-1">
-              <span className="text-[11px] text-slate-300 truncate">{f.name}</span>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-[10px] text-slate-600">{formatBytes(f.size)}</span>
-                <button onClick={() => removeFile(i)} className="text-slate-600 hover:text-red-400 text-[11px]">
-                  ✕
-                </button>
+        <div className="space-y-2 mb-3">
+          <p className="text-xs font-medium text-slate-400">
+            {files.length} archivo{files.length !== 1 ? 's' : ''} seleccionado{files.length !== 1 ? 's' : ''} • Total: {formatBytes(totalBytes)}
+          </p>
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {files.map((f, i) => (
+              <div key={`${f.name}-${i}`} className="flex items-center justify-between bg-[var(--c-hover)] rounded-md px-2 py-1">
+                <span className="text-[11px] text-slate-300 truncate">{f.name}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] text-slate-600">{formatBytes(f.size)}</span>
+                  <button onClick={() => removeFile(i)} className="text-slate-600 hover:text-red-400 text-[11px]">
+                    ✕
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
-          <p className="text-[10px] text-slate-600 pt-1">Total: {formatBytes(totalBytes)}</p>
+            ))}
+          </div>
         </div>
       )}
 
       <button
         type="button"
         onClick={handleUpload}
-        disabled={uploading || files.length === 0}
+        disabled={uploading || files.length === 0 || !selectedComunaId}
         className="flex items-center justify-center gap-1.5 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
       >
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
