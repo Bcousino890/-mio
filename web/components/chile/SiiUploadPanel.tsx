@@ -83,7 +83,7 @@ export default function SiiUploadPanel() {
   }
 
   async function handleUpload() {
-    if (files.length === 0 || !selectedComunaId) return
+    if (files.length === 0) return
     setUploading(true)
     setError(null)
     setResponse(null)
@@ -113,11 +113,11 @@ export default function SiiUploadPanel() {
       </div>
       <p className="text-[11px] text-slate-600 mb-3">
         Descarga desde sii.cl → &quot;Descarga de Información Vigente por Comuna&quot; o &quot;Información Histórica por Año&quot;.
-        Acepta el .zip tal cual lo entrega el SII, o los archivos sueltos. Selecciona la comuna primero.
+        Acepta el .zip tal cual lo entrega el SII, o los archivos sueltos. La comuna se identifica automáticamente del nombre del archivo.
       </p>
 
       <div className="mb-4">
-        <label className="block text-xs font-medium text-slate-400 mb-1">Comuna *</label>
+        <label className="block text-xs font-medium text-slate-400 mb-1">Comuna (opcional)</label>
         <select
           value={selectedComunaId}
           onChange={(e) => setSelectedComunaId(e.target.value)}
@@ -148,18 +148,14 @@ export default function SiiUploadPanel() {
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        onClick={() => selectedComunaId && inputRef.current?.click()}
+        onClick={() => inputRef.current?.click()}
         className={`w-full border border-dashed rounded-lg py-4 text-xs text-center transition-colors mb-3 cursor-pointer ${
-          !selectedComunaId
-            ? 'border-[var(--c-border-strong)] text-slate-600 bg-opacity-50 cursor-not-allowed'
-            : dragActive
-              ? 'border-blue-400 bg-blue-500 bg-opacity-10 text-blue-300'
-              : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-blue-500'
+          dragActive
+            ? 'border-blue-400 bg-blue-500 bg-opacity-10 text-blue-300'
+            : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-blue-500'
         }`}
       >
-        {!selectedComunaId
-          ? 'Selecciona una comuna primero'
-          : 'Arrastra archivos aquí o click para elegir (.zip o sueltos) — hasta 300MB'}
+        Arrastra archivos aquí o click para elegir (.zip o sueltos) — hasta 300MB
       </div>
 
       {files.length > 0 && (
@@ -186,7 +182,7 @@ export default function SiiUploadPanel() {
       <button
         type="button"
         onClick={handleUpload}
-        disabled={uploading || files.length === 0 || !selectedComunaId}
+        disabled={uploading || files.length === 0}
         className="flex items-center justify-center gap-1.5 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
       >
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
