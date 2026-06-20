@@ -32,6 +32,7 @@ export default function SiiUploadPanel() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [response, setResponse] = useState<UploadResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [comunas, setComunas] = useState<Comuna[]>([])
@@ -85,21 +86,53 @@ export default function SiiUploadPanel() {
   async function handleUpload() {
     if (files.length === 0) return
     setUploading(true)
+    setUploadProgress(0)
     setError(null)
     setResponse(null)
     try {
       const formData = new FormData()
       for (const f of files) formData.append('files', f)
       formData.append('comunaId', selectedComunaId)
-      const res = await fetch('/api/admin/sii-upload', { method: 'POST', body: formData })
-      const json: UploadResponse = await res.json()
-      if (!res.ok && !json.error) throw new Error('Error al subir los archivos')
+
+      const json: UploadResponse = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100)
+            setUploadProgress(percent)
+          }
+        })
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const json = JSON.parse(xhr.responseText)
+              resolve(json)
+            } catch (err) {
+              reject(new Error('Error parsing response'))
+            }
+          } else {
+            reject(new Error('Error al subir los archivos'))
+          }
+        })
+
+        xhr.addEventListener('error', () => {
+          reject(new Error('Error al subir los archivos'))
+        })
+
+        xhr.open('POST', '/api/admin/sii-upload')
+        xhr.send(formData)
+      })
+
+      if (!json.success && !json.error) throw new Error('Error al subir los archivos')
       setResponse(json)
       if (json.success) setFiles([])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al subir los archivos')
     } finally {
       setUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -188,6 +221,21 @@ export default function SiiUploadPanel() {
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
         {uploading ? 'Subiendo e ingiriendo (puede tardar varios minutos en comunas grandes)…' : 'Subir e ingerir'}
       </button>
+
+      {uploading && uploadProgress > 0 && (
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[11px] text-slate-400">Carga</span>
+            <span className="text-[11px] text-slate-400">{uploadProgress}%</span>
+          </div>
+          <div className="w-full bg-[var(--c-hover)] border border-[var(--c-border)] rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-blue-500 h-full transition-all duration-200"
+              style={{ width: `${uploadProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5">
