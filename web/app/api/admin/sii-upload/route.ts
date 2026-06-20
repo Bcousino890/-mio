@@ -7,6 +7,7 @@ import { Pool } from 'pg'
 import { ingestSiiCatastroComuna, type SiiIngestFiles } from '@/lib/sii-catastro-ingest'
 
 export const runtime = 'nodejs'
+export const maxDuration = 300 // 5 minutos para procesar archivos grandes
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
