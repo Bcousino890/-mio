@@ -36,6 +36,7 @@
 // coordinar con ese módulo.
 // ─────────────────────────────────────────────────────────────────────────────
 import pg from 'pg'
+import { SII_DESTINO_LABELS } from './sii-catastro-cl.mjs'
 
 const { Client } = pg
 
@@ -175,6 +176,15 @@ export async function ingestIdeChileLayer(comunaCode, { layerName = 'Predios', w
  * Busca la parcela catastral chilena que contiene un punto dado, vía
  * point-in-polygon (ST_Contains) contra `cadastre_parcels_cl`.
  *
+ * Enriquecimiento ADITIVO: si la parcela tiene `rol` y existe un Rol SII real
+ * ingestado para esa misma comuna (0021_sii_catastro_cl.sql, vía
+ * `scraper/lib/sii-catastro-cl.mjs` — solo datos subidos manualmente, JAMÁS
+ * scraping, ver banner legal de ese módulo), la fila de retorno trae además
+ * `sii_metadata` con la forma `{sqm, property_type, ...}` que espera
+ * `identity-resolution-cl.mjs` (estrategia #4, huella física). Si no hay Rol
+ * SII para esa parcela, `sii_metadata` es `null` — esto NO cambia el nombre,
+ * orden de argumentos, ni la forma base del valor de retorno.
+ *
  * FIRMA ESTABLE: llamada por identity-resolution-cl.mjs (módulo en desarrollo
  * paralelo) — no cambiar nombre/orden de argumentos/forma de retorno.
  *
@@ -182,7 +192,7 @@ export async function ingestIdeChileLayer(comunaCode, { layerName = 'Predios', w
  * @param {number} lng
  * @param {object} [opts]
  * @param {string} [opts.db_url] - connection string Postgres (por defecto, env var DATABASE_URL).
- * @returns {Promise<object|null>} fila de cadastre_parcels_cl que contiene el punto, o null.
+ * @returns {Promise<object|null>} fila de cadastre_parcels_cl que contiene el punto (+ `sii_metadata`), o null.
  */
 export async function findParcelByPoint(lat, lng, { db_url = process.env.DATABASE_URL } = {}) {
   if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) {
@@ -198,15 +208,45 @@ export async function findParcelByPoint(lat, lng, { db_url = process.env.DATABAS
     await client.connect()
     const result = await client.query(
       `
-      SELECT *
-      FROM cadastre_parcels_cl
-      WHERE geom IS NOT NULL
-        AND ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+      SELECT
+        p.*,
+        CASE WHEN s.id IS NULL THEN NULL ELSE jsonb_build_object(
+          'rol', s.rol,
+          'direccion', COALESCE(s.direccion, s.rol_cobro_direccion),
+          'avaluo_fiscal_total', COALESCE(s.avaluo_fiscal_total, s.rol_cobro_avaluo_total),
+          'superficie_terreno_m2', s.superficie_terreno_m2,
+          'sqm', CASE WHEN c.superficie_habitacional_m2 > 0 THEN c.superficie_habitacional_m2 ELSE NULLIF(c.superficie_total_m2, 0) END,
+          'superficie_construida_total_m2', NULLIF(c.superficie_total_m2, 0),
+          'numero_pisos', c.numero_pisos,
+          'anio_construccion', c.anio_construccion_original,
+          'codigo_destino_principal', s.codigo_destino_principal,
+          'rol_bien_comun_1', s.rol_bien_comun_1,
+          'rol_bien_comun_2', s.rol_bien_comun_2,
+          'rol_padre', s.rol_padre
+        ) END AS sii_metadata
+      FROM cadastre_parcels_cl p
+      LEFT JOIN sii_roles_cl s ON s.comuna_id = p.comuna_id AND s.rol = p.rol
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(SUM(superficie_m2), 0) AS superficie_total_m2,
+          COALESCE(SUM(superficie_m2) FILTER (WHERE destino_code = 'H'), 0) AS superficie_habitacional_m2,
+          MAX(numero_pisos) AS numero_pisos,
+          MIN(anio_construccion) AS anio_construccion_original
+        FROM sii_construcciones_cl
+        WHERE rol_id = s.id
+      ) c ON true
+      WHERE p.geom IS NOT NULL
+        AND ST_Contains(p.geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
       LIMIT 1
       `,
       [lng, lat]
     )
-    return result.rows[0] ?? null
+    const row = result.rows[0]
+    if (!row) return null
+    if (row.sii_metadata?.codigo_destino_principal) {
+      row.sii_metadata.property_type = SII_DESTINO_LABELS[row.sii_metadata.codigo_destino_principal] ?? null
+    }
+    return row
   } catch (err) {
     console.error(`[cadastre-cl] error en findParcelByPoint: ${err.message}`)
     return null
