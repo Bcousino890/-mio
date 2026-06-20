@@ -1,0 +1,96 @@
+name: Diag sii-upload (lee logs reales del VPS)
+
+# Diagnóstico de solo lectura para el error net::ERR_EMPTY_RESPONSE / 502 al
+# subir archivos SII desde /configuracion. No modifica nada, solo imprime
+# logs del contenedor, memoria, y prueba el endpoint en caliente desde dentro
+# del VPS para capturar el error real (que nginx/el navegador no muestran).
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+      - claude/lucid-mendel-bngty2
+    paths:
+      - '.github/.diag-sii-upload-trigger'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Leer logs y estado del contenedor en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+
+            echo "── Contenedores y estado/uptime (¿reinició casafari-app?) ──"
+            docker ps -a --format "  {{.Names}}\t{{.Status}}\t{{.Image}}"
+            echo ""
+            echo "RestartCount de casafari-app:"
+            docker inspect casafari-app --format '{{.RestartCount}}' 2>&1 || true
+
+            echo ""
+            echo "── Memoria y disco del host ─────────────────────────"
+            free -m
+            echo ""
+            df -h /
+
+            echo ""
+            echo "── ¿OOM kills recientes? (dmesg) ─────────────────────"
+            dmesg -T 2>/dev/null | grep -i -E "out of memory|oom.kill|killed process" | tail -20 || echo "(sin entradas, o dmesg no accesible sin sudo)"
+
+            echo ""
+            echo "── docker stats (snapshot, uso de memoria por contenedor) ─"
+            docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}"
+
+            echo ""
+            echo "── Variables de entorno del contenedor casafari-app (sin password) ─"
+            docker exec casafari-app printenv DATABASE_URL 2>&1 | sed -E 's#(postgres(ql)?://[^:]+):[^@]+@#\1:***@#' || echo "  (no se pudo leer DATABASE_URL del contenedor)"
+            docker exec casafari-app printenv NODE_OPTIONS 2>&1 || echo "  NODE_OPTIONS=<no definido>"
+
+            echo ""
+            echo "── Límites de memoria del contenedor (si los hay) ────"
+            docker inspect casafari-app --format 'Memory limit: {{.HostConfig.Memory}} bytes (0 = sin límite)'
+
+            echo ""
+            echo "── Logs completos de casafari-app (últimas 150 líneas) ─"
+            docker logs casafari-app --tail 150 2>&1
+
+            echo ""
+            echo "── Prueba en caliente: POST directo al endpoint sii-upload desde dentro del VPS ─"
+            echo "(usando un archivo de texto plano, sin BD real, solo para ver si el proceso responde o muere)"
+            echo -n "BRTMPROLSEM_2026_1_15160" > /tmp/test-sii.txt
+            echo "test" >> /tmp/test-sii.txt
+            echo "Respuesta cruda (status + body, conexión directa al contenedor en :3000):"
+            docker exec casafari-app sh -c "wget -qO- --post-file=/dev/null http://127.0.0.1:3000/api/admin/sii-upload 2>&1" || echo "  (wget simple sin multipart falló como se esperaba, es solo para ver si el proceso responde)"
+            echo ""
+            echo "Probing real con curl multipart desde el HOST hacia localhost:3000 (puerto publicado del contenedor, si existe):"
+            docker port casafari-app 2>&1 || echo "  (no hay puertos publicados directamente; revisar nginx)"
+            curl -sS -i -m 30 -F "files=@/tmp/test-sii.txt;filename=BRTMPROLSEM_2026_1_15160.TXT" -F "comunaId=" "http://127.0.0.1:3000/api/admin/sii-upload" 2>&1 || echo "  (curl directo a :3000 del host falló — probablemente el puerto no está publicado al host, solo accesible vía red docker/nginx)"
+
+            echo ""
+            echo "── Misma prueba pero a través del dominio público (como lo ve el navegador) ─"
+            curl -sS -i -m 30 -F "files=@/tmp/test-sii.txt;filename=BRTMPROLSEM_2026_1_15160.TXT" -F "comunaId=" "https://crm.cremme.es/api/admin/sii-upload" 2>&1 | head -c 3000
+
+            echo ""
+            echo ""
+            echo "── Logs de casafari-app INMEDIATAMENTE después de la prueba (debería mostrar el error real) ─"
+            docker logs casafari-app --tail 40 2>&1
+
+            echo ""
+            echo "── nginx: ¿hay límites de body size o timeouts configurados? ─"
+            docker exec casafari-nginx cat /etc/nginx/conf.d/*.conf 2>&1 | grep -i -E "client_max_body_size|proxy_read_timeout|proxy_connect_timeout|proxy_send_timeout" || echo "  (no se encontraron directivas de límite/timeout, o el contenedor se llama distinto)"
+            echo ""
+            echo "Contenedores nginx/proxy disponibles (por si el nombre no es casafari-nginx):"
+            docker ps --format "{{.Names}}" | grep -i -E "nginx|proxy|caddy|traefik" || echo "  (ninguno con esos nombres)"
+
+            rm -f /tmp/test-sii.txt
+          EOF

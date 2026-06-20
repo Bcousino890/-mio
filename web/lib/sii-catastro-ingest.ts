@@ -9,10 +9,12 @@
 // así que scraper/lib no está disponible para la app en producción.
 //
 // Diferencia deliberada frente al original: cada archivo se ingesta dentro de
-// una única transacción (en vez de autocommit fila por fila) — con cientos de
-// miles de filas por comuna, el costo de fsync por INSERT hacía que la ingesta
-// completa de una comuna grande tardara minutos y arriesgara timeouts en el
-// endpoint HTTP que la dispara (ver app/api/admin/sii-upload/route.ts).
+// una única transacción (en vez de autocommit fila por fila) y las filas se
+// insertan/actualizan en bloques (vía `unnest`) en vez de una query por fila
+// — con cientos de miles de filas por comuna, una query síncrona por fila
+// tardaba minutos y la conexión moría (502/ERR_EMPTY_RESPONSE) antes de que
+// el endpoint HTTP que la dispara (ver app/api/admin/sii-upload/route.ts)
+// pudiera responder nada.
 //
 // ORIGEN DE LOS DATOS: sii.cl publica un botón de descarga masiva de
 // autoservicio por comuna ("Avalúos y Contribuciones de Bienes Raíces" →
@@ -24,6 +26,10 @@
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { Client } from 'pg'
+
+// Tamaño de bloque para los INSERT/UPSERT por lotes (vía unnest). Suficiente
+// para convertir cientos de miles de filas en unos pocos cientos de queries.
+const BATCH_SIZE = 2000
 
 function splitPipeLine(line: string): string[] {
   const parts = line.split('|')
@@ -247,29 +253,28 @@ async function resolveComunaId(client: Client, comunaCode: string): Promise<stri
   return res.rows[0]?.id ?? null
 }
 
-async function upsertRol(
-  client: Client,
-  comunaId: string | null,
-  rec: {
-    rol: string | null
-    sii_comuna_code: string | null
-    manzana: string | null
-    predio: string | null
-    serie: string
-    direccion: string | null
-    avaluo_fiscal_total: number | null
-    avaluo_exento: number | null
-    contribucion_semestral: number | null
-    codigo_destino_principal: string | null
-    codigo_ubicacion?: string | null
-    superficie_terreno_m2?: number | null
-    rol_bien_comun_1?: string | null
-    rol_bien_comun_2?: string | null
-    rol_padre?: string | null
-  },
-  rawSource: string
-): Promise<string | null> {
-  if (!rec.rol) return null
+interface RolBatchRow {
+  comuna_id: string | null
+  sii_comuna_code: string | null
+  manzana: string | null
+  predio: string | null
+  rol: string
+  serie: string
+  direccion: string | null
+  avaluo_fiscal_total: number | null
+  avaluo_exento: number | null
+  contribucion_semestral: number | null
+  codigo_destino_principal: string | null
+  codigo_ubicacion: string | null
+  superficie_terreno_m2: number | null
+  rol_bien_comun_1: string | null
+  rol_bien_comun_2: string | null
+  rol_padre: string | null
+  raw_source: string
+}
+
+async function flushRolesBatch(client: Client, batch: RolBatchRow[]): Promise<number> {
+  if (batch.length === 0) return 0
   const res = await client.query(
     `
     INSERT INTO sii_roles_cl (
@@ -278,7 +283,14 @@ async function upsertRol(
       codigo_destino_principal, codigo_ubicacion,
       superficie_terreno_m2, rol_bien_comun_1, rol_bien_comun_2, rol_padre,
       raw_source
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+    )
+    SELECT * FROM unnest(
+      $1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+      $7::text[], $8::bigint[], $9::bigint[], $10::bigint[],
+      $11::text[], $12::text[],
+      $13::int[], $14::text[], $15::text[], $16::text[],
+      $17::text[]
+    )
     ON CONFLICT (sii_comuna_code, manzana, predio) DO UPDATE SET
       direccion                = EXCLUDED.direccion,
       avaluo_fiscal_total       = EXCLUDED.avaluo_fiscal_total,
@@ -292,17 +304,157 @@ async function upsertRol(
       rol_padre                 = COALESCE(EXCLUDED.rol_padre, sii_roles_cl.rol_padre),
       raw_source                = EXCLUDED.raw_source,
       updated_at                = now()
-    RETURNING id
     `,
     [
-      comunaId, rec.sii_comuna_code, rec.manzana, rec.predio, rec.rol, rec.serie,
-      rec.direccion, rec.avaluo_fiscal_total, rec.avaluo_exento, rec.contribucion_semestral,
-      rec.codigo_destino_principal, rec.codigo_ubicacion ?? null,
-      rec.superficie_terreno_m2 ?? null, rec.rol_bien_comun_1 ?? null, rec.rol_bien_comun_2 ?? null, rec.rol_padre ?? null,
-      rawSource,
+      batch.map((r) => r.comuna_id),
+      batch.map((r) => r.sii_comuna_code),
+      batch.map((r) => r.manzana),
+      batch.map((r) => r.predio),
+      batch.map((r) => r.rol),
+      batch.map((r) => r.serie),
+      batch.map((r) => r.direccion),
+      batch.map((r) => r.avaluo_fiscal_total),
+      batch.map((r) => r.avaluo_exento),
+      batch.map((r) => r.contribucion_semestral),
+      batch.map((r) => r.codigo_destino_principal),
+      batch.map((r) => r.codigo_ubicacion),
+      batch.map((r) => r.superficie_terreno_m2),
+      batch.map((r) => r.rol_bien_comun_1),
+      batch.map((r) => r.rol_bien_comun_2),
+      batch.map((r) => r.rol_padre),
+      batch.map((r) => r.raw_source),
     ]
   )
-  return res.rows[0]?.id ?? null
+  return res.rowCount ?? 0
+}
+
+interface RolCobroBatchRow {
+  comuna_id: string | null
+  sii_comuna_code: string | null
+  manzana: string | null
+  predio: string | null
+  rol: string
+  serie: string
+  direccion: string | null
+  anio: number | null
+  semestre: number | null
+  avaluo_total: number | null
+  avaluo_exento: number | null
+  cuota_trimestral: number | null
+  codigo_ubicacion: string | null
+  codigo_destino: string | null
+  raw_source: string
+}
+
+async function flushRolDeCobroBatch(client: Client, batch: RolCobroBatchRow[]): Promise<number> {
+  if (batch.length === 0) return 0
+  const res = await client.query(
+    `
+    INSERT INTO sii_roles_cl (
+      comuna_id, sii_comuna_code, manzana, predio, rol, serie, direccion,
+      rol_cobro_anio, rol_cobro_semestre, rol_cobro_direccion,
+      rol_cobro_avaluo_total, rol_cobro_avaluo_exento, rol_cobro_cuota_trimestral,
+      rol_cobro_codigo_ubicacion, rol_cobro_codigo_destino, raw_source
+    )
+    SELECT * FROM unnest(
+      $1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
+      $8::int[], $9::int[], $10::text[],
+      $11::bigint[], $12::bigint[], $13::bigint[],
+      $14::text[], $15::text[], $16::text[]
+    )
+    ON CONFLICT (sii_comuna_code, manzana, predio) DO UPDATE SET
+      direccion                   = COALESCE(sii_roles_cl.direccion, EXCLUDED.direccion),
+      rol_cobro_anio              = EXCLUDED.rol_cobro_anio,
+      rol_cobro_semestre          = EXCLUDED.rol_cobro_semestre,
+      rol_cobro_direccion         = EXCLUDED.rol_cobro_direccion,
+      rol_cobro_avaluo_total      = EXCLUDED.rol_cobro_avaluo_total,
+      rol_cobro_avaluo_exento     = EXCLUDED.rol_cobro_avaluo_exento,
+      rol_cobro_cuota_trimestral  = EXCLUDED.rol_cobro_cuota_trimestral,
+      rol_cobro_codigo_ubicacion  = EXCLUDED.rol_cobro_codigo_ubicacion,
+      rol_cobro_codigo_destino    = EXCLUDED.rol_cobro_codigo_destino,
+      updated_at                  = now()
+    `,
+    [
+      batch.map((r) => r.comuna_id),
+      batch.map((r) => r.sii_comuna_code),
+      batch.map((r) => r.manzana),
+      batch.map((r) => r.predio),
+      batch.map((r) => r.rol),
+      batch.map((r) => r.serie),
+      batch.map((r) => r.direccion),
+      batch.map((r) => r.anio),
+      batch.map((r) => r.semestre),
+      batch.map((r) => r.direccion),
+      batch.map((r) => r.avaluo_total),
+      batch.map((r) => r.avaluo_exento),
+      batch.map((r) => r.cuota_trimestral),
+      batch.map((r) => r.codigo_ubicacion),
+      batch.map((r) => r.codigo_destino),
+      batch.map((r) => r.raw_source),
+    ]
+  )
+  return res.rowCount ?? 0
+}
+
+interface ConstruccionBatchRow {
+  rol_id: string
+  linea: number | null
+  material_code: string | null
+  calidad_code: string | null
+  anio_construccion: number | null
+  superficie_m2: number | null
+  destino_code: string | null
+  condicion_especial: string | null
+  numero_pisos: number | null
+  codigo_suelo: string | null
+  superficie_suelo_ha: number | null
+}
+
+async function flushConstruccionesBatch(client: Client, batch: ConstruccionBatchRow[]): Promise<number> {
+  if (batch.length === 0) return 0
+  const res = await client.query(
+    `
+    INSERT INTO sii_construcciones_cl (
+      rol_id, linea, material_code, calidad_code, anio_construccion,
+      superficie_m2, destino_code, condicion_especial, numero_pisos,
+      codigo_suelo, superficie_suelo_ha
+    )
+    SELECT * FROM unnest(
+      $1::uuid[], $2::int[], $3::text[], $4::text[], $5::int[],
+      $6::int[], $7::text[], $8::text[], $9::int[],
+      $10::text[], $11::numeric[]
+    )
+    `,
+    [
+      batch.map((r) => r.rol_id),
+      batch.map((r) => r.linea),
+      batch.map((r) => r.material_code),
+      batch.map((r) => r.calidad_code),
+      batch.map((r) => r.anio_construccion),
+      batch.map((r) => r.superficie_m2),
+      batch.map((r) => r.destino_code),
+      batch.map((r) => r.condicion_especial),
+      batch.map((r) => r.numero_pisos),
+      batch.map((r) => r.codigo_suelo),
+      batch.map((r) => r.superficie_suelo_ha),
+    ]
+  )
+  return res.rowCount ?? 0
+}
+
+// Mapa manzana|predio → rol_id para resolver las líneas de construcción/suelo
+// sin una query SELECT por fila (eran cientos de miles de round-trips
+// secuenciales — la causa real de los timeouts/502 en comunas grandes).
+async function loadRolIdMap(client: Client, comunaCode: string): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT manzana, predio, id FROM sii_roles_cl WHERE sii_comuna_code = $1`,
+    [comunaCode]
+  )
+  const map = new Map<string, string>()
+  for (const row of res.rows) {
+    map.set(`${row.manzana}|${row.predio}`, row.id)
+  }
+  return map
 }
 
 export interface SiiIngestFiles {
@@ -352,10 +504,16 @@ export async function ingestSiiCatastroComuna({
       const source = basename(files.rolesNoAgricolas)
       await client.query('BEGIN')
       try {
+        let batch: RolBatchRow[] = []
         for await (const rec of parseRolesNoAgricolas(files.rolesNoAgricolas)) {
-          const id = await upsertRol(client, comunaId, rec, source)
-          if (id) counts.roles_no_agricolas++
+          if (!rec.rol) continue
+          batch.push({ ...rec, rol: rec.rol, comuna_id: comunaId, raw_source: source })
+          if (batch.length >= BATCH_SIZE) {
+            counts.roles_no_agricolas += await flushRolesBatch(client, batch)
+            batch = []
+          }
         }
+        counts.roles_no_agricolas += await flushRolesBatch(client, batch)
         await client.query('COMMIT')
       } catch (err) {
         await client.query('ROLLBACK')
@@ -367,10 +525,25 @@ export async function ingestSiiCatastroComuna({
       const source = basename(files.rolesAgricolas)
       await client.query('BEGIN')
       try {
+        let batch: RolBatchRow[] = []
         for await (const rec of parseRolesAgricolas(files.rolesAgricolas)) {
-          const id = await upsertRol(client, comunaId, rec, source)
-          if (id) counts.roles_agricolas++
+          if (!rec.rol) continue
+          batch.push({
+            ...rec,
+            rol: rec.rol,
+            comuna_id: comunaId,
+            raw_source: source,
+            superficie_terreno_m2: null,
+            rol_bien_comun_1: null,
+            rol_bien_comun_2: null,
+            rol_padre: null,
+          })
+          if (batch.length >= BATCH_SIZE) {
+            counts.roles_agricolas += await flushRolesBatch(client, batch)
+            batch = []
+          }
         }
+        counts.roles_agricolas += await flushRolesBatch(client, batch)
         await client.query('COMMIT')
       } catch (err) {
         await client.query('ROLLBACK')
@@ -379,25 +552,37 @@ export async function ingestSiiCatastroComuna({
       }
     }
 
-    // 2) Líneas de construcción/suelo — requieren que el rol_id ya exista; si
-    //    una línea llega para un rol no visto se descarta (no falla la ingesta).
+    // 2) Líneas de construcción/suelo — requieren que el rol_id ya exista; se
+    //    resuelven contra un mapa cargado una sola vez (en vez de un SELECT
+    //    por fila); si una línea llega para un rol no visto se descarta (no
+    //    falla la ingesta).
     if (files.construccionesNoAgricolas) {
       await client.query('BEGIN')
       try {
+        const rolIdMap = await loadRolIdMap(client, comunaCode)
+        let batch: ConstruccionBatchRow[] = []
         for await (const rec of parseConstruccionesNoAgricolas(files.construccionesNoAgricolas)) {
-          const rolRes = await client.query(
-            `SELECT id FROM sii_roles_cl WHERE sii_comuna_code = $1 AND manzana = $2 AND predio = $3 LIMIT 1`,
-            [rec.sii_comuna_code, rec.manzana, rec.predio]
-          )
-          const rolId = rolRes.rows[0]?.id
+          const rolId = rolIdMap.get(`${rec.manzana}|${rec.predio}`)
           if (!rolId) continue
-          await client.query(
-            `INSERT INTO sii_construcciones_cl (rol_id, linea, material_code, calidad_code, anio_construccion, superficie_m2, destino_code, condicion_especial, numero_pisos)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-            [rolId, rec.linea, rec.material_code, rec.calidad_code, rec.anio_construccion, rec.superficie_m2, rec.destino_code, rec.condicion_especial, rec.numero_pisos]
-          )
-          counts.construcciones_no_agricolas++
+          batch.push({
+            rol_id: rolId,
+            linea: rec.linea,
+            material_code: rec.material_code,
+            calidad_code: rec.calidad_code,
+            anio_construccion: rec.anio_construccion,
+            superficie_m2: rec.superficie_m2,
+            destino_code: rec.destino_code,
+            condicion_especial: rec.condicion_especial,
+            numero_pisos: rec.numero_pisos,
+            codigo_suelo: null,
+            superficie_suelo_ha: null,
+          })
+          if (batch.length >= BATCH_SIZE) {
+            counts.construcciones_no_agricolas += await flushConstruccionesBatch(client, batch)
+            batch = []
+          }
         }
+        counts.construcciones_no_agricolas += await flushConstruccionesBatch(client, batch)
         await client.query('COMMIT')
       } catch (err) {
         await client.query('ROLLBACK')
@@ -408,20 +593,30 @@ export async function ingestSiiCatastroComuna({
     if (files.suelosConstruccionesAgricolas) {
       await client.query('BEGIN')
       try {
+        const rolIdMap = await loadRolIdMap(client, comunaCode)
+        let batch: ConstruccionBatchRow[] = []
         for await (const rec of parseSuelosConstruccionesAgricolas(files.suelosConstruccionesAgricolas)) {
-          const rolRes = await client.query(
-            `SELECT id FROM sii_roles_cl WHERE sii_comuna_code = $1 AND manzana = $2 AND predio = $3 LIMIT 1`,
-            [rec.sii_comuna_code, rec.manzana, rec.predio]
-          )
-          const rolId = rolRes.rows[0]?.id
+          const rolId = rolIdMap.get(`${rec.manzana}|${rec.predio}`)
           if (!rolId) continue
-          await client.query(
-            `INSERT INTO sii_construcciones_cl (rol_id, linea, material_code, calidad_code, superficie_m2, destino_code, condicion_especial, numero_pisos, codigo_suelo, superficie_suelo_ha)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-            [rolId, rec.linea, rec.material_code, rec.calidad_code, rec.superficie_m2, rec.destino_code, rec.condicion_especial, rec.numero_pisos, rec.codigo_suelo, rec.superficie_suelo_ha]
-          )
-          counts.suelos_construcciones_agricolas++
+          batch.push({
+            rol_id: rolId,
+            linea: rec.linea,
+            material_code: rec.material_code,
+            calidad_code: rec.calidad_code,
+            anio_construccion: null,
+            superficie_m2: rec.superficie_m2,
+            destino_code: rec.destino_code,
+            condicion_especial: rec.condicion_especial,
+            numero_pisos: rec.numero_pisos,
+            codigo_suelo: rec.codigo_suelo,
+            superficie_suelo_ha: rec.superficie_suelo_ha,
+          })
+          if (batch.length >= BATCH_SIZE) {
+            counts.suelos_construcciones_agricolas += await flushConstruccionesBatch(client, batch)
+            batch = []
+          }
         }
+        counts.suelos_construcciones_agricolas += await flushConstruccionesBatch(client, batch)
         await client.query('COMMIT')
       } catch (err) {
         await client.query('ROLLBACK')
@@ -438,37 +633,16 @@ export async function ingestSiiCatastroComuna({
       const source = basename(files.rolDeCobro)
       await client.query('BEGIN')
       try {
+        let batch: RolCobroBatchRow[] = []
         for await (const rec of parseRolDeCobro(files.rolDeCobro)) {
           if (!rec.rol) continue
-          await client.query(
-            `
-            INSERT INTO sii_roles_cl (
-              comuna_id, sii_comuna_code, manzana, predio, rol, serie, direccion,
-              rol_cobro_anio, rol_cobro_semestre, rol_cobro_direccion,
-              rol_cobro_avaluo_total, rol_cobro_avaluo_exento, rol_cobro_cuota_trimestral,
-              rol_cobro_codigo_ubicacion, rol_cobro_codigo_destino, raw_source
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-            ON CONFLICT (sii_comuna_code, manzana, predio) DO UPDATE SET
-              direccion                   = COALESCE(sii_roles_cl.direccion, EXCLUDED.direccion),
-              rol_cobro_anio              = EXCLUDED.rol_cobro_anio,
-              rol_cobro_semestre          = EXCLUDED.rol_cobro_semestre,
-              rol_cobro_direccion         = EXCLUDED.rol_cobro_direccion,
-              rol_cobro_avaluo_total      = EXCLUDED.rol_cobro_avaluo_total,
-              rol_cobro_avaluo_exento     = EXCLUDED.rol_cobro_avaluo_exento,
-              rol_cobro_cuota_trimestral  = EXCLUDED.rol_cobro_cuota_trimestral,
-              rol_cobro_codigo_ubicacion  = EXCLUDED.rol_cobro_codigo_ubicacion,
-              rol_cobro_codigo_destino    = EXCLUDED.rol_cobro_codigo_destino,
-              updated_at                  = now()
-            `,
-            [
-              comunaId, rec.sii_comuna_code, rec.manzana, rec.predio, rec.rol, rec.serie, rec.direccion,
-              rec.anio, rec.semestre, rec.direccion,
-              rec.avaluo_total, rec.avaluo_exento, rec.cuota_trimestral,
-              rec.codigo_ubicacion, rec.codigo_destino, source,
-            ]
-          )
-          counts.rol_de_cobro++
+          batch.push({ ...rec, rol: rec.rol, comuna_id: comunaId, raw_source: source })
+          if (batch.length >= BATCH_SIZE) {
+            counts.rol_de_cobro += await flushRolDeCobroBatch(client, batch)
+            batch = []
+          }
         }
+        counts.rol_de_cobro += await flushRolDeCobroBatch(client, batch)
         await client.query('COMMIT')
       } catch (err) {
         await client.query('ROLLBACK')
