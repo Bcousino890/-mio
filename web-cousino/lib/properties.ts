@@ -47,7 +47,11 @@ const defaultAgent = {
   email: "contacto@benjamincousino.com",
 };
 
-const img = (id: number) => `https://picsum.photos/id/${id}/1600/1000`;
+// Sin fotografía real todavía: usamos placeholders locales en lugar de un
+// servicio de imágenes externo (evita una dependencia de red en runtime).
+const PLACEHOLDER_COUNT = 6;
+const img = (seed: number) =>
+  `/placeholders/luxury-${(seed % PLACEHOLDER_COUNT) + 1}.svg`;
 
 export const properties: Property[] = [
   {

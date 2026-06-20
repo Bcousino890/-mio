@@ -10,7 +10,7 @@ export default function Home() {
     <div>
       <section className="relative flex min-h-[88vh] items-center justify-center overflow-hidden bg-navy text-white">
         <Image
-          src="https://picsum.photos/id/1018/1920/1080"
+          src="/placeholders/luxury-1.svg"
           alt="Villa de lujo"
           fill
           priority
