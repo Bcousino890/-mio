@@ -24,6 +24,46 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 const PAGE_SIZE = 30
 
+const INITIAL_FILTERS: FilterState = {
+  operation: 'all',
+  advertiserType: 'all',
+  advertiserFilter: {
+    mode: 'all',
+    particularOptions: {
+      onlyParticular: false,
+      isPrivateByAgency: false,
+      wasPrivateByAgency: false,
+    },
+    agencyOptions: {
+      agencyId: null,
+      agencyName: null,
+      exclusive: false,
+      exclusiveMode: 'both',
+      excludeAgencyId: null,
+    },
+  },
+  propertyTypes: [],
+  price: { min: null, max: null },
+  squareMeters: { min: null, max: null },
+  pricePerSqm: { min: null, max: null },
+  bedrooms: { min: null, max: null },
+  bathrooms: { min: null, max: null },
+  yearBuilt: { min: null, max: null },
+  daysOnMarket: { min: null, max: null },
+  parcelSize: { min: null, max: null },
+  floor: null,
+  view: null,
+  orientation: null,
+  furnished: null,
+  energyRating: null,
+  characteristics: [],
+  location: null,
+  distance: null,
+  selected_district_id: null,
+  selected_zone_id: null,
+  selected_subzone_id: null,
+}
+
 function transformRow(row: any): Listing {
   const portal = row.portal || 'idealista'
   const price = row.price || 0
@@ -85,27 +125,7 @@ export default function AnunciosClient() {
   const [showFiltersPanel, setShowFiltersPanel] = useState(false)
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
-  const [filters, setFilters] = useState<FilterState>({
-    operation: 'all',
-    advertiserType: 'all',
-    propertyTypes: [],
-    price: { min: null, max: null },
-    squareMeters: { min: null, max: null },
-    pricePerSqm: { min: null, max: null },
-    bedrooms: { min: null, max: null },
-    bathrooms: { min: null, max: null },
-    yearBuilt: { min: null, max: null },
-    daysOnMarket: { min: null, max: null },
-    parcelSize: { min: null, max: null },
-    floor: null,
-    view: null,
-    orientation: null,
-    furnished: null,
-    energyRating: null,
-    characteristics: [],
-    location: null,
-    distance: null,
-  })
+  const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -207,27 +227,7 @@ export default function AnunciosClient() {
   }
 
   const handleClearFilters = () => {
-    setFilters({
-      operation: 'all',
-      advertiserType: 'all',
-      propertyTypes: [],
-      price: { min: null, max: null },
-      squareMeters: { min: null, max: null },
-      pricePerSqm: { min: null, max: null },
-      bedrooms: { min: null, max: null },
-      bathrooms: { min: null, max: null },
-      yearBuilt: { min: null, max: null },
-      daysOnMarket: { min: null, max: null },
-      parcelSize: { min: null, max: null },
-      floor: null,
-      view: null,
-      orientation: null,
-      furnished: null,
-      energyRating: null,
-      characteristics: [],
-      location: null,
-      distance: null,
-    })
+    setFilters(INITIAL_FILTERS)
     setShowFiltersPanel(false)
   }
 

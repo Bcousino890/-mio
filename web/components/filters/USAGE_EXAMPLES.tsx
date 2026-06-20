@@ -14,10 +14,12 @@ import type { AdvertiserFilterState } from './FilterAdvertiserSection'
 // EJEMPLO 1: Componente básico con FilterPanel
 // ═════════════════════════════════════════════════════════════════════════════
 
+type Agency = { id: string; name: string }
+
 export function Example1_BasicFilterPanel() {
   const { filters, updateFilters, clearFilters, toQueryParams } = useFilters()
   const [isOpen, setIsOpen] = useState(false)
-  const [agencies, setAgencies] = useState([])
+  const [agencies, setAgencies] = useState<Agency[]>([])
   const [isLoadingAgencies, setIsLoadingAgencies] = useState(false)
 
   // Cargar agencias
@@ -353,7 +355,7 @@ export function Example5_GenerateURLParams() {
 
 export function Example6_CustomComponent() {
   const { filters, updateFilters } = useFilters()
-  const [agencies, setAgencies] = useState([])
+  const [agencies, setAgencies] = useState<Agency[]>([])
 
   useEffect(() => {
     // Cargar agencias
