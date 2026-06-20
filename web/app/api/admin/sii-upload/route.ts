@@ -65,30 +65,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'No se recibió ningún archivo' }, { status: 400 })
   }
 
-  if (!comunaId) {
-    return NextResponse.json({ success: false, error: 'Debes seleccionar una comuna' }, { status: 400 })
-  }
-
   let workDir: string | null = null
   try {
-    // Obtén el código de comuna de la BD usando la UUID seleccionada en el dropdown
-    const comunaResult = await pool.query(
-      'SELECT sii_comuna_code FROM chile_comunas WHERE id = $1',
-      [comunaId]
-    )
-
-    if (comunaResult.rows.length === 0) {
-      return NextResponse.json({ success: false, error: 'Comuna no encontrada' }, { status: 400 })
-    }
-
-    const comunaCode = comunaResult.rows[0].sii_comuna_code
-    if (!comunaCode) {
-      return NextResponse.json(
-        { success: false, error: 'Esta comuna aún no tiene código SII asignado. Contacta al administrador.' },
-        { status: 400 }
-      )
-    }
-
     const entries: RawEntry[] = []
     for (const file of uploaded) {
       const name = sanitizeBaseName(file.name)
@@ -100,10 +78,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const files: SiiIngestFiles = {}
     const skipped: string[] = []
+    const results: any[] = []
 
     workDir = await mkdtemp(join(tmpdir(), 'sii-upload-'))
+
+    // Agrupar archivos por código de comuna (extraído del filename)
+    const filePorComuna: Record<string, { [key in keyof SiiIngestFiles]?: string }> = {}
 
     for (const entry of entries) {
       const base = entry.name.replace(/\.[^.]+$/, '')
@@ -113,26 +94,32 @@ export async function POST(request: NextRequest) {
         continue
       }
       const kind = match[1].toUpperCase()
+      const fileComunaCode = match[4]
 
-      // La comuna destino es siempre la seleccionada en el dropdown — el
-      // código en el nombre del archivo se ignora a efectos de validación
-      // (puede venir distinto si el archivo fue renombrado/recortado).
+      if (!filePorComuna[fileComunaCode]) {
+        filePorComuna[fileComunaCode] = {}
+      }
+
       const role = FILE_KIND_TO_ROLE[kind]
       const destPath = join(workDir, entry.name)
       await writeFile(destPath, entry.buffer)
-      files[role] = destPath
+      filePorComuna[fileComunaCode][role] = destPath
     }
 
-    if (Object.keys(files).length === 0) {
+    if (Object.keys(filePorComuna).length === 0) {
       return NextResponse.json(
-        { success: false, error: 'Ningún archivo con formato reconocido (revisa el prefijo del nombre)', skipped },
+        { success: false, error: 'Ningún archivo con formato reconocido', skipped },
         { status: 400 }
       )
     }
 
-    const result = await ingestSiiCatastroComuna({ comunaCode, files })
+    // Procesar cada comuna según su código (identificado automáticamente del filename)
+    for (const [comunaCode, files] of Object.entries(filePorComuna)) {
+      const result = await ingestSiiCatastroComuna({ comunaCode, files: files as SiiIngestFiles })
+      results.push({ comunaCode, ...result })
+    }
 
-    return NextResponse.json({ success: true, data: { results: [{ comunaCode, ...result }], skipped } })
+    return NextResponse.json({ success: true, data: { results, skipped } })
   } catch (error) {
     console.error('Error en sii-upload:', error)
     return NextResponse.json(
