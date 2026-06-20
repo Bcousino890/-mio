@@ -1,4 +1,5 @@
 import Link from "next/link";
+import CurrencySelector from "@/components/CurrencySelector";
 
 const nav = [
   { href: "/propiedades?country=ESPAÑA", label: "España" },
@@ -32,12 +33,15 @@ export default function Header() {
           ))}
         </nav>
 
-        <Link
-          href="/contacto"
-          className="hidden rounded-full border border-navy px-5 py-2 text-sm font-medium text-navy transition-colors hover:bg-navy hover:text-white sm:inline-block"
-        >
-          Consulta Privada
-        </Link>
+        <div className="flex items-center gap-3">
+          <CurrencySelector />
+          <Link
+            href="/contacto"
+            className="hidden rounded-full border border-navy px-5 py-2 text-sm font-medium text-navy transition-colors hover:bg-navy hover:text-white sm:inline-block"
+          >
+            Consulta Privada
+          </Link>
+        </div>
       </div>
     </header>
   );

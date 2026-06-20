@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Property } from "@/lib/properties";
-import { formatPriceMulti } from "@/lib/currency";
+import PriceDisplay from "@/components/PriceDisplay";
 
 export default function PropertyCard({ property }: { property: Property }) {
   return (
@@ -39,7 +39,7 @@ export default function PropertyCard({ property }: { property: Property }) {
           {property.title}
         </h3>
         <p className="text-sm text-navy/70">
-          {formatPriceMulti(property.price, property.currency, ["EUR", "USD"])}
+          <PriceDisplay amount={property.price} currency={property.currency} />
         </p>
         <div className="mt-2 flex gap-4 text-sm text-navy/60">
           <span>{property.bedrooms} hab.</span>

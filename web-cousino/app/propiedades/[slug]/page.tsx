@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import ImageGallery from "@/components/ImageGallery";
 import InquiryForm from "@/components/InquiryForm";
+import PriceDisplay from "@/components/PriceDisplay";
 import PropertyCard from "@/components/PropertyCard";
 import {
   AreaIcon,
@@ -11,7 +12,6 @@ import {
   CalendarIcon,
   MapPinIcon,
 } from "@/components/icons";
-import { formatPriceMulti } from "@/lib/currency";
 import {
   getPropertyBySlug,
   getSimilarProperties,
@@ -79,9 +79,11 @@ export default async function PropertyPage({
             {property.neighborhood}, {property.city}
           </p>
         </div>
-        <p className="text-xl font-medium text-navy">
-          {formatPriceMulti(property.price, property.currency)}
-        </p>
+        <PriceDisplay
+          amount={property.price}
+          currency={property.currency}
+          className="text-xl font-medium text-navy"
+        />
       </div>
 
       <div className="mt-6 flex flex-wrap gap-x-8 gap-y-3 border-y border-navy/10 py-4 text-sm text-navy/80">

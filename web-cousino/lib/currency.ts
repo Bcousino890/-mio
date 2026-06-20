@@ -26,16 +26,3 @@ export function formatCurrency(amount: number, currency: Currency): string {
     maximumFractionDigits: 0,
   }).format(amount);
 }
-
-export function formatPriceMulti(
-  amount: number,
-  currency: Currency,
-  targets: Currency[] = ["EUR", "USD", "CLP"]
-): string {
-  const unique = targets.filter((c) => c !== currency);
-  const primary = formatCurrency(amount, currency);
-  const secondary = unique
-    .map((c) => formatCurrency(convert(amount, currency, c), c))
-    .join(" · ");
-  return secondary ? `${primary} · ${secondary}` : primary;
-}
