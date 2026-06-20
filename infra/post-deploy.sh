@@ -53,18 +53,11 @@ echo ""
 echo "▶ Aplicando migraciones en orden..."
 cd "$MIGRATIONS_DIR"
 
-# Array de migraciones (en orden)
-MIGRATIONS=(0001 0002 0003 0004 0005 0006 0007 0008 0009 0010 0011 0012 0013 0014 0015)
-
-for num in "${MIGRATIONS[@]}"; do
-  MIGRATION_FILE="${num}_*.sql"
-  FILE=$(ls $MIGRATION_FILE 2>/dev/null | head -1)
-
-  if [ -z "$FILE" ]; then
-    echo "⏭️  Migración $num: no encontrada (saltando)"
-    continue
-  fi
-
+# Se descubren dinámicamente TODOS los *.sql presentes (orden numérico por
+# nombre de archivo) en vez de mantener a mano una lista — una lista fija se
+# queda desactualizada en silencio: migraciones nuevas simplemente no corren,
+# sin ningún error ni warning (pasó con 0016-0021, nunca llegaron a producción).
+for FILE in $(ls *.sql 2>/dev/null | sort); do
   echo "▶ Aplicando: $FILE"
 
   # El volumen ../db/migrations:/migrations:ro expone el mismo archivo dentro
