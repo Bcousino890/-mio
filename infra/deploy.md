@@ -156,3 +156,26 @@ $COMPOSE down
 - Postgres en `5433`, Redis en `6380` — no colisionan con los puertos de zintoleads.
 - En nginx, el `server_name mio.zinto.app` solo afecta las peticiones a ese dominio.
 - Los logs van a `/var/log/nginx/casafari-*.log` — separados de los demás.
+
+---
+
+## Sitio público `web-cousino` (independiente, sin DB)
+
+Proyecto aparte dentro del mismo repo (`../web-cousino`) — la web de cara al
+cliente de Benjamín Cousiño Propiedades. No comparte código ni base de datos
+con la app anterior; usa solo datos mock.
+
+| Servicio | Puerto en host | Dominio |
+|---|---|---|
+| Next.js (web-cousino) | `3001` | `cousino.204-168-174-0.nip.io` |
+
+Mismo patrón aditivo de instalación, en scripts separados para no arriesgar
+el deploy de `crm.cremme.es`:
+
+```bash
+bash infra/bootstrap-cousino.sh   # primera vez (app + nginx + TLS)
+bash infra/deploy-cousino.sh      # deploys sucesivos
+```
+
+El CI (`.github/workflows/deploy.yml`) ya detecta cuál de los dos ejecutar
+según si el contenedor `casafari-cousino-app` existe.

@@ -8,8 +8,10 @@ on:
     branches:
       - main
       - claude/tender-hypatia-av518f
+      - claude/wizardly-galileo-s7z7fa
     paths:
       - 'web/**'
+      - 'web-cousino/**'
       - 'db/**'
       - 'infra/**'
       - 'scraper/**'
@@ -91,5 +93,14 @@ jobs:
             else
               echo "▶ Primera instalación: bootstrap completo"
               bash infra/bootstrap.sh
+            fi
+
+            # Sitio público web-cousino (independiente, sin DB).
+            if docker ps --format '{{.Names}}' | grep -q casafari-cousino-app; then
+              echo "▶ Deploy incremental web-cousino (app ya existe)"
+              bash infra/deploy-cousino.sh
+            else
+              echo "▶ Primera instalación web-cousino: bootstrap completo"
+              bash infra/bootstrap-cousino.sh
             fi
           EOF
