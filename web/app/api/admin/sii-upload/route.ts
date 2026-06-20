@@ -3,15 +3,13 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { Pool } from 'pg'
 import { ingestSiiCatastroComuna, type SiiIngestFiles } from '@/lib/sii-catastro-ingest'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300 // 5 minutos para procesar archivos grandes
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+const MAX_FILES = 10
+const MAX_TOTAL_SIZE = 500 * 1024 * 1024 // 500MB total
 
 // Nombres oficiales de los 5 archivos planos del SII (ver glosarios
 // "Estructura de archivo para Detalle Catastral / Rol de Cobro" en
@@ -58,12 +56,28 @@ async function extractZipEntries(buffer: Buffer): Promise<RawEntry[]> {
 }
 
 export async function POST(request: NextRequest) {
+  if (!process.env.DATABASE_URL) {
+    return NextResponse.json({ success: false, error: 'Configuración de base de datos no disponible' }, { status: 500 })
+  }
+
   const formData = await request.formData()
   const uploaded = formData.getAll('files').filter((f): f is File => f instanceof File)
   const comunaId = formData.get('comunaId') as string | null
 
   if (uploaded.length === 0) {
     return NextResponse.json({ success: false, error: 'No se recibió ningún archivo' }, { status: 400 })
+  }
+
+  if (uploaded.length > MAX_FILES) {
+    return NextResponse.json({ success: false, error: `Máximo ${MAX_FILES} archivos por subida` }, { status: 400 })
+  }
+
+  let totalSize = 0
+  for (const f of uploaded) {
+    totalSize += f.size
+    if (totalSize > MAX_TOTAL_SIZE) {
+      return NextResponse.json({ success: false, error: `Tamaño total excede ${MAX_TOTAL_SIZE / 1024 / 1024}MB` }, { status: 400 })
+    }
   }
 
   let workDir: string | null = null
@@ -115,9 +129,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Procesar cada comuna según su código (identificado automáticamente del filename)
+    // Continuar incluso si una comuna falla, para procesar el resto
     for (const [comunaCode, files] of Object.entries(filePorComuna)) {
-      const result = await ingestSiiCatastroComuna({ comunaCode, files: files as SiiIngestFiles })
-      results.push({ comunaCode, ...result })
+      try {
+        const result = await ingestSiiCatastroComuna({
+          comunaCode,
+          files: files as SiiIngestFiles,
+          dbUrl: process.env.DATABASE_URL,
+        })
+        results.push({ comunaCode, ...result })
+      } catch (err) {
+        console.error(`Error procesando comuna ${comunaCode}:`, err)
+        results.push({
+          comunaCode,
+          ok: false,
+          counts: {},
+          error: err instanceof Error ? err.message : 'Error al procesar',
+        })
+      }
     }
 
     return NextResponse.json({ success: true, data: { results, skipped } })
