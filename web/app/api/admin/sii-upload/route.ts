@@ -3,9 +3,14 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
+import { Pool } from 'pg'
 import { ingestSiiCatastroComuna, type SiiIngestFiles } from '@/lib/sii-catastro-ingest'
 
 export const runtime = 'nodejs'
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+})
 
 // Nombres oficiales de los 5 archivos planos del SII (ver glosarios
 // "Estructura de archivo para Detalle Catastral / Rol de Cobro" en
@@ -67,7 +72,7 @@ export async function POST(request: NextRequest) {
   let workDir: string | null = null
   try {
     // Obtén el código de comuna de la BD usando la UUID
-    const comunaResult = await (await import('@/lib/db')).pool.query(
+    const comunaResult = await pool.query(
       'SELECT sii_comuna_code FROM chile_comunas WHERE id = $1',
       [comunaId]
     )
