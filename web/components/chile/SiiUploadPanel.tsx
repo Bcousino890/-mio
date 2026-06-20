@@ -105,20 +105,25 @@ export default function SiiUploadPanel() {
         })
 
         xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const json = JSON.parse(xhr.responseText)
+          try {
+            const json = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300) {
               resolve(json)
-            } catch (err) {
-              reject(new Error('Error parsing response'))
+            } else {
+              reject(new Error(json.error || `Error al subir los archivos (${xhr.status})`))
             }
-          } else {
-            reject(new Error('Error al subir los archivos'))
+          } catch (err) {
+            const statusText = xhr.statusText || 'Error'
+            reject(new Error(`${xhr.status} ${statusText}: ${xhr.responseText.substring(0, 200)}`))
           }
         })
 
         xhr.addEventListener('error', () => {
-          reject(new Error('Error al subir los archivos'))
+          reject(new Error('Error de conexión al subir los archivos'))
+        })
+
+        xhr.addEventListener('abort', () => {
+          reject(new Error('La subida fue cancelada'))
         })
 
         xhr.open('POST', '/api/admin/sii-upload')
