@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
   let workDir: string | null = null
   try {
-    // Obtén el código de comuna de la BD usando la UUID
+    // Obtén el código de comuna de la BD usando la UUID seleccionada en el dropdown
     const comunaResult = await pool.query(
       'SELECT sii_comuna_code FROM chile_comunas WHERE id = $1',
       [comunaId]
@@ -113,14 +113,10 @@ export async function POST(request: NextRequest) {
         continue
       }
       const kind = match[1].toUpperCase()
-      const fileComunaCode = match[4]
 
-      // Valida que el archivo sea de la comuna seleccionada (opcional: warning si no coincide)
-      if (fileComunaCode !== comunaCode) {
-        skipped.push(`${entry.name} (comuna ${fileComunaCode} no coincide con seleccionada)`)
-        continue
-      }
-
+      // La comuna destino es siempre la seleccionada en el dropdown — el
+      // código en el nombre del archivo se ignora a efectos de validación
+      // (puede venir distinto si el archivo fue renombrado/recortado).
       const role = FILE_KIND_TO_ROLE[kind]
       const destPath = join(workDir, entry.name)
       await writeFile(destPath, entry.buffer)
@@ -129,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     if (Object.keys(files).length === 0) {
       return NextResponse.json(
-        { success: false, error: 'Ningún archivo reconocido para esta comuna', skipped },
+        { success: false, error: 'Ningún archivo con formato reconocido (revisa el prefijo del nombre)', skipped },
         { status: 400 }
       )
     }
