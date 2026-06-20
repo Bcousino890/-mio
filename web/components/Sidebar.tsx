@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Sun,
   Moon,
+  Globe,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
 
@@ -53,6 +54,12 @@ const modules = [
     label: 'Zonas & Scraping',
     icon: MapPin,
     description: 'Cobertura por zona',
+  },
+  {
+    href: '/chile',
+    label: 'Chile',
+    icon: Globe,
+    description: 'Mercado inmobiliario · Chile',
   },
 ]
 
