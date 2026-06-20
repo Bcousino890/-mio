@@ -28,11 +28,22 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+interface UploadStats {
+  percent: number
+  loadedBytes: number
+  totalBytes: number
+  startTime: number
+  elapsedSeconds: number
+  speedMBps: number
+  estimatedSecondsRemaining: number
+  isProcessing: boolean
+}
+
 export default function SiiUploadPanel() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStats, setUploadStats] = useState<UploadStats | null>(null)
   const [response, setResponse] = useState<UploadResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [comunas, setComunas] = useState<Comuna[]>([])
@@ -86,11 +97,14 @@ export default function SiiUploadPanel() {
   async function handleUpload() {
     if (files.length === 0) return
     setUploading(true)
-    setUploadProgress(0)
+    setUploadStats(null)
     setError(null)
     setResponse(null)
     try {
       const formData = new FormData()
+      const totalFileSize = files.reduce((sum, f) => sum + f.size, 0)
+      let startTime: number | null = null
+
       for (const f of files) formData.append('files', f)
       formData.append('comunaId', selectedComunaId)
 
@@ -99,12 +113,36 @@ export default function SiiUploadPanel() {
 
         xhr.upload.addEventListener('progress', (e) => {
           if (e.lengthComputable) {
-            const percent = Math.round((e.loaded / e.total) * 100)
-            setUploadProgress(percent)
+            if (startTime === null) startTime = Date.now()
+            const elapsedSeconds = (Date.now() - startTime) / 1000
+            const speedMBps = (e.loaded / 1024 / 1024) / elapsedSeconds
+            const percentComplete = Math.round((e.loaded / e.total) * 90) // 0-90% for upload
+            const bytesRemaining = e.total - e.loaded
+            const estimatedSecondsRemaining = speedMBps > 0 ? (bytesRemaining / 1024 / 1024) / speedMBps : 0
+
+            setUploadStats({
+              percent: percentComplete,
+              loadedBytes: e.loaded,
+              totalBytes: e.total,
+              startTime: startTime,
+              elapsedSeconds: Math.round(elapsedSeconds),
+              speedMBps: Math.round(speedMBps * 100) / 100,
+              estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
+              isProcessing: false,
+            })
           }
         })
 
+        xhr.addEventListener('loadstart', () => {
+          startTime = Date.now()
+        })
+
         xhr.addEventListener('load', () => {
+          // Mostrar estado de procesamiento mientras esperamos respuesta
+          if (startTime) {
+            setUploadStats((prev) => prev ? { ...prev, percent: 95, isProcessing: true } : null)
+          }
+
           try {
             const json = JSON.parse(xhr.responseText)
             if (xhr.status >= 200 && xhr.status < 300) {
@@ -137,8 +175,15 @@ export default function SiiUploadPanel() {
       setError(err instanceof Error ? err.message : 'Error al subir los archivos')
     } finally {
       setUploading(false)
-      setUploadProgress(0)
+      setUploadStats(null)
     }
+  }
+
+  function formatTime(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${minutes}m ${secs}s`
   }
 
   const totalBytes = files.reduce((sum, f) => sum + f.size, 0)
@@ -227,17 +272,35 @@ export default function SiiUploadPanel() {
         {uploading ? 'Subiendo e ingiriendo (puede tardar varios minutos en comunas grandes)…' : 'Subir e ingerir'}
       </button>
 
-      {uploading && uploadProgress > 0 && (
-        <div className="mt-3">
+      {uploading && uploadStats && (
+        <div className="mt-3 space-y-2">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] text-slate-400">Carga</span>
-            <span className="text-[11px] text-slate-400">{uploadProgress}%</span>
+            <div>
+              <span className="text-[11px] text-slate-400">
+                {uploadStats.isProcessing ? 'Procesando' : 'Subiendo'} • {formatBytes(uploadStats.loadedBytes)} / {formatBytes(uploadStats.totalBytes)}
+              </span>
+              {uploadStats.speedMBps > 0 && (
+                <span className="text-[11px] text-slate-500 ml-2">
+                  {uploadStats.speedMBps} MB/s
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">{uploadStats.percent}%</span>
           </div>
           <div className="w-full bg-[var(--c-hover)] border border-[var(--c-border)] rounded-full h-2 overflow-hidden">
             <div
-              className="bg-blue-500 h-full transition-all duration-200"
-              style={{ width: `${uploadProgress}%` }}
+              className={`h-full transition-all duration-200 ${uploadStats.isProcessing ? 'bg-amber-500' : 'bg-blue-500'}`}
+              style={{ width: `${uploadStats.percent}%` }}
             />
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-slate-500">
+            <span>Transcurrido: {formatTime(uploadStats.elapsedSeconds)}</span>
+            {!uploadStats.isProcessing && uploadStats.estimatedSecondsRemaining > 0 && (
+              <span>Estimado: {formatTime(uploadStats.estimatedSecondsRemaining)}</span>
+            )}
+            {uploadStats.isProcessing && (
+              <span className="text-amber-400">Procesando en servidor...</span>
+            )}
           </div>
         </div>
       )}
