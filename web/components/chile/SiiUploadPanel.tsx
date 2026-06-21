@@ -57,6 +57,7 @@ export default function SiiUploadPanel() {
   const [loading, setLoading] = useState(true)
   const [dragActive, setDragActive] = useState(false)
   const [driveUrl, setDriveUrl] = useState('')
+  const [parquetUrl, setParquetUrl] = useState('')
 
   useEffect(() => {
     fetch('/api/admin/chile-comunas')
@@ -214,6 +215,32 @@ export default function SiiUploadPanel() {
     }
   }
 
+  async function handleImportParquet() {
+    if (!parquetUrl.trim()) return
+    setUploading(true)
+    setUploadStats(null)
+    setError(null)
+    setResponse(null)
+    const startTime = Date.now()
+
+    try {
+      const res = await fetch('/api/admin/catastral-cl-parquet/from-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parquetUrl: parquetUrl.trim() }),
+      })
+      const { results, skipped } = await consumeNdjsonResponse(res, startTime)
+
+      setResponse({ success: true, data: { results, skipped } })
+      if (results.every((r) => r.ok)) setParquetUrl('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al importar Parquet de catastral.cl')
+    } finally {
+      setUploading(false)
+      setUploadStats(null)
+    }
+  }
+
   function formatTime(seconds: number): string {
     if (seconds < 60) return `${seconds}s`
     const minutes = Math.floor(seconds / 60)
@@ -313,7 +340,7 @@ export default function SiiUploadPanel() {
         <div className="h-px flex-1 bg-[var(--c-border)]" />
       </div>
 
-      <div className="mb-1">
+      <div className="mb-4">
         <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-1.5">
           <Link2 size={12} className="text-slate-500" />
           Importar CSV de catastral.cl desde un link de Google Drive
@@ -334,6 +361,41 @@ export default function SiiUploadPanel() {
             type="button"
             onClick={handleImportFromUrl}
             disabled={uploading || !driveUrl.trim()}
+            className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors shrink-0"
+          >
+            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+            Importar
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 my-3">
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+        <span className="text-[10px] text-slate-600">o</span>
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+      </div>
+
+      <div className="mb-1">
+        <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-1.5">
+          <Link2 size={12} className="text-slate-500" />
+          Importar Parquet enriquecido de catastral.cl (geometría + valuación)
+        </label>
+        <p className="text-[11px] text-slate-600 mb-2">
+          Descarga el Parquet desde catastral.cl → Tienda → &quot;Datos Catastrales por Comuna&quot; (disponible para todas las comunas con cobertura &gt;95%), cópialo a Google Drive, y pega el link aquí.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={parquetUrl}
+            onChange={(e) => setParquetUrl(e.target.value)}
+            disabled={uploading}
+            placeholder="https://drive.google.com/file/d/.../view (Parquet de catastral.cl)"
+            className="flex-1 px-3 py-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={handleImportParquet}
+            disabled={uploading || !parquetUrl.trim()}
             className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors shrink-0"
           >
             {uploading ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
