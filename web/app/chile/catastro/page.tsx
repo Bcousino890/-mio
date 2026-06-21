@@ -8,8 +8,9 @@ import {
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight
 } from 'lucide-react'
-import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
+import { MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
+import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
 
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
 
@@ -161,7 +162,7 @@ export default function CatastroPage() {
       .finally(() => setBuildingUnitsLoading(false))
   }, [zone.siiCode])
 
-  const parcels = useMemo(() => MOCK_PARCELS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
+  const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
   const pins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
