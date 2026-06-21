@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PageShell from '@/components/PageShell'
 import { MapPinned } from 'lucide-react'
@@ -11,9 +11,10 @@ const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap
 
 const ZONES = [
   // ── Barrio alto RM ────────────────────────────────────────────────────────
-  { id: 'vitacura',     label: 'Vitacura',     center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',     siiComunaCode: null },
+  { id: 'vitacura',     label: 'Vitacura',     center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',     siiComunaCode: '15131' },
   { id: 'las-condes',  label: 'Las Condes',   center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes',   siiComunaCode: '15108' },
-  { id: 'lo-barnechea',label: 'Lo Barnechea', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea', siiComunaCode: null },
+  { id: 'lo-barnechea',label: 'Lo Barnechea', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea', siiComunaCode: '15111' },
+  { id: 'colina',      label: 'Colina',       center: { lat: -33.2007, lng: -70.6769 }, comuna: 'Colina',       siiComunaCode: '13301' },
   { id: 'providencia', label: 'Providencia',  center: { lat: -33.4320, lng: -70.6145 }, comuna: 'Providencia',  siiComunaCode: null },
   { id: 'la-reina',    label: 'La Reina',     center: { lat: -33.4479, lng: -70.5458 }, comuna: 'La Reina',     siiComunaCode: null },
   { id: 'nunoa',       label: 'Ñuñoa',        center: { lat: -33.4574, lng: -70.5962 }, comuna: 'Ñuñoa',        siiComunaCode: null },
@@ -27,6 +28,15 @@ const ZONES = [
 export default function CatastroPage() {
   const [zoneId, setZoneId] = useState<(typeof ZONES)[number]['id']>('vitacura')
   const zone = ZONES.find((z) => z.id === zoneId)!
+  const [siiStats, setSiiStats] = useState<any>(null)
+
+  useEffect(() => {
+    if (!zone.siiComunaCode) { setSiiStats(null); return }
+    fetch(`/api/chile/sii-stats?sii_comuna_code=${zone.siiComunaCode}`)
+      .then(r => r.json())
+      .then(d => { if (d.success) setSiiStats(d) })
+      .catch(() => setSiiStats(null))
+  }, [zone.siiComunaCode])
 
   const parcels = useMemo(() => MOCK_PARCELS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
