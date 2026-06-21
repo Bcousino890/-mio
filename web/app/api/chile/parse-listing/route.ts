@@ -73,47 +73,159 @@ async function fetchListingPage(url: string): Promise<string> {
   return res.text()
 }
 
+function tryParseJson(s: string): any {
+  try { return JSON.parse(s) } catch { return null }
+}
+
+// Portal Inmobiliario embeds the full listing as window.__PRELOADED_STATE__ or
+// similar. Walk the parsed JSON looking for known attribute structures.
+function extractInitialState(html: string): Record<string, any> | null {
+  // Patterns used by Portal Inmobiliario
+  const patterns = [
+    /window\.__PRELOADED_STATE__\s*=\s*({.+?})(?=;<\/script>|;\s*window\.)/s,
+    /window\.MeliGA\s*=\s*({.+?})(?=;<\/script>)/s,
+    /"initialState"\s*:\s*({.+?})(?=};<\/script>)/s,
+  ]
+  for (const pat of patterns) {
+    const m = html.match(pat)
+    if (m) {
+      const parsed = tryParseJson(m[1])
+      if (parsed) return parsed
+    }
+  }
+  return null
+}
+
+// Recursively find all attribute arrays or specific key paths in a large JSON tree
+function deepGet(obj: any, keys: string[]): any {
+  if (!obj || typeof obj !== 'object') return undefined
+  for (const k of keys) {
+    if (k in obj) return obj[k]
+  }
+  for (const v of Object.values(obj)) {
+    const found = deepGet(v, keys)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 function extractFromHtml(html: string) {
   const data: Record<string, any> = {}
 
-  // Title
+  // ── 1. Title ──────────────────────────────────────────────────────────────
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/)
-  if (titleMatch) data.title = titleMatch[1].trim()
+  if (titleMatch) data.title = titleMatch[1].replace(/\s*\|.*/, '').trim()
 
-  // Price — look for JSON-LD or meta
-  const priceMatch = html.match(/"price"\s*:\s*"?([\d,.]+)"?/) ||
-    html.match(/\$\s*([\d.,]+)\s*(?:UF|CLP|USD)/i)
-  if (priceMatch) data.price_raw = priceMatch[1]
+  // ── 2. Geo: lat/lng from JSON-LD, maps scripts, or og tags ────────────────
+  const latMatch = html.match(/"latitude"\s*:\s*(-?\d{1,3}\.\d+)/) ||
+    html.match(/lat(?:itude)?\s*[:=]\s*["']?(-?\d{1,3}\.\d+)/)
+  const lngMatch = html.match(/"longitude"\s*:\s*(-?\d{1,3}\.\d+)/) ||
+    html.match(/l(?:ng|on)(?:gitude)?\s*[:=]\s*["']?(-?\d{1,3}\.\d+)/)
+  if (latMatch) data.lat = parseFloat(latMatch[1])
+  if (lngMatch) data.lng = parseFloat(lngMatch[1])
 
-  // Currency
-  if (html.includes('UF')) data.currency = 'UF'
-  else if (html.includes('USD')) data.currency = 'USD'
-  else data.currency = 'CLP'
-
-  // Surface area
-  const sqmMatch = html.match(/(\d+)\s*m²/) || html.match(/(\d+)\s*metros/)
-  if (sqmMatch) data.sqm = parseInt(sqmMatch[1])
-
-  // Address from meta og or schema
-  const addressMatch = html.match(/"streetAddress"\s*:\s*"([^"]+)"/) ||
-    html.match(/og:street-address[^>]+content="([^"]+)"/)
-  if (addressMatch) data.address = addressMatch[1]
-
-  // Lat/lng from JSON-LD or script
-  const latMatch = html.match(/"latitude"\s*:\s*(-?\d+\.?\d*)/)
-  const lngMatch = html.match(/"longitude"\s*:\s*(-?\d+\.?\d*)/)
-  if (latMatch && lngMatch) {
-    data.lat = parseFloat(latMatch[1])
-    data.lng = parseFloat(lngMatch[1])
+  // Also look for pin position in maps embed URLs
+  if (!data.lat) {
+    const pinMatch = html.match(/[?&](?:center|q)=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
+    if (pinMatch) { data.lat = parseFloat(pinMatch[1]); data.lng = parseFloat(pinMatch[2]) }
   }
 
-  // Rooms from JSON-LD
-  const roomsMatch = html.match(/"numberOfRooms"\s*:\s*(\d+)/)
-  if (roomsMatch) data.rooms = parseInt(roomsMatch[1])
+  // ── 3. Address ────────────────────────────────────────────────────────────
+  const addrMatch = html.match(/"streetAddress"\s*:\s*"([^"]+)"/) ||
+    html.match(/og:street-address[^>]+content="([^"]+)"/) ||
+    html.match(/class="[^"]*address[^"]*"[^>]*>([^<]{5,100})</)
+  if (addrMatch) data.address = addrMatch[1].trim()
 
-  // Floors / pisos
-  const pisosMatch = html.match(/(\d+)\s*(?:pisos?|piso)\b/i)
-  if (pisosMatch) data.floors = parseInt(pisosMatch[1])
+  // Full address from JSON-LD
+  const fullAddrMatch = html.match(/"address"\s*:\s*\{[^}]*"addressLocality"\s*:\s*"([^"]+)"[^}]*"streetAddress"\s*:\s*"([^"]+)"/)
+  if (fullAddrMatch) data.address_full = `${fullAddrMatch[2]}, ${fullAddrMatch[1]}`
+
+  // ── 4. Price ──────────────────────────────────────────────────────────────
+  const priceJsonMatch = html.match(/"price"\s*:\s*\{[^}]*"value"\s*:\s*([\d.]+)[^}]*"currency_id"\s*:\s*"([^"]+)"/)
+  if (priceJsonMatch) {
+    data.price_raw = priceJsonMatch[1]
+    data.currency = priceJsonMatch[2]
+  } else {
+    const priceMatch = html.match(/"price"\s*:\s*"?([\d,.]+)"?/)
+    if (priceMatch) data.price_raw = priceMatch[1]
+    if (html.match(/["']currency_id["']\s*:\s*["']UF["']/)) data.currency = 'UF'
+    else if (html.match(/["']currency_id["']\s*:\s*["']USD["']/)) data.currency = 'USD'
+    else if (html.match(/["']currency_id["']\s*:\s*["']CLP["']/)) data.currency = 'CLP'
+  }
+
+  // ── 5. Core attributes via JSON-LD schema or attribute arrays ─────────────
+  // JSON-LD floorSize / numberOfRooms
+  const floorSizeMatch = html.match(/"floorSize"\s*:\s*\{[^}]*"value"\s*:\s*([\d.]+)/)
+  if (floorSizeMatch) data.sqm = parseFloat(floorSizeMatch[1])
+  const roomsMatch = html.match(/"numberOfRooms"\s*:\s*(\d+)/)
+  if (roomsMatch) data.bedrooms_jsonld = parseInt(roomsMatch[1])
+
+  // Try to extract the "attributes" array from Portal Inmobiliario's page JSON
+  // It looks like: {"id":"BEDROOMS","value_name":"6"} or {"id":"TOTAL_AREA","value_name":"450"}
+  const attrSections = [...html.matchAll(/"id"\s*:\s*"([A-Z_]+)"\s*,\s*"(?:name|value_name)"\s*:\s*"([^"]+)"/g)]
+  const attrs: Record<string, string> = {}
+  for (const m of attrSections) {
+    attrs[m[1]] = m[2]
+  }
+
+  // Also capture pattern: {"id":"BEDROOMS","value_name":"6"}
+  const attrFull = [...html.matchAll(/"id"\s*:\s*"([A-Z_]+)"[^}]*?"value_name"\s*:\s*"([^"]+)"/g)]
+  for (const m of attrFull) {
+    if (!attrs[m[1]]) attrs[m[1]] = m[2]
+  }
+
+  if (Object.keys(attrs).length > 0) {
+    data.attributes_raw = attrs
+
+    const n = (k: string) => { const v = attrs[k]; return v ? parseFloat(v) || v : null }
+    const s = (k: string) => attrs[k] ?? null
+
+    data.sqm              = data.sqm ?? n('TOTAL_AREA') ?? n('SURFACE_COVERED')
+    data.sqm_util         = n('COVERED_AREA') ?? n('SURFACE_TOTAL')
+    data.bedrooms         = n('BEDROOMS') ?? data.bedrooms_jsonld ?? null
+    data.bathrooms        = n('FULL_BATHROOMS') ?? n('BATHROOMS') ?? null
+    data.parking          = n('PARKING_LOTS')
+    data.floors           = n('FLOORS')
+    data.antiquity        = s('PROPERTY_AGE')
+    data.property_type_detail = s('PROPERTY_TYPE') ?? s('SUBTYPE')
+    data.orientation      = s('ORIENTATION')
+    data.furnished        = s('FURNISHED')
+    data.storage          = n('STORAGE_ROOMS')
+    data.allows_pets      = s('PETS_ALLOWED')
+    data.common_expenses  = s('MAINTENANCE_FEE')
+
+    // Amenities / boolean features
+    const amenityKeys: Record<string, string> = {
+      PARRILLA: 'parrilla', ALARM: 'alarma', CONCIERGE: 'conserjeria',
+      HEATING: 'calefaccion', AIR_CONDITIONER: 'aire_acondicionado',
+      CABLE_TV: 'tv_cable', PHONE: 'linea_telefonica',
+      NATURAL_GAS: 'gas_natural', WASHING_MACHINE_CONNECTION: 'conexion_lavarropas',
+      SATELLITE_TV: 'tv_satelital', RUNNING_WATER: 'agua_corriente',
+      BOILER: 'caldera', POOL: 'piscina', GYM: 'gimnasio',
+      ELEVATOR: 'ascensor', LAUNDRY: 'lavanderia', TERRACE: 'terraza',
+    }
+    const amenities: Record<string, string> = {}
+    for (const [attrId, label] of Object.entries(amenityKeys)) {
+      if (attrs[attrId] !== undefined) amenities[label] = attrs[attrId]
+    }
+    if (Object.keys(amenities).length > 0) data.amenities = amenities
+  } else {
+    // Fallback plain-text regexes
+    const sqmMatch = html.match(/Superficie\s+total[^<]*?(\d+)\s*m²/i) ||
+      html.match(/(\d+)\s*m²/)
+    if (sqmMatch) data.sqm = parseInt(sqmMatch[1])
+
+    const dormMatch = html.match(/Dormitorios[^<]*?(\d+)/i)
+    if (dormMatch) data.bedrooms = parseInt(dormMatch[1])
+
+    const bathMatch = html.match(/Ba[ñn]os[^<]*?(\d+)/i)
+    if (bathMatch) data.bathrooms = parseInt(bathMatch[1])
+  }
+
+  // Remove nulls to keep response lean
+  for (const k of Object.keys(data)) {
+    if (data[k] === null || data[k] === undefined) delete data[k]
+  }
 
   return data
 }
