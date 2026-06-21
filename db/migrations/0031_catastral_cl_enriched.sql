@@ -96,8 +96,9 @@ CREATE TABLE IF NOT EXISTS catastral_cl_enriched (
   _match_method TEXT,
   _match_dist_m FLOAT8,
   pol_area_m2 FLOAT8,
-  -- Geometría predial (polígono, WGS84)
-  geom GEOMETRY(POLYGON, 4326),
+  -- Geometría predial (WGS84). Sin restringir a POLYGON: algunos predios
+  -- vienen como MultiPolygon (ej. predios con más de un cuerpo).
+  geom GEOMETRY(GEOMETRY, 4326),
   -- Audit
   tablaOrigen TEXT,
   periodo TEXT,

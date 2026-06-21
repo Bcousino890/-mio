@@ -12,31 +12,6 @@ const execFileAsync = promisify(execFile)
 
 const BATCH_SIZE = 2000
 
-// Script Python que lee un Parquet, parsea geometría WKB, y genera NDJSON
-const PARQUET_TO_NDJSON_SCRIPT = `
-import sys
-import json
-import geopandas as gpd
-import warnings
-warnings.filterwarnings('ignore')
-
-parquet_path = sys.argv[1]
-gdf = gpd.read_parquet(parquet_path)
-
-for _, row in gdf.iterrows():
-  obj = {}
-  for col in gdf.columns:
-    val = row[col]
-    if col == 'geometry':
-      if val is not None and hasattr(val, 'wkb'):
-        obj['geometry'] = val.wkb.hex()
-    elif pd.isna(val):
-      obj[col] = None
-    else:
-      obj[col] = str(val)
-  print(json.dumps(obj))
-`.trim()
-
 async function getComunaIdFromName(client: Client, nombreComuna?: string): Promise<string | null> {
   if (!nombreComuna) return null
   const res = await client.query(
@@ -61,8 +36,20 @@ async function insertBatch(client: Client, batch: Record<string, unknown>[]): Pr
     'pol_area_m2', 'geom', 'periodo',
   ]
 
+  // La columna `geom` no recibe el valor crudo como parámetro: el hex WKB que
+  // entrega el script Python no trae SRID, así que se envuelve en
+  // ST_SetSRID(ST_GeomFromWKB(decode(...,'hex')), 4326) en el propio SQL.
   const placeholders = batch
-    .map((_, i) => `(${columns.map((_, j) => `$${i * columns.length + j + 1}`).join(',')})`)
+    .map((_, i) =>
+      `(${columns
+        .map((col, j) => {
+          const paramIndex = i * columns.length + j + 1
+          return col === 'geom'
+            ? `ST_SetSRID(ST_GeomFromWKB(decode($${paramIndex},'hex')),4326)`
+            : `$${paramIndex}`
+        })
+        .join(',')})`
+    )
     .join(',')
 
   const values: unknown[] = []
@@ -99,7 +86,7 @@ async function insertBatch(client: Client, batch: Record<string, unknown>[]): Pr
       row.materiales ?? null,
       row.calidades ?? null,
       row.pol_area_m2 ?? null,
-      row.geometry ? `01000000200E3100000000000000000000000000000000000000` : null,
+      row.geometry_hex ?? null,
       row.periodo ?? null
     )
   }
@@ -137,6 +124,8 @@ warnings.filterwarnings('ignore')
 
 parquet_path = '${parquetPath.replace(/'/g, "\\'")}'
 gdf = gpd.read_parquet(parquet_path)
+if gdf.crs is not None and str(gdf.crs).upper() != 'EPSG:4326':
+  gdf = gdf.to_crs(epsg=4326)
 
 for _, row in gdf.iterrows():
   obj = {}
@@ -153,8 +142,8 @@ for _, row in gdf.iterrows():
 `
 
     const { stdout } = await execFileAsync('python3', ['-c', pythonScript], {
-      timeout: 5 * 60 * 1000, // 5 minutes
-      maxBuffer: 100 * 1024 * 1024, // 100MB
+      timeout: 10 * 60 * 1000, // 10 minutos por comuna
+      maxBuffer: 512 * 1024 * 1024, // 512MB — comunas grandes (ej. Santiago) generan mucho NDJSON
     })
 
     let rowsProcessed = 0

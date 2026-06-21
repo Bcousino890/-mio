@@ -37,6 +37,9 @@ interface UploadStats {
   totalBytes: number
   elapsedSeconds: number
   rowsProcessed: number
+  currentFile?: string
+  fileIndex?: number
+  fileTotal?: number
 }
 
 const PHASE_LABEL: Record<UploadPhase, string> = {
@@ -114,6 +117,9 @@ export default function SiiUploadPanel() {
     const results: IngestResult[] = []
     let skipped: string[] = []
     let rowsProcessed = 0
+    let currentFile: string | undefined
+    let fileIndex: number | undefined
+    let fileTotal: number | undefined
 
     function setProgress(phase: UploadPhase, percent: number, loadedBytes: number, totalBytes: number) {
       setUploadStats({
@@ -123,6 +129,9 @@ export default function SiiUploadPanel() {
         totalBytes,
         elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
         rowsProcessed,
+        currentFile,
+        fileIndex,
+        fileTotal,
       })
     }
 
@@ -149,9 +158,22 @@ export default function SiiUploadPanel() {
           setProgress('uploading', (msg.loadedBytes / (msg.totalBytes || 1)) * 90, msg.loadedBytes, msg.totalBytes)
         } else if (msg.phase === 'downloading') {
           setProgress('downloading', 5, 0, 0)
+        } else if (msg.phase === 'processing') {
+          currentFile = msg.file
+          fileIndex = msg.index
+          fileTotal = msg.total
+          rowsProcessed = 0
+          setProgress('processing', fileTotal ? ((fileIndex! - 1) / fileTotal) * 100 : 10, 0, 0)
         } else if (msg.progress && typeof msg.rowsProcessed === 'number') {
           rowsProcessed = msg.rowsProcessed
-          setProgress('processing', 90 + (msg.processedBytes / (msg.totalBytes || 1)) * 10, msg.processedBytes, msg.totalBytes)
+          if (msg.file) {
+            currentFile = msg.file
+            fileIndex = msg.index
+            fileTotal = msg.total
+          }
+          const hasBytes = typeof msg.totalBytes === 'number' && msg.totalBytes > 0
+          const percent = hasBytes ? 90 + (msg.processedBytes / msg.totalBytes) * 10 : 95
+          setProgress('processing', percent, msg.processedBytes ?? 0, msg.totalBytes ?? 0)
         } else if (msg.progress && msg.counts) {
           results.push({ comunaCode: msg.comunaCode, ok: msg.status === 'ok', counts: msg.counts, error: msg.error })
         } else if (msg.progress && msg.status === 'error') {
@@ -381,7 +403,8 @@ export default function SiiUploadPanel() {
           Importar Parquet enriquecido de catastral.cl (geometría + valuación)
         </label>
         <p className="text-[11px] text-slate-600 mb-2">
-          Descarga el Parquet desde catastral.cl → Tienda → &quot;Datos Catastrales por Comuna&quot; (disponible para todas las comunas con cobertura &gt;95%), cópialo a Google Drive, y pega el link aquí.
+          Descarga el Parquet desde catastral.cl → Tienda → &quot;Datos Catastrales por Comuna&quot; (disponible para todas las comunas con cobertura &gt;95%) y súbelos a una carpeta de Google Drive. Los links de catastral.cl expiran en 15 minutos, así que conviene subir cada archivo a Drive apenas se descarga.
+          Para importar varias comunas de una vez: selecciona todos los archivos en Drive → botón &quot;Descargar&quot; (Drive los comprime en un .zip) y pega aquí el link de ese .zip — <strong>no</strong> el link de la carpeta, que no se puede leer directamente.
         </p>
         <div className="flex gap-2">
           <input
@@ -389,7 +412,7 @@ export default function SiiUploadPanel() {
             value={parquetUrl}
             onChange={(e) => setParquetUrl(e.target.value)}
             disabled={uploading}
-            placeholder="https://drive.google.com/file/d/.../view (Parquet de catastral.cl)"
+            placeholder="https://drive.google.com/file/d/.../view (Parquet o .zip de varios)"
             className="flex-1 px-3 py-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />
           <button
@@ -410,6 +433,13 @@ export default function SiiUploadPanel() {
             <span className="text-[11px] text-slate-400">
               {PHASE_LABEL[uploadStats.phase]}
               {uploadStats.totalBytes > 0 && ` • ${formatBytes(uploadStats.loadedBytes)} / ${formatBytes(uploadStats.totalBytes)}`}
+              {uploadStats.fileTotal && uploadStats.fileTotal > 1 && (
+                <span className="text-slate-500">
+                  {' '}
+                  • archivo {uploadStats.fileIndex}/{uploadStats.fileTotal}
+                  {uploadStats.currentFile && ` (${uploadStats.currentFile})`}
+                </span>
+              )}
               {uploadStats.phase === 'processing' && uploadStats.rowsProcessed > 0 && (
                 <span className="text-slate-500"> • {uploadStats.rowsProcessed.toLocaleString('es-CL')} filas procesadas</span>
               )}
@@ -445,6 +475,10 @@ export default function SiiUploadPanel() {
               {r.ok && r.comunaCode === 'catastral_cl' ? (
                 <p className="text-[11px] text-slate-500 mt-1">
                   Filas ingresadas: {(r.counts.catastral_cl ?? 0).toLocaleString('es-CL')}
+                </p>
+              ) : r.ok && typeof r.counts.catastral_parquet === 'number' ? (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Predios ingresados: {r.counts.catastral_parquet.toLocaleString('es-CL')}
                 </p>
               ) : r.ok ? (
                 <p className="text-[11px] text-slate-500 mt-1">

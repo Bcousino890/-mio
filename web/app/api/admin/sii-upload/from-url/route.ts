@@ -1,62 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
-import { createWriteStream } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
 import { createNdjsonEncoder, ingestGroupedFilesStreaming } from '@/lib/sii-upload-stream'
+import { extractDriveFileId, downloadFromDrive } from '@/lib/google-drive-download'
 import type { SiiIngestFiles } from '@/lib/sii-catastro-ingest'
 
 export const runtime = 'nodejs'
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024 // 10GiB
-
-// Acepta tanto el link de compartir ("/file/d/<id>/view") como el de
-// descarga directa ("?id=<id>").
-function extractDriveFileId(url: string): string | null {
-  const patterns = [/\/file\/d\/([a-zA-Z0-9_-]+)/, /[?&]id=([a-zA-Z0-9_-]+)/]
-  for (const re of patterns) {
-    const match = url.match(re)
-    if (match) return match[1]
-  }
-  return null
-}
-
-// Descarga un archivo público de Google Drive al disco local sin pasar por
-// el navegador del usuario. Para archivos >25MB, Drive intercala una página
-// de confirmación ("no se puede analizar por virus") en vez del archivo —
-// se intenta primero el endpoint moderno que la evita directamente, y si
-// igual llega HTML se cae al flujo clásico de cookie + token `confirm=`.
-async function downloadFromDrive(fileId: string, destPath: string): Promise<void> {
-  const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`
-  let res = await fetch(directUrl, { redirect: 'follow' })
-  let contentType = res.headers.get('content-type') ?? ''
-
-  if (!res.ok || contentType.includes('text/html')) {
-    const firstUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
-    const first = await fetch(firstUrl, { redirect: 'follow' })
-    const cookie = first.headers.get('set-cookie') ?? ''
-    const firstBody = await first.text()
-    const confirmMatch = firstBody.match(/confirm=([0-9A-Za-z_-]+)/)
-    if (!confirmMatch) {
-      throw new Error('No se pudo obtener el token de confirmación de Google Drive (¿el enlace es privado o no existe?)')
-    }
-    const confirmUrl = `https://drive.google.com/uc?export=download&confirm=${confirmMatch[1]}&id=${fileId}`
-    res = await fetch(confirmUrl, { headers: cookie ? { cookie } : undefined, redirect: 'follow' })
-    contentType = res.headers.get('content-type') ?? ''
-    if (!res.ok) throw new Error(`Error descargando desde Google Drive (${res.status})`)
-    if (contentType.includes('text/html')) {
-      throw new Error('Google Drive devolvió una página HTML en vez del archivo (revisa que el enlace sea público)')
-    }
-  }
-
-  if (!res.body) throw new Error('Respuesta de Google Drive sin cuerpo')
-  await pipeline(
-    Readable.fromWeb(res.body as import('node:stream/web').ReadableStream<Uint8Array>),
-    createWriteStream(destPath)
-  )
-}
 
 export async function POST(request: NextRequest) {
   if (!process.env.DATABASE_URL) {
