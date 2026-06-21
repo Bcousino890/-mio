@@ -11,6 +11,17 @@ import FilterGroupToggle from './FilterGroupToggle'
 import FilterAdvertiserSection, { AdvertiserFilterState } from './FilterAdvertiserSection'
 import FilterLocationSection from './FilterLocationSection'
 
+export type GeoShapeType = 'polygon' | 'circle' | 'rectangle'
+
+export interface GeoShapeFilter {
+  type: GeoShapeType
+  // For polygon/rectangle: array of [lat, lng] pairs
+  coordinates?: [number, number][]
+  // For circle
+  center?: [number, number]
+  radius?: number // meters
+}
+
 export interface FilterState {
   // Operación y tipo de anunciante
   operation: 'all' | 'sale' | 'rent'
@@ -45,6 +56,8 @@ export interface FilterState {
   selected_district_id: string | null
   selected_zone_id: string | null
   selected_subzone_id: string | null
+  // Búsqueda geoespacial por forma dibujada en el mapa
+  geoShape: GeoShapeFilter | null
 }
 
 interface Agency {
