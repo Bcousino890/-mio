@@ -6,14 +6,25 @@ import PageShell from '@/components/PageShell'
 import { MapPinned } from 'lucide-react'
 import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
 import SiiRolSearchPanel from '@/components/chile/SiiRolSearchPanel'
+import SiiCoverageIndicator from '@/components/chile/SiiCoverageIndicator'
 
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
 
 const ZONES = [
-  { id: 'vitacura', label: 'Vitacura', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura', siiComunaCode: null },
+  { id: 'vitacura', label: 'Vitacura', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura', siiComunaCode: '15160' },
   { id: 'zapallar', label: 'Zapallar', center: { lat: -32.5538, lng: -71.4633 }, comuna: 'Zapallar', siiComunaCode: null },
   { id: 'las-condes', label: 'Las Condes', center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes', siiComunaCode: '15108' },
+  { id: 'colina', label: 'Colina', center: { lat: -33.2017, lng: -70.7406 }, comuna: 'Colina', siiComunaCode: '14201' },
 ] as const
+
+// Códigos SII confirmados a partir de datos realmente ingeridos (no adivinados
+// como en 0022_sii_comuna_codes.sql) — se muestran con etiqueta legible en el
+// indicador de cobertura; cualquier otro código que aparezca ahí (ej. el de
+// Lo Barnechea, ya subida pero sin código confirmado) se muestra tal cual.
+const KNOWN_SII_CODES: Record<string, string> = ZONES.reduce((acc, z) => {
+  if (z.siiComunaCode) acc[z.siiComunaCode] = z.label
+  return acc
+}, {} as Record<string, string>)
 
 export default function CatastroPage() {
   const [zoneId, setZoneId] = useState<(typeof ZONES)[number]['id']>('vitacura')
@@ -30,18 +41,21 @@ export default function CatastroPage() {
       title="Catastro Chile"
       subtitle="Mapa satelital + polígonos catastrales (IDE Chile) + pines de anuncios triangulados"
       action={
-        <div className="flex items-center gap-1.5 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg p-1">
-          {ZONES.map((z) => (
-            <button
-              key={z.id}
-              onClick={() => setZoneId(z.id)}
-              className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${
-                z.id === zoneId ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {z.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <SiiCoverageIndicator knownCodes={KNOWN_SII_CODES} />
+          <div className="flex items-center gap-1.5 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg p-1">
+            {ZONES.map((z) => (
+              <button
+                key={z.id}
+                onClick={() => setZoneId(z.id)}
+                className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${
+                  z.id === zoneId ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {z.label}
+              </button>
+            ))}
+          </div>
         </div>
       }
     >
