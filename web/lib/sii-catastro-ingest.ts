@@ -460,19 +460,25 @@ async function loadRolIdMap(client: Client, comunaCode: string): Promise<Map<str
 // ─── Parser catastral.cl CSV ─────────────────────────────────────────────────
 // catastral.cl exporta un CSV con cabecera y todos los predios nacionales.
 // Los nombres de columna pueden variar — se mapean con alias conocidos.
+// Columnas exactas del CSV de catastral.cl (roles-backend pipeline/config.py)
+// 38 columnas: periodo,anio,semestre,comuna,manzana,predio,rc_*,dc_*,serie
 const CATASTRAL_CL_ALIASES: Record<string, string> = {
   // Identificadores
-  cod_comuna: 'sii_comuna_code', comuna: 'sii_comuna_code',
+  comuna: 'sii_comuna_code', cod_comuna: 'sii_comuna_code',
   manzana: 'manzana', predio: 'predio',
-  // Atributos
-  direccion: 'direccion', direccion_inmueble: 'direccion',
-  avaluo_fiscal_total: 'avaluo_fiscal_total', avaluo_total: 'avaluo_fiscal_total',
-  avaluo_exento: 'avaluo_exento',
-  contribucion_semestral: 'contribucion_semestral', contribucion: 'contribucion_semestral',
-  codigo_destino_principal: 'codigo_destino_principal', destino: 'codigo_destino_principal',
-  codigo_ubicacion: 'codigo_ubicacion',
-  superficie_terreno_m2: 'superficie_terreno_m2', sup_terreno: 'superficie_terreno_m2',
-  // Enriquecidos (S2-2025+)
+  // Detalle Catastral (dc_)
+  dc_direccion: 'direccion', direccion: 'direccion',
+  dc_avaluo_fiscal: 'avaluo_fiscal_total', avaluo_fiscal_total: 'avaluo_fiscal_total',
+  dc_avaluo_exento: 'avaluo_exento', avaluo_exento: 'avaluo_exento',
+  dc_contribucion_semestral: 'contribucion_semestral', contribucion_semestral: 'contribucion_semestral',
+  dc_cod_destino: 'codigo_destino_principal', codigo_destino_principal: 'codigo_destino_principal',
+  dc_cod_ubicacion: 'codigo_ubicacion', codigo_ubicacion: 'codigo_ubicacion',
+  dc_sup_terreno: 'superficie_terreno_m2', superficie_terreno_m2: 'superficie_terreno_m2',
+  // Bien común (dc_bc1/bc2)
+  dc_bc1_comuna: 'rbc1_comuna', dc_bc1_manzana: 'rbc1_manzana', dc_bc1_predio: 'rbc1_predio',
+  dc_bc2_comuna: 'rbc2_comuna', dc_bc2_manzana: 'rbc2_manzana', dc_bc2_predio: 'rbc2_predio',
+  dc_padre_comuna: 'padre_comuna', dc_padre_manzana: 'padre_manzana', dc_padre_predio: 'padre_predio',
+  // Coordenadas (cuando vienen en CSV auxiliar o en versiones futuras)
   lat: 'lat', latitud: 'lat',
   lon: 'lng', lng: 'lng', longitud: 'lng',
   nombre_propietario: 'nombre_propietario', propietario: 'nombre_propietario',
@@ -544,6 +550,9 @@ async function* parseCatastralClCsv(filePath: string) {
       codigo_destino_principal: toTextOrNull(r.codigo_destino_principal),
       codigo_ubicacion: toTextOrNull(r.codigo_ubicacion),
       superficie_terreno_m2: toIntOrNull(r.superficie_terreno_m2),
+      rol_bien_comun_1: normalizeRolTriple(r.rbc1_comuna, r.rbc1_manzana, r.rbc1_predio),
+      rol_bien_comun_2: normalizeRolTriple(r.rbc2_comuna, r.rbc2_manzana, r.rbc2_predio),
+      rol_padre: normalizeRolTriple(r.padre_comuna, r.padre_manzana, r.padre_predio),
       lat: toFloatOrNull(r.lat),
       lng: toFloatOrNull(r.lng),
       nombre_propietario: toTextOrNull(r.nombre_propietario),
