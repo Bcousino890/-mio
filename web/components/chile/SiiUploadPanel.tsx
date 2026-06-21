@@ -238,7 +238,7 @@ export default function SiiUploadPanel() {
             : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-blue-500'
         }`}
       >
-        Arrastra archivos aquí o click para elegir (.zip o sueltos) — hasta 300MB
+        Arrastra archivos aquí o click para elegir (.zip o sueltos) — hasta 10GB por archivo
       </div>
 
       {files.length > 0 && (

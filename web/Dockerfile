@@ -18,6 +18,10 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
+# unzip del sistema: la subida SII extrae .zip a disco vía CLI en vez de
+# cargarlo completo en memoria con una librería JS (soporta archivos grandes).
+RUN apk add --no-cache unzip
+
 # standalone output incluye un server.js mínimo con sus propias dependencias
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static     ./.next/static
