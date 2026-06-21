@@ -63,6 +63,46 @@ A medida que se construya la plataforma nueva, el código vivirá en la **raíz*
 
 ---
 
+## Módulo Chile — Fuentes de datos catastrales
+
+El módulo Chile ingiere datos del SII y catastro para análisis de propiedades en comunas como Las Condes, Vitacura, Providencia, etc.
+
+### Fuentes oficiales y públicas
+
+| Fuente | URL | Descripción |
+|---|---|---|
+| **SII — Descarga vigente por comuna** | https://www4.sii.cl/mapasui/internet/#/contenidos/descargarInformacionVigente | Archivos planos (BRTMPCATASN, BRTMPCATASNL, BRTMPCATASA, BRTMPCATASAL, BRTMPROLSEM) por comuna. Sin login. |
+| **SII — Información histórica por año** | https://www4.sii.cl/mapasui/internet/#/contenidos/descargarInformacionHistorica | Mismos archivos históricos por semestre. |
+| **mindicador.cl — UF diaria** | https://mindicador.cl/api/uf/{yyyy} | API REST pública sin auth. UF histórica por año. |
+| **IDE Chile / Geoportal MINVU** | https://ide.minvu.cl | WFS OGC público para polígonos prediales. Sin autenticación. |
+
+### catastral.cl — Proyecto Tremen (datos vectorizados del SII)
+
+[catastral.cl](https://catastral.cl) es un proyecto open source liderado por [@crishernandezmaps](https://github.com/crishernandezmaps) que procesa los CSVs oficiales del SII y los convierte en capas GIS con polígonos prediales. Cubre 9.4M predios de Chile.
+
+| Recurso | URL | Descripción |
+|---|---|---|
+| **catastral.cl** | https://catastral.cl | Portal de descarga de datos prediales Chile. CSV nacional + GeoPackages por semestre. |
+| **street.catastral.cl** | https://street.catastral.cl | Visor de calles y predios a nivel nacional. |
+| **Tremen Tech** | https://tremen.tech | Empresa detrás de catastral.cl. Procesamiento de datos SII a nivel nacional. |
+| **roles-backend** | https://github.com/crishernandezmaps/roles-backend | Backend del proyecto catastral.cl. API y procesamiento de roles SII. |
+| **roles-frontend** | https://github.com/crishernandezmaps/roles-frontend | Frontend del visor catastral. |
+| **catastral.cl (repo)** | https://github.com/crishernandezmaps/catastral.cl | Repositorio principal del proyecto catastral.cl. Datos, scripts y documentación. |
+
+> **Nota técnica:** catastral.cl bloquea acceso programático (HTTP 403). Los datos deben descargarse manualmente desde el portal. El CSV nacional (`catastro_YYYY_N.csv`) contiene ~9.4M filas con 38 columnas (formato delimitado por comas, con header). La subida de este CSV se puede hacer directamente desde Configuración → Subir archivos SII.
+
+### Scripts incluidos
+
+- `scraper/download-catastral-gpkg.mjs` — Genera comandos `ogr2ogr` para cargar GeoPackages en `cadastre_parcels_cl`
+- `scraper/ingest-sii-s1-2026.mjs` — Ingesta CSV oficiales del SII S1-2026 por comuna
+- `scraper/fetch-uf-mindicador.mjs` — Descarga UF diaria desde mindicador.cl
+
+### Documentación de investigación
+
+Ver [`docs/INVESTIGACION-CATASTRO-CL-2026.md`](docs/INVESTIGACION-CATASTRO-CL-2026.md) para el roadmap completo de enriquecimiento SII, hallazgos de investigación sobre catastral.cl y fases planificadas.
+
+---
+
 ## Estado
 
-🚧 **Fase 0 — arranque.** Definida la arquitectura; código de la plataforma nueva por construir. Ver roadmap por fases en el [Plan Maestro](docs/PLAN-MAESTRO.md#8-roadmap-por-fases).
+🚧 **En desarrollo activo.** Madrid (Fase 1) + Chile catastral (Fase 2). Ver [`docs/INVESTIGACION-CATASTRO-CL-2026.md`](docs/INVESTIGACION-CATASTRO-CL-2026.md) para el roadmap de Chile.
