@@ -42,6 +42,9 @@ export async function GET(request: NextRequest) {
   const yearBuiltMax = sp.get('year_built_max') ? Number(sp.get('year_built_max')) : null
   const pricePerSqmMin = sp.get('price_per_sqm_min') ? Number(sp.get('price_per_sqm_min')) : null
   const pricePerSqmMax = sp.get('price_per_sqm_max') ? Number(sp.get('price_per_sqm_max')) : null
+  const geoPolygon = sp.get('geo_polygon')?.trim() // JSON array of [lat,lng] pairs
+  const geoCircle = sp.get('geo_circle')?.trim()   // "lat,lng,radius_meters"
+
   // Nuevos parámetros de ubicación normalizada (migración 0019)
   const districtId = sp.get('district_id')?.trim()
   const zoneId = sp.get('zone_id')?.trim()
@@ -159,6 +162,38 @@ export async function GET(request: NextRequest) {
     }
     if (subzoneId) {
       conditions.push(`l.subzone_id = ${addParam(subzoneId)}`)
+    }
+
+    // Geospatial filtering - polygon or circle drawn on map
+    if (geoPolygon) {
+      try {
+        const coords = JSON.parse(geoPolygon) as [number, number][]
+        if (coords.length >= 3) {
+          // Build WKT polygon: ST_GeomFromText uses lon,lat order (x,y)
+          const wktCoords = coords.map(([lat, lng]) => `${lng} ${lat}`).join(',')
+          const wkt = `POLYGON((${wktCoords}))`
+          conditions.push(`ST_Contains(
+            ST_GeomFromText(${addParam(wkt)}, 4326),
+            ST_SetSRID(ST_Point(l.longitude, l.latitude), 4326)
+          )`)
+        }
+      } catch {
+        // ignore invalid geo_polygon
+      }
+    }
+
+    if (geoCircle) {
+      const parts = geoCircle.split(',')
+      if (parts.length === 3) {
+        const [lat, lng, radiusM] = parts.map(Number)
+        if (!isNaN(lat) && !isNaN(lng) && !isNaN(radiusM) && radiusM > 0) {
+          conditions.push(`ST_DWithin(
+            ST_SetSRID(ST_Point(l.longitude, l.latitude), 4326)::geography,
+            ST_SetSRID(ST_Point(${addParam(lng)}, ${addParam(lat)}), 4326)::geography,
+            ${addParam(radiusM)}
+          )`)
+        }
+      }
     }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`

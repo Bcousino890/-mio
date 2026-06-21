@@ -123,6 +123,7 @@ export default function AnunciosClient() {
     selected_district_id: null,
     selected_zone_id: null,
     selected_subzone_id: null,
+    geoShape: null,
   })
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -156,6 +157,7 @@ export default function AnunciosClient() {
     if (filters.furnished !== null) count++
     if (filters.yearBuilt.min !== null || filters.yearBuilt.max !== null) count++
     if (filters.energyRating) count++
+    if (filters.geoShape) count++
     return count
   }
 
@@ -191,6 +193,13 @@ export default function AnunciosClient() {
         if (filters.energyRating) params.set('energy_rating', filters.energyRating)
         if (filters.view) params.set('view', filters.view)
         if (filters.orientation) params.set('orientation', filters.orientation)
+        if (filters.geoShape) {
+          if (filters.geoShape.type === 'circle' && filters.geoShape.center && filters.geoShape.radius != null) {
+            params.set('geo_circle', `${filters.geoShape.center[0]},${filters.geoShape.center[1]},${filters.geoShape.radius}`)
+          } else if (filters.geoShape.coordinates) {
+            params.set('geo_polygon', JSON.stringify(filters.geoShape.coordinates))
+          }
+        }
 
         const response = await fetch(`/api/listings?${params.toString()}`, { signal: controller.signal })
         if (!response.ok) throw new Error('Failed to fetch listings')
@@ -263,6 +272,7 @@ export default function AnunciosClient() {
       selected_district_id: null,
       selected_zone_id: null,
       selected_subzone_id: null,
+      geoShape: null,
     })
     setShowFiltersPanel(false)
   }
@@ -482,6 +492,11 @@ export default function AnunciosClient() {
               activeId={combinedActive}
               onMarkerClick={(id) => setActiveId(id === activeId ? null : id)}
               onMarkerHover={setHoverId}
+              onShapeDrawn={(shape) => {
+                setFilters(prev => ({ ...prev, geoShape: shape }))
+                setPage(1)
+              }}
+              activeShape={filters.geoShape}
             />
           </div>
         )}
