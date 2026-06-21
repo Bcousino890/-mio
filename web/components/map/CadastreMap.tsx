@@ -1,7 +1,8 @@
 'use client'
 
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useRef } from 'react'
+import 'leaflet-draw/dist/leaflet.draw.css'
+import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
 
 interface Props {
@@ -9,6 +10,14 @@ interface Props {
   pins: CadastreListingPin[]
   center?: { lat: number; lng: number }
   zoom?: number
+  onShapeDrawn?: (shape: DrawnShape | null) => void
+}
+
+export interface DrawnShape {
+  type: 'polygon' | 'circle' | 'rectangle'
+  coordinates?: [number, number][]
+  center?: [number, number]
+  radius?: number
 }
 
 const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
@@ -25,24 +34,43 @@ const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string
   none: 'Sin resolver',
 }
 
-function pinHtml(pin: CadastreListingPin) {
-  const color = CONFIDENCE_COLOR[pin.location_confidence]
+// Orden de prioridad para elegir el color/label dominante de un grupo de
+// pines del mismo edificio (ej. 1 confirmado + 1 candidato → se pinta como
+// confirmado, el estado más fuerte gana).
+const CONFIDENCE_RANK: Record<CadastreListingPin['location_confidence'], number> = {
+  confirmed: 3,
+  candidate: 2,
+  pin_suspect: 1,
+  none: 0,
+}
+
+function dominantConfidence(pins: CadastreListingPin[]): CadastreListingPin['location_confidence'] {
+  return pins.reduce((best, p) => (CONFIDENCE_RANK[p.location_confidence] > CONFIDENCE_RANK[best] ? p.location_confidence : best), pins[0].location_confidence)
+}
+
+function pinHtml(confidence: CadastreListingPin['location_confidence'], count: number) {
+  const color = CONFIDENCE_COLOR[confidence]
+  const size = count > 1 ? 22 : 16
   return `<div style="
-    width:16px;height:16px;border-radius:50%;
+    width:${size}px;height:${size}px;border-radius:50%;
     background:${color};
     border:2px solid #ffffff;
     box-shadow:0 2px 6px rgba(0,0,0,0.45);
     cursor:pointer;
-  "></div>`
+    display:flex;align-items:center;justify-content:center;
+    color:#ffffff;font-family:system-ui;font-size:10px;font-weight:700;
+  ">${count > 1 ? count : ''}</div>`
 }
 
-function popupHtml(pin: CadastreListingPin) {
+// Un pin individual (sin agrupar) o una de las filas dentro del popup de un
+// edificio agrupado — cada anuncio se ve de forma independiente, nunca se
+// fusiona la info de varios anuncios en un solo bloque.
+function pinRowHtml(pin: CadastreListingPin) {
   const color = CONFIDENCE_COLOR[pin.location_confidence]
   return `
-    <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
+    <div style="padding:6px 0">
       <div style="font-weight:700;font-size:13px;color:#0f172a">${pin.title}</div>
-      <div style="color:#64748b;font-size:11px;margin-top:2px">${pin.comuna}</div>
-      <div style="display:flex;align-items:center;gap:5px;margin-top:6px">
+      <div style="display:flex;align-items:center;gap:5px;margin-top:4px">
         <span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block"></span>
         <span style="font-size:11px;font-weight:600;color:#1e293b">${CONFIDENCE_LABEL[pin.location_confidence]}</span>
       </div>
@@ -52,20 +80,54 @@ function popupHtml(pin: CadastreListingPin) {
   `
 }
 
+function groupPopupHtml(comuna: string, pins: CadastreListingPin[]) {
+  const rows = pins.map((p, i) => `${i > 0 ? '<div style="border-top:1px solid #e2e8f0"></div>' : ''}${pinRowHtml(p)}`).join('')
+  return `
+    <div style="min-width:220px;max-width:260px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
+      ${pins.length > 1 ? `<div style="color:#64748b;font-size:11px;margin-bottom:2px">${comuna} · ${pins.length} anuncios en este edificio</div>` : `<div style="color:#64748b;font-size:11px;margin-bottom:2px">${comuna}</div>`}
+      ${rows}
+    </div>
+  `
+}
+
+// Agrupa pines del mismo edificio (mismo matched_parcel_id, o mismo
+// rol_matriz si no hay parcela resuelta) en un único punto del mapa —
+// evita que 6 corredoras republicando la misma casa se vean como 6 pines
+// dispersos. La info de cada anuncio sigue viéndose por separado dentro
+// del popup del grupo, nunca se fusiona en un solo dato.
+function groupPinsByBuilding(pins: CadastreListingPin[]): { key: string; pins: CadastreListingPin[] }[] {
+  const groups = new Map<string, CadastreListingPin[]>()
+  pins.forEach((pin, i) => {
+    const key = pin.matched_parcel_id ?? pin.rol_matriz ?? `__single_${i}`
+    const existing = groups.get(key)
+    if (existing) existing.push(pin)
+    else groups.set(key, [pin])
+  })
+  return Array.from(groups.entries()).map(([key, pins]) => ({ key, pins }))
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let leafletPromise: Promise<any> | null = null
 function loadLeaflet() {
   if (!leafletPromise) {
-    leafletPromise = import('leaflet').then((L) => L)
+    leafletPromise = import('leaflet').then(async (L) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(window as any).L = L
+      await import('leaflet-draw')
+      return L
+    })
   }
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props) {
+export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drawnItemsRef = useRef<any>(null)
   const initializingRef = useRef(false)
+  const [activeShape, setActiveShape] = useState<DrawnShape | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -113,15 +175,83 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props)
         `)
       })
 
-      pins.forEach((pin) => {
+      const parcelCentroidById = new Map(parcels.map((p) => [p.id, p.centroid]))
+
+      groupPinsByBuilding(pins).forEach(({ key, pins: groupPins }) => {
+        // Punto del marcador: centroide de la parcela catastral si el grupo
+        // ya está resuelto a un edificio real; si no, el promedio de los
+        // pines del grupo (mismo rol_matriz pero sin parcela geométrica aún).
+        const parcelCentroid = parcelCentroidById.get(key)
+        const point = parcelCentroid ?? {
+          lat: groupPins.reduce((sum, p) => sum + p.lat, 0) / groupPins.length,
+          lng: groupPins.reduce((sum, p) => sum + p.lng, 0) / groupPins.length,
+        }
+
+        const confidence = dominantConfidence(groupPins)
         const icon = L.divIcon({
           className: '',
-          html: pinHtml(pin),
-          iconSize: [16, 16],
-          iconAnchor: [8, 8],
+          html: pinHtml(confidence, groupPins.length),
+          iconSize: [groupPins.length > 1 ? 22 : 16, groupPins.length > 1 ? 22 : 16],
+          iconAnchor: [groupPins.length > 1 ? 11 : 8, groupPins.length > 1 ? 11 : 8],
         })
-        const marker = L.marker([pin.lat, pin.lng], { icon }).addTo(map)
-        marker.bindPopup(popupHtml(pin), { maxWidth: 240, offset: [0, -4] })
+        const marker = L.marker([point.lat, point.lng], { icon }).addTo(map)
+        marker.bindPopup(groupPopupHtml(groupPins[0].comuna, groupPins), { maxWidth: 280, offset: [0, -4] })
+      })
+
+      // Draw tools
+      const drawnItems = new (L as any).FeatureGroup()
+      map.addLayer(drawnItems)
+      drawnItemsRef.current = drawnItems
+
+      const drawControl = new (L as any).Control.Draw({
+        position: 'topright',
+        edit: { featureGroup: drawnItems, remove: true },
+        draw: {
+          polygon: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          circle: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          rectangle: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          polyline: false,
+          marker: false,
+          circlemarker: false,
+        },
+      })
+      map.addControl(drawControl)
+
+      map.on((L as any).Draw.Event.CREATED, (e: any) => {
+        drawnItems.clearLayers()
+        drawnItems.addLayer(e.layer)
+        let shape: DrawnShape | null = null
+        if (e.layerType === 'circle') {
+          const c = e.layer.getLatLng()
+          shape = { type: 'circle', center: [c.lat, c.lng], radius: e.layer.getRadius() }
+        } else {
+          const coords: [number, number][] = e.layer.getLatLngs()[0].map((ll: any) => [ll.lat, ll.lng])
+          coords.push(coords[0])
+          shape = { type: e.layerType === 'rectangle' ? 'rectangle' : 'polygon', coordinates: coords }
+        }
+        setActiveShape(shape)
+        onShapeDrawn?.(shape)
+      })
+
+      map.on((L as any).Draw.Event.DELETED, () => {
+        setActiveShape(null)
+        onShapeDrawn?.(null)
+      })
+
+      map.on((L as any).Draw.Event.EDITED, (e: any) => {
+        e.layers.eachLayer((layer: any) => {
+          let shape: DrawnShape
+          if (typeof layer.getRadius === 'function') {
+            const c = layer.getLatLng()
+            shape = { type: 'circle', center: [c.lat, c.lng], radius: layer.getRadius() }
+          } else {
+            const coords: [number, number][] = layer.getLatLngs()[0].map((ll: any) => [ll.lat, ll.lng])
+            coords.push(coords[0])
+            shape = { type: 'polygon', coordinates: coords }
+          }
+          setActiveShape(shape)
+          onShapeDrawn?.(shape)
+        })
       })
 
       mapRef.current = map
@@ -141,6 +271,21 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props)
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
+      {activeShape && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-cyan-600/90 backdrop-blur border border-cyan-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
+          <span>Zona dibujada activa</span>
+          <button
+            onClick={() => {
+              drawnItemsRef.current?.clearLayers()
+              setActiveShape(null)
+              onShapeDrawn?.(null)
+            }}
+            className="w-4 h-4 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 transition-colors"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="absolute bottom-5 left-4 z-[1000] bg-white/95 backdrop-blur border border-black/8 rounded-xl px-3 py-2 text-xs text-slate-600 space-y-1 pointer-events-none shadow-md">
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-[#22c55e] inline-block flex-shrink-0" />

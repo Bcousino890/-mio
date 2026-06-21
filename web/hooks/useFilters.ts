@@ -43,6 +43,7 @@ const INITIAL_STATE: FilterState = {
   selected_district_id: null,
   selected_zone_id: null,
   selected_subzone_id: null,
+  geoShape: null,
 }
 
 const STORAGE_KEY = 'casafari:filters:current'

@@ -2,14 +2,18 @@
 
 import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet-draw/dist/leaflet.draw.css'
 import { useEffect, useRef } from 'react'
 import type { Listing } from '@/lib/mock-listings'
+import type { GeoShapeFilter } from '@/components/filters/FilterPanel'
 
 interface Props {
   listings: Listing[]
   activeId?: string | null
   onMarkerClick?: (id: string) => void
   onMarkerHover?: (id: string | null) => void
+  onShapeDrawn?: (shape: GeoShapeFilter | null) => void
+  activeShape?: GeoShapeFilter | null
 }
 
 function fmtPrice(n: number, op: string) {
@@ -64,6 +68,7 @@ function loadLeaflet() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(window as any).L = L
       await import('leaflet.markercluster')
+      await import('leaflet-draw')
       return L
     })
   }
@@ -95,7 +100,7 @@ function clusterHtml(count: number) {
   </div>`
 }
 
-export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover }: Props) {
+export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover, onShapeDrawn, activeShape }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -103,6 +108,8 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   const markersRef = useRef<Record<string, any>>({})
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clusterGroupRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drawnItemsRef = useRef<any>(null)
   const initializingRef = useRef(false)
 
   useEffect(() => {
@@ -180,6 +187,83 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
       map.addLayer(clusterGroup)
       clusterGroupRef.current = clusterGroup
       mapRef.current = map
+
+      // Draw feature group to hold drawn shapes
+      const drawnItems = new (L as any).FeatureGroup()
+      map.addLayer(drawnItems)
+      drawnItemsRef.current = drawnItems
+
+      const drawControl = new (L as any).Control.Draw({
+        edit: { featureGroup: drawnItems, remove: true },
+        draw: {
+          polygon: {
+            allowIntersection: false,
+            shapeOptions: { color: '#3b82f6', fillOpacity: 0.12, weight: 2 },
+          },
+          circle: {
+            shapeOptions: { color: '#3b82f6', fillOpacity: 0.12, weight: 2 },
+          },
+          rectangle: {
+            shapeOptions: { color: '#3b82f6', fillOpacity: 0.12, weight: 2 },
+          },
+          polyline: false,
+          marker: false,
+          circlemarker: false,
+        },
+      })
+      map.addControl(drawControl)
+
+      // Handle draw:created
+      map.on((L as any).Draw.Event.CREATED, (e: any) => {
+        drawnItems.clearLayers()
+        drawnItems.addLayer(e.layer)
+
+        const layerType = e.layerType
+        let shape: GeoShapeFilter | null = null
+
+        if (layerType === 'circle') {
+          const center = e.layer.getLatLng()
+          const radius = e.layer.getRadius()
+          shape = {
+            type: 'circle',
+            center: [center.lat, center.lng],
+            radius,
+          }
+        } else if (layerType === 'polygon' || layerType === 'rectangle') {
+          const latlngs = e.layer.getLatLngs()[0]
+          const coordinates: [number, number][] = latlngs.map((ll: any) => [ll.lat, ll.lng])
+          // Close the polygon
+          coordinates.push(coordinates[0])
+          shape = {
+            type: layerType === 'rectangle' ? 'rectangle' : 'polygon',
+            coordinates,
+          }
+        }
+
+        onShapeDrawn?.(shape)
+      })
+
+      // Handle draw:deleted (clear all)
+      map.on((L as any).Draw.Event.DELETED, () => {
+        onShapeDrawn?.(null)
+      })
+
+      // Handle draw:edited
+      map.on((L as any).Draw.Event.EDITED, (e: any) => {
+        const layers = e.layers
+        layers.eachLayer((layer: any) => {
+          if (typeof layer.getRadius === 'function') {
+            const center = layer.getLatLng()
+            const radius = layer.getRadius()
+            onShapeDrawn?.({ type: 'circle', center: [center.lat, center.lng], radius })
+          } else {
+            const latlngs = layer.getLatLngs()[0]
+            const coordinates: [number, number][] = latlngs.map((ll: any) => [ll.lat, ll.lng])
+            coordinates.push(coordinates[0])
+            onShapeDrawn?.({ type: 'polygon', coordinates })
+          }
+        })
+      })
     })
 
     return () => {
@@ -222,6 +306,21 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
+      {/* Draw mode indicator + clear button */}
+      {activeShape && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-blue-600/90 backdrop-blur border border-blue-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
+          <span>Zona dibujada activa</span>
+          <button
+            onClick={() => {
+              drawnItemsRef.current?.clearLayers()
+              onShapeDrawn?.(null)
+            }}
+            className="w-4 h-4 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 transition-colors"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Map legend */}
       <div className="absolute bottom-5 left-4 z-[1000] bg-white/95 backdrop-blur border border-black/8 rounded-xl px-3 py-2 text-xs text-slate-600 space-y-1 pointer-events-none shadow-md">
         <div className="flex items-center gap-2">
