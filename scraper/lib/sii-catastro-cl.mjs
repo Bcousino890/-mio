@@ -4,15 +4,8 @@
 // Vigente por Comuna"): Detalle Catastral (4 archivos) + Rol de Cobro (Rol
 // Semestral de Contribuciones).
 //
-// ORIGEN DE LOS DATOS — esto NO es scraping:
-//   sii.cl publica un botón de descarga masiva de autoservicio por comuna.
-//   Un humano lo descarga manualmente desde el sitio y sube el archivo plano
-//   resultante a este sistema. Este módulo SOLO lee archivos que ya están en
-//   disco — JAMÁS hace una petición HTTP/scraping contra ningún (sub)dominio
-//   sii.cl. Ver banner legal completo en cadastre-cl.mjs y en la migración
-//   0021_sii_catastro_cl.sql (uso declarado por sii.cl: "personal y no
-//   comercial" — estos datos se usan como señal interna de matching, nunca
-//   se redistribuyen ni comercializan tal cual).
+
+
 //
 // Formato de archivos (confirmado contra datos reales de Las Condes, comuna
 // 15108, año 2026 semestre 1 — ver estructura_detalle_catastral_1.pdf y
