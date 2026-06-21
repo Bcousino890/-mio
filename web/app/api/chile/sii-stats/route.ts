@@ -27,14 +27,14 @@ export async function GET(request: NextRequest) {
         ROUND(AVG(avaluo_fiscal_total)) as avaluo_promedio,
         ROUND(AVG(superficie_terreno_m2)) as superficie_promedio_m2
       FROM sii_roles_cl
-      WHERE sii_comuna_code = $1 AND serie = 'no_agricola'`,
+      WHERE sii_comuna_code = $1`,
       [siiComunaCode]
     )
 
     const sampleRes = await pool.query(
       `SELECT rol, direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal
       FROM sii_roles_cl
-      WHERE sii_comuna_code = $1 AND serie = 'no_agricola' AND codigo_destino_principal = 'H'
+      WHERE sii_comuna_code = $1 AND codigo_destino_principal = 'H'
       ORDER BY avaluo_fiscal_total DESC NULLS LAST
       LIMIT 10`,
       [siiComunaCode]

@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
-  BarChart3, RefreshCw, ExternalLink, Filter
+  BarChart3, RefreshCw, ExternalLink, Filter, Layers
 } from 'lucide-react'
 import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
 
@@ -83,6 +83,12 @@ export default function CatastroPage() {
   const [selectedRol, setSelectedRol] = useState<any>(null)
   const [rolDetail, setRolDetail] = useState<any>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  // Building units state
+  const [buildingUnits, setBuildingUnits] = useState<any[]>([])
+  const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
+  const [showBuildingUnits, setShowBuildingUnits] = useState(false)
+  // Filter by building
+  const [filterRolPadre, setFilterRolPadre] = useState<string | null>(null)
 
   const PAGE_SIZE = 50
 
@@ -93,7 +99,7 @@ export default function CatastroPage() {
   }, [searchInput])
 
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [zoneId, destino, sort])
+  useEffect(() => { setPage(1) }, [zoneId, destino, sort, filterRolPadre])
 
   // Fetch stats
   useEffect(() => {
@@ -112,10 +118,10 @@ export default function CatastroPage() {
       page: String(page),
       page_size: String(PAGE_SIZE),
       sort,
-      serie: 'no_agricola',
     })
     if (search) params.set('q', search)
     if (destino) params.set('destino', destino)
+    if (filterRolPadre) params.set('rol_padre', filterRolPadre)
     fetch(`/api/chile/sii-roles-list?${params}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -128,7 +134,7 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
     return () => controller.abort()
-  }, [zone.siiCode, page, search, destino, sort])
+  }, [zone.siiCode, page, search, destino, sort, filterRolPadre])
 
   // Fetch rol detail
   useEffect(() => {
@@ -140,6 +146,19 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setDetailLoading(false))
   }, [selectedRol, zone.siiCode])
+
+  // Fetch building units when user clicks "Ver departamentos"
+  const loadBuildingUnits = useCallback((rolPadre: string) => {
+    if (!zone.siiCode) return
+    setBuildingUnitsLoading(true)
+    setBuildingUnits([])
+    setShowBuildingUnits(true)
+    fetch(`/api/chile/sii-building-units?sii_comuna_code=${zone.siiCode}&rol_padre=${encodeURIComponent(rolPadre)}`)
+      .then(r => r.json())
+      .then(d => { if (d.success) setBuildingUnits(d.units) })
+      .catch(() => {})
+      .finally(() => setBuildingUnitsLoading(false))
+  }, [zone.siiCode])
 
   const parcels = useMemo(() => MOCK_PARCELS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
@@ -269,9 +288,19 @@ export default function CatastroPage() {
 
           {/* Roles count */}
           <div className="flex-none flex items-center justify-between px-3 py-1.5 border-b border-[var(--c-border-card)]">
-            <p className="text-[11px] text-slate-600">
-              {total > 0 ? <><span className="text-slate-400 font-medium">{rangeStart}–{rangeEnd}</span> de <span className="text-slate-500">{total.toLocaleString('es-CL')}</span> roles</> : zone.hasData ? '0 roles' : 'Sin datos SII'}
-            </p>
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <p className="text-[11px] text-slate-600">
+                {total > 0 ? <><span className="text-slate-400 font-medium">{rangeStart}–{rangeEnd}</span> de <span className="text-slate-500">{total.toLocaleString('es-CL')}</span> roles</> : zone.hasData ? '0 roles' : 'Sin datos SII'}
+              </p>
+              {filterRolPadre && (
+                <button
+                  onClick={() => setFilterRolPadre(null)}
+                  className="flex items-center gap-1 text-[10px] bg-purple-950/40 border border-purple-900/50 text-purple-400 px-1.5 py-0.5 rounded hover:bg-purple-950/60 transition-colors"
+                >
+                  <Layers size={9} />Edificio {filterRolPadre}<X size={9} />
+                </button>
+              )}
+            </div>
             {loading && <RefreshCw size={11} className="text-slate-600 animate-spin" />}
           </div>
 
@@ -359,6 +388,79 @@ export default function CatastroPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* Building links */}
+                    {rolDetail.rol?.rol_padre && (
+                      <div className="rounded-xl border border-purple-900/40 bg-purple-950/20 p-3">
+                        <p className="text-[10px] text-purple-400 font-semibold mb-2 flex items-center gap-1.5">
+                          <Layers size={11} />Esta unidad pertenece a un edificio
+                        </p>
+                        <p className="text-[11px] text-slate-500 mb-2">Rol padre: <span className="font-mono text-slate-300">{rolDetail.rol.rol_padre}</span></p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => loadBuildingUnits(rolDetail.rol.rol_padre)}
+                            className="flex items-center gap-1.5 text-xs font-medium bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                          >
+                            <Layers size={12} />Ver todas las unidades del edificio
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* If this rol IS a building (no rol_padre but has bien_comun) */}
+                    {!rolDetail.rol?.rol_padre && (rolDetail.rol?.rol_bien_comun_1 || rolDetail.rol?.rol_bien_comun_2) && (
+                      <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
+                        <p className="text-[10px] text-blue-400 font-semibold mb-2 flex items-center gap-1.5">
+                          <Building2 size={11} />Edificio con bienes comunes
+                        </p>
+                        <button
+                          onClick={() => loadBuildingUnits(rolDetail.rol.rol)}
+                          className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          <Layers size={12} />Ver departamentos / unidades
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Building units panel */}
+                    {showBuildingUnits && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold flex items-center gap-1.5">
+                            <Layers size={10} className="text-purple-400" />
+                            Unidades del edificio {buildingUnits.length > 0 ? `(${buildingUnits.length})` : ''}
+                          </p>
+                          <button onClick={() => setShowBuildingUnits(false)} className="text-slate-600 hover:text-slate-400">
+                            <X size={12} />
+                          </button>
+                        </div>
+                        {buildingUnitsLoading ? (
+                          <div className="text-center py-4 text-xs text-slate-700">Cargando unidades...</div>
+                        ) : buildingUnits.length === 0 ? (
+                          <div className="text-center py-4 text-xs text-slate-700">Sin unidades registradas</div>
+                        ) : (
+                          <div className="space-y-1 max-h-60 overflow-y-auto">
+                            {buildingUnits.map((u: any) => (
+                              <button
+                                key={u.rol}
+                                onClick={() => { setSelectedRol(u); setShowBuildingUnits(false) }}
+                                className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-purple-800/50 hover:bg-purple-950/20 transition-colors"
+                              >
+                                <Layers size={11} className="text-purple-400 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-mono text-blue-400">{u.rol}</p>
+                                  <p className="text-[10px] text-slate-600 truncate">{u.direccion ?? '—'}</p>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                  <p className="text-[11px] text-slate-300 font-medium">{fmtCLP(u.avaluo_fiscal_total)}</p>
+                                  {u.superficie_terreno_m2 && <p className="text-[10px] text-slate-600">{u.superficie_terreno_m2} m²</p>}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Sin datos</div>}
               </div>
@@ -380,18 +482,27 @@ export default function CatastroPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {roles.map((r, i) => (
-                        <tr
-                          key={r.rol}
-                          onClick={() => setSelectedRol(r)}
-                          className={`border-b border-[var(--c-border-card)]/30 cursor-pointer hover:bg-[var(--c-active)] transition-colors ${i % 2 === 1 ? 'bg-[var(--c-card)]/30' : ''}`}
-                        >
-                          <td className="px-3 py-2 font-mono text-blue-400 whitespace-nowrap">{r.rol}</td>
-                          <td className="px-3 py-2 text-slate-400 max-w-[160px] truncate">{r.direccion ?? '—'}</td>
-                          <td className="px-3 py-2 text-right text-slate-300 font-medium whitespace-nowrap">{fmtCLP(r.avaluo_fiscal_total)}</td>
-                          <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{r.superficie_terreno_m2 ?? '—'}</td>
-                        </tr>
-                      ))}
+                      {roles.map((r, i) => {
+                        const isUnit = !!r.rol_padre
+                        const isBuilding = !r.rol_padre && r.codigo_destino_principal === 'H'
+                        return (
+                          <tr
+                            key={r.rol}
+                            onClick={() => { setSelectedRol(r); setShowBuildingUnits(false) }}
+                            className={`border-b border-[var(--c-border-card)]/30 cursor-pointer hover:bg-[var(--c-active)] transition-colors ${i % 2 === 1 ? 'bg-[var(--c-card)]/30' : ''}`}
+                          >
+                            <td className="px-3 py-2 font-mono text-blue-400 whitespace-nowrap">
+                              <div className="flex items-center gap-1">
+                                {isUnit && <Layers size={9} className="text-purple-400 flex-shrink-0" title="Unidad de edificio" />}
+                                {r.rol}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-slate-400 max-w-[160px] truncate">{r.direccion ?? '—'}</td>
+                            <td className="px-3 py-2 text-right text-slate-300 font-medium whitespace-nowrap">{fmtCLP(r.avaluo_fiscal_total)}</td>
+                            <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{r.superficie_terreno_m2 ?? '—'}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 )}
