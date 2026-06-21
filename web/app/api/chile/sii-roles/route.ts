@@ -34,6 +34,9 @@ interface SiiRolMetadata {
   rol: string
   direccion: string | null
   avaluo_fiscal_total: number | null
+  avaluo_exento: number | null
+  contribucion_semestral: number | null
+  codigo_ubicacion: 'R' | 'U' | 'E' | null
   superficie_terreno_m2: number | null
   sqm: number | null
   superficie_construida_total_m2: number | null
@@ -44,6 +47,11 @@ interface SiiRolMetadata {
   rol_bien_comun_1: string | null
   rol_bien_comun_2: string | null
   rol_padre: string | null
+  rol_cobro_anio: number | null
+  rol_cobro_semestre: number | null
+  rol_cobro_avaluo_total: number | null
+  rol_cobro_avaluo_exento: number | null
+  rol_cobro_cuota_trimestral: number | null
 }
 
 /**
@@ -54,7 +62,9 @@ interface SiiRolMetadata {
  * manualmente desde sii.cl e ingeridos vía scraper/lib/sii-catastro-cl.mjs
  * (migración 0021_sii_catastro_cl.sql) — JAMÁS scraping en vivo contra sii.cl.
  *
- * - `rol` busca un Rol exacto y devuelve sus atributos + construcciones agregadas.
+ * - `rol` busca un Rol exacto y devuelve sus atributos + construcciones agregadas,
+ *   incluyendo avalúo afecto/exento, contribución semestral, ubicación
+ *   urbano/rural/E y el período (año/semestre) del Rol de Cobro vigente.
  * - `address` busca por similitud de trigramas (pg_trgm + unaccent) contra
  *   la dirección declarada en el catastro y devuelve hasta 5 candidatos.
  */
@@ -101,6 +111,9 @@ export async function GET(request: NextRequest) {
         rol: rolRow.rol,
         direccion: rolRow.direccion ?? rolRow.rol_cobro_direccion ?? null,
         avaluo_fiscal_total: rolRow.avaluo_fiscal_total ?? rolRow.rol_cobro_avaluo_total ?? null,
+        avaluo_exento: rolRow.avaluo_exento ?? rolRow.rol_cobro_avaluo_exento ?? null,
+        contribucion_semestral: rolRow.contribucion_semestral ?? null,
+        codigo_ubicacion: rolRow.codigo_ubicacion ?? rolRow.rol_cobro_codigo_ubicacion ?? null,
         superficie_terreno_m2: rolRow.superficie_terreno_m2,
         sqm: superficieHabitacional > 0 ? superficieHabitacional : superficieTotal || null,
         superficie_construida_total_m2: superficieTotal || null,
@@ -111,6 +124,11 @@ export async function GET(request: NextRequest) {
         rol_bien_comun_1: rolRow.rol_bien_comun_1,
         rol_bien_comun_2: rolRow.rol_bien_comun_2,
         rol_padre: rolRow.rol_padre,
+        rol_cobro_anio: rolRow.rol_cobro_anio ?? null,
+        rol_cobro_semestre: rolRow.rol_cobro_semestre ?? null,
+        rol_cobro_avaluo_total: rolRow.rol_cobro_avaluo_total ?? null,
+        rol_cobro_avaluo_exento: rolRow.rol_cobro_avaluo_exento ?? null,
+        rol_cobro_cuota_trimestral: rolRow.rol_cobro_cuota_trimestral ?? null,
       }
 
       return NextResponse.json({ success: true, data })
