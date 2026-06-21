@@ -10,9 +10,18 @@ import SiiRolSearchPanel from '@/components/chile/SiiRolSearchPanel'
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
 
 const ZONES = [
-  { id: 'vitacura', label: 'Vitacura', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura', siiComunaCode: null },
-  { id: 'zapallar', label: 'Zapallar', center: { lat: -32.5538, lng: -71.4633 }, comuna: 'Zapallar', siiComunaCode: null },
-  { id: 'las-condes', label: 'Las Condes', center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes', siiComunaCode: '15108' },
+  // ── Barrio alto RM ────────────────────────────────────────────────────────
+  { id: 'vitacura',     label: 'Vitacura',     center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',     siiComunaCode: null },
+  { id: 'las-condes',  label: 'Las Condes',   center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes',   siiComunaCode: '15108' },
+  { id: 'lo-barnechea',label: 'Lo Barnechea', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea', siiComunaCode: null },
+  { id: 'providencia', label: 'Providencia',  center: { lat: -33.4320, lng: -70.6145 }, comuna: 'Providencia',  siiComunaCode: null },
+  { id: 'la-reina',    label: 'La Reina',     center: { lat: -33.4479, lng: -70.5458 }, comuna: 'La Reina',     siiComunaCode: null },
+  { id: 'nunoa',       label: 'Ñuñoa',        center: { lat: -33.4574, lng: -70.5962 }, comuna: 'Ñuñoa',        siiComunaCode: null },
+  // ── Zonas de vacaciones ───────────────────────────────────────────────────
+  { id: 'zapallar',    label: 'Zapallar',     center: { lat: -32.5538, lng: -71.4633 }, comuna: 'Zapallar',     siiComunaCode: null },
+  { id: 'maitencillo', label: 'Maitencillo',  center: { lat: -32.6421, lng: -71.4167 }, comuna: 'Puchuncaví',   siiComunaCode: null },
+  { id: 'pucon',       label: 'Pucón',        center: { lat: -39.2772, lng: -71.9788 }, comuna: 'Pucón',        siiComunaCode: null },
+  { id: 'villarrica',  label: 'Villarrica',   center: { lat: -39.2803, lng: -72.2267 }, comuna: 'Villarrica',   siiComunaCode: null },
 ] as const
 
 export default function CatastroPage() {
