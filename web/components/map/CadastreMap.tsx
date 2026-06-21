@@ -194,7 +194,19 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
 
       parcels.forEach((parcel) => {
 
-        const layer = L.geoJSON(parcel.geojson, { style: () => getParcelStyle(parcel.source) }).addTo(map)
+        // Si la parcela no tiene celda/polígono (solo centroid, ver
+        // ingest-cadastre-cl-ide.mjs), parcel.geojson es un Point — sin
+        // pointToLayer, L.geoJSON dibujaría el ícono de marcador por defecto
+        // de Leaflet (no coincide con los estilos por fuente de abajo, y
+        // su imagen no siempre carga bien empaquetada con Next.js).
+        const layer = L.geoJSON(parcel.geojson, {
+          style: () => getParcelStyle(parcel.source),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          pointToLayer: (_feature: any, latlng: any) => {
+            const s = getParcelStyle(parcel.source)
+            return L.circleMarker(latlng, { ...s, radius: 7, fillOpacity: Math.min(s.fillOpacity + 0.5, 0.9) })
+          },
+        }).addTo(map)
 
         // Store layer reference for highlighting from parent
         parcelLayersRef.current.set(parcel.id, { layer, parcel })

@@ -175,6 +175,10 @@ function isPolygonal(geometry) {
   return geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')
 }
 
+function isPoint(geometry) {
+  return geometry && geometry.type === 'Point'
+}
+
 async function resolveComunaIds(client) {
   const map = new Map()
   for (const { name, sii_comuna_code } of TARGET_COMUNAS) {
@@ -193,7 +197,22 @@ async function resolveComunaIds(client) {
 
 async function insertFeature(client, { comunaId, feature }) {
   const geometry = feature.geometry
-  if (!isPolygonal(geometry)) return { inserted: false, reason: 'geometria no poligonal o ausente' }
+
+  // Si la capa no trae celda/polígono para este predio (algunas comunas en
+  // IDE Chile solo expone el punto), no descartamos la feature — la dejamos
+  // como punto (geom NULL, solo centroid) para que al menos se vea algo en
+  // el mapa en vez de nada. Sigue siendo geometría real de la fuente, no
+  // inventada: no viola el principio de "nunca inventar geometría".
+  let geomExpr, centroidExpr
+  if (isPolygonal(geometry)) {
+    geomExpr = 'ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326))'
+    centroidExpr = 'ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326))'
+  } else if (isPoint(geometry)) {
+    geomExpr = 'NULL'
+    centroidExpr = 'ST_SetSRID(ST_GeomFromGeoJSON($3), 4326)'
+  } else {
+    return { inserted: false, reason: 'geometria no poligonal ni puntual (sin celda ni punto utilizable)' }
+  }
 
   const rol =
     feature.properties?.rol ??
@@ -205,12 +224,7 @@ async function insertFeature(client, { comunaId, feature }) {
     const result = await client.query(
       `
       INSERT INTO cadastre_parcels_cl (comuna_id, rol, source, geom, centroid, raw_attrs)
-      VALUES (
-        $1, $2, 'ide_chile',
-        ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326)),
-        ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326)),
-        $4::jsonb
-      )
+      VALUES ($1, $2, 'ide_chile', ${geomExpr}, ${centroidExpr}, $4::jsonb)
       RETURNING id
       `,
       [comunaId, rol, JSON.stringify(geometry), JSON.stringify(feature.properties ?? {})]
