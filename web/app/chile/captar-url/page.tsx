@@ -7,7 +7,7 @@ import {
   AlertCircle, CheckCircle2, RefreshCw, Home, DollarSign,
   Maximize2, BedDouble, Bath, Car, Calendar, Compass,
   Sofa, Archive, PawPrint, Receipt, Waves, Dumbbell,
-  Flame, Wind, Tv, Phone, Droplets, Zap
+  Flame, Wind, Tv, Phone, Droplets, Zap, ChevronLeft, ChevronRight
 } from 'lucide-react'
 
 const DESTINO_LABELS: Record<string, string> = {
@@ -56,6 +56,7 @@ export default function CaptarUrlPage() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [photoIdx, setPhotoIdx] = useState(0)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -127,55 +128,120 @@ export default function CaptarUrlPage() {
 
       {result && (
         <div className="space-y-6">
-          {/* Header: URL + commune */}
-          <div className="flex items-center gap-3 p-4 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)]">
-            <div className="flex-1 min-w-0">
-              <p className="text-[11px] text-slate-600 mb-1">URL analizada</p>
-              <a href={result.url} target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 truncate">
-                {result.url}<ExternalLink size={11} />
-              </a>
-            </div>
-            {result.comuna_label && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/30 border border-emerald-900/50">
-                <MapPin size={12} className="text-emerald-400" />
-                <span className="text-sm font-medium text-emerald-300">{result.comuna_label}</span>
-                {result.sii_code && <span className="text-[10px] text-emerald-600">SII {result.sii_code}</span>}
+          {/* Ficha estilo España */}
+          <div className="rounded-2xl overflow-hidden ring-1 ring-white/5 bg-[var(--c-card)]">
+            {/* Image area with gradient overlay */}
+            <div className="relative h-64 bg-[var(--c-card)] overflow-hidden group">
+              <div className="w-full h-full flex items-center justify-center text-slate-700 text-sm bg-gradient-to-br from-slate-900 to-slate-800">
+                Mapa de ubicación
               </div>
-            )}
-          </div>
 
-          {/* Title */}
-          {ext.title && (
-            <div className="p-3 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)]">
-              <p className="text-[10px] text-slate-600 mb-0.5">Título</p>
-              <p className="text-sm text-slate-200 font-medium">{ext.title}</p>
-            </div>
-          )}
+              {/* Dark scrim bottom */}
+              <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
 
-          {/* Core metrics */}
-          <div>
-            <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold mb-3">Características principales</p>
-            <div className="grid grid-cols-3 gap-2">
-              {ext.operation && <Chip label="Operación" value={ext.operation === 'rent' ? 'Arriendo' : 'Venta'} />}
-              {(ext.property_type || ext.property_type_detail) && (
-                <Chip label="Tipo" value={ext.property_type_detail ?? ext.property_type} />
+              {/* Top-right: URL link */}
+              <a
+                href={result.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm text-white/70 flex items-center justify-center hover:bg-black/70 hover:text-white transition-all"
+              >
+                <ExternalLink size={14} />
+              </a>
+
+              {/* Bottom-left: price + currency */}
+              <div className="absolute bottom-3 left-4">
+                <div className="text-white font-bold text-lg leading-none">
+                  {ext.price_raw} {ext.currency}
+                </div>
+              </div>
+
+              {/* Bottom-right: operation badge */}
+              {ext.operation && (
+                <div className="absolute bottom-3 right-4">
+                  <span className={`text-[11px] font-semibold px-2 py-1 rounded ${
+                    ext.operation === 'rent'
+                      ? 'bg-violet-600/80 text-white'
+                      : 'bg-blue-600/80 text-white'
+                  }`}>
+                    {ext.operation === 'rent' ? 'ARRIENDO' : 'VENTA'}
+                  </span>
+                </div>
               )}
-              {ext.price_raw && <Chip label="Precio" value={`${ext.price_raw} ${ext.currency ?? ''}`} highlight />}
-              {ext.sqm && <Chip label="Sup. total" value={`${ext.sqm} m²`} />}
-              {ext.sqm_util && <Chip label="Sup. útil" value={`${ext.sqm_util} m²`} />}
-              {ext.bedrooms != null && <Chip label="Dormitorios" value={String(ext.bedrooms)} />}
-              {ext.bathrooms != null && <Chip label="Baños" value={String(ext.bathrooms)} />}
-              {ext.parking != null && <Chip label="Estacionamientos" value={String(ext.parking)} />}
-              {ext.storage != null && <Chip label="Bodegas" value={String(ext.storage)} />}
-              {ext.floors != null && <Chip label="Pisos" value={String(ext.floors)} />}
-              {ext.antiquity && <Chip label="Antigüedad" value={String(ext.antiquity)} />}
-              {ext.orientation && <Chip label="Orientación" value={String(ext.orientation)} />}
-              {ext.furnished && <Chip label="Amoblado" value={String(ext.furnished)} />}
-              {ext.allows_pets && <Chip label="Mascotas" value={String(ext.allows_pets)} />}
-              {ext.common_expenses && <Chip label="Gastos comunes" value={String(ext.common_expenses)} />}
+            </div>
+
+            {/* Content area */}
+            <div className="px-4 py-4 space-y-3.5">
+              {/* Commune tag */}
+              {result.comuna_label && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-950/30 border border-emerald-900/50 rounded-lg w-fit">
+                  <MapPin size={11} className="text-emerald-400" />
+                  <span className="text-xs font-medium text-emerald-300">{result.comuna_label}</span>
+                </div>
+              )}
+
+              {/* Title */}
+              <h2 className="text-slate-200 text-base font-semibold leading-snug line-clamp-2">
+                {ext.title || 'Propiedad en ' + result.comuna_label}
+              </h2>
+
+              {/* Specs line */}
+              <p className="text-slate-500 text-xs">
+                {ext.sqm && `${ext.sqm} m²`}
+                {ext.bedrooms != null && ` · ${ext.bedrooms} dorm.`}
+                {ext.bathrooms != null && ` · ${ext.bathrooms} baño${ext.bathrooms !== 1 ? 's' : ''}`}
+                {ext.floors && ` · ${ext.floors} piso${ext.floors !== 1 ? 's' : ''}`}
+              </p>
+
+              {/* Address */}
+              {(ext.address || ext.address_full) && (
+                <p className="text-slate-400 text-xs flex items-center gap-2">
+                  <MapPin size={12} className="text-slate-600 flex-shrink-0" />
+                  <span className="truncate">{ext.address_full ?? ext.address}</span>
+                </p>
+              )}
+
+              {/* Geo coordinates link */}
+              {ext.lat && ext.lng && (
+                <a
+                  href={`https://www.google.com/maps?q=${ext.lat},${ext.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-[11px] text-blue-400 hover:text-blue-300"
+                >
+                  <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />
+                  Ver ubicación exacta ({ext.lat}, {ext.lng})
+                </a>
+              )}
             </div>
           </div>
+
+          {/* Detalles expandibles */}
+          <div className="space-y-6">
+            {/* Core metrics */}
+            <div>
+              <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold mb-3">Características completas</p>
+              <div className="grid grid-cols-3 gap-2">
+                {ext.operation && <Chip label="Operación" value={ext.operation === 'rent' ? 'Arriendo' : 'Venta'} />}
+                {(ext.property_type || ext.property_type_detail) && (
+                  <Chip label="Tipo" value={ext.property_type_detail ?? ext.property_type} />
+                )}
+                {ext.price_raw && <Chip label="Precio" value={`${ext.price_raw} ${ext.currency ?? ''}`} highlight />}
+                {ext.sqm && <Chip label="Sup. total" value={`${ext.sqm} m²`} />}
+                {ext.sqm_util && <Chip label="Sup. útil" value={`${ext.sqm_util} m²`} />}
+                {ext.bedrooms != null && <Chip label="Dormitorios" value={String(ext.bedrooms)} />}
+                {ext.bathrooms != null && <Chip label="Baños" value={String(ext.bathrooms)} />}
+                {ext.parking != null && <Chip label="Estacionamientos" value={String(ext.parking)} />}
+                {ext.storage != null && <Chip label="Bodegas" value={String(ext.storage)} />}
+                {ext.floors != null && <Chip label="Pisos" value={String(ext.floors)} />}
+                {ext.antiquity && <Chip label="Antigüedad" value={String(ext.antiquity)} />}
+                {ext.orientation && <Chip label="Orientación" value={String(ext.orientation)} />}
+                {ext.furnished && <Chip label="Amoblado" value={String(ext.furnished)} />}
+                {ext.allows_pets && <Chip label="Mascotas" value={String(ext.allows_pets)} />}
+                {ext.common_expenses && <Chip label="Gastos comunes" value={String(ext.common_expenses)} />}
+              </div>
+            </div>
 
           {/* Amenities */}
           {Object.keys(amenities).length > 0 && (
@@ -298,12 +364,13 @@ export default function CaptarUrlPage() {
             )}
           </div>
 
-          {ext.fetch_error && (
-            <p className="text-[11px] text-slate-700 flex items-center gap-1.5">
-              <AlertCircle size={11} className="text-amber-700" />
-              Nota: no se pudo cargar la página del anuncio ({ext.fetch_error}) — los datos provienen solo del slug de la URL.
-            </p>
-          )}
+            {ext.fetch_error && (
+              <p className="text-[11px] text-slate-700 flex items-center gap-1.5">
+                <AlertCircle size={11} className="text-amber-700" />
+                Nota: no se pudo cargar la página del anuncio ({ext.fetch_error}) — los datos provienen solo del slug de la URL.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </PageShell>
