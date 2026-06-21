@@ -100,77 +100,58 @@ export default function SiiUploadPanel() {
     setUploadStats(null)
     setError(null)
     setResponse(null)
+
+    const startTime = Date.now()
+    const totalFileSize = files.reduce((sum, f) => sum + f.size, 0)
+
     try {
       const formData = new FormData()
-      const totalFileSize = files.reduce((sum, f) => sum + f.size, 0)
-      let startTime: number | null = null
-
       for (const f of files) formData.append('files', f)
       formData.append('comunaId', selectedComunaId)
 
-      const json: UploadResponse = await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
+      // Usamos fetch con streaming para archivos grandes (9.4M filas = 30+ min).
+      // El servidor envía líneas JSON de progreso mientras procesa.
+      const res = await fetch('/api/admin/sii-upload', { method: 'POST', body: formData })
+      if (!res.ok || !res.body) throw new Error(`Error ${res.status}`)
 
-        xhr.upload.addEventListener('progress', (e) => {
-          if (e.lengthComputable) {
-            if (startTime === null) startTime = Date.now()
-            const elapsedSeconds = (Date.now() - startTime) / 1000
-            const speedMBps = (e.loaded / 1024 / 1024) / elapsedSeconds
-            const percentComplete = Math.round((e.loaded / e.total) * 90) // 0-90% for upload
-            const bytesRemaining = e.total - e.loaded
-            const estimatedSecondsRemaining = speedMBps > 0 ? (bytesRemaining / 1024 / 1024) / speedMBps : 0
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      const results: any[] = []
+      let skipped: string[] = []
 
-            setUploadStats({
-              percent: percentComplete,
-              loadedBytes: e.loaded,
-              totalBytes: e.total,
-              startTime: startTime,
-              elapsedSeconds: Math.round(elapsedSeconds),
-              speedMBps: Math.round(speedMBps * 100) / 100,
-              estimatedSecondsRemaining: Math.round(estimatedSecondsRemaining),
-              isProcessing: false,
-            })
-          }
-        })
+      setUploadStats({ percent: 95, loadedBytes: totalFileSize, totalBytes: totalFileSize,
+        startTime, elapsedSeconds: 0, speedMBps: 0, estimatedSecondsRemaining: 0, isProcessing: true })
 
-        xhr.addEventListener('loadstart', () => {
-          startTime = Date.now()
-        })
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
 
-        xhr.addEventListener('load', () => {
-          // Mostrar estado de procesamiento mientras esperamos respuesta
-          if (startTime) {
-            setUploadStats((prev) => prev ? { ...prev, percent: 95, isProcessing: true } : null)
-          }
-
+        for (const line of lines) {
+          if (!line.trim()) continue
           try {
-            const json = JSON.parse(xhr.responseText)
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(json)
-            } else {
-              reject(new Error(json.error || `Error al subir los archivos (${xhr.status})`))
+            const msg = JSON.parse(line)
+            if (msg.done) {
+              if (!msg.success) throw new Error(msg.error ?? 'Error al procesar')
+              skipped = msg.data?.skipped ?? skipped
+            } else if (msg.progress && msg.counts) {
+              results.push({ comunaCode: msg.comunaCode, ok: msg.status === 'ok', counts: msg.counts, error: msg.error })
+            } else if (msg.progress && msg.status === 'error') {
+              results.push({ comunaCode: msg.comunaCode, ok: false, counts: {}, error: msg.error })
             }
-          } catch (err) {
-            const statusText = xhr.statusText || 'Error'
-            reject(new Error(`${xhr.status} ${statusText}: ${xhr.responseText.substring(0, 200)}`))
+            const elapsed = Math.round((Date.now() - startTime) / 1000)
+            setUploadStats(prev => prev ? { ...prev, elapsedSeconds: elapsed } : null)
+          } catch (e) {
+            if ((e as Error).message !== 'Unexpected end of JSON input') throw e
           }
-        })
+        }
+      }
 
-        xhr.addEventListener('error', () => {
-          reject(new Error('Error de conexión al subir los archivos'))
-        })
-
-        xhr.addEventListener('abort', () => {
-          reject(new Error('La subida fue cancelada'))
-        })
-
-        xhr.open('POST', '/api/admin/sii-upload')
-        xhr.send(formData)
-      })
-
-      if (!json.success && !json.error) throw new Error('Error al subir los archivos')
-      setResponse(json)
-      if (json.success) setFiles([])
+      setResponse({ success: true, data: { results, skipped } })
+      if (results.every(r => r.ok)) setFiles([])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al subir los archivos')
     } finally {

@@ -144,8 +144,9 @@ const SUELOS_CONSTRUCCIONES_AGRICOLAS_FIELDS = [
   'condicion_especial', 'numero_pisos',
 ]
 
-// Roles no agrícolas (BRTMPCATASN) — 19 campos, incluye Rol Bien Común ×2 y
-// Rol Padre (linkage de copropiedad/edificios).
+// Roles no agrícolas (BRTMPCATASN) — 19 campos base + 3 opcionales en S2-2025.
+// El CSV S2-2025 agrega lat, lon, nombre_propietario como columnas finales.
+// El parser los lee si están presentes; si no (CSV antiguo), quedan null.
 const ROLES_NO_AGRICOLAS_FIELDS = [
   'sii_comuna_code', 'manzana', 'predio', 'direccion',
   'avaluo_fiscal_total', 'contribucion_semestral', 'codigo_destino_principal', 'avaluo_exento',
@@ -153,6 +154,8 @@ const ROLES_NO_AGRICOLAS_FIELDS = [
   'rbc2_comuna', 'rbc2_manzana', 'rbc2_predio',
   'superficie_terreno_m2', 'codigo_ubicacion',
   'padre_comuna', 'padre_manzana', 'padre_predio',
+  // S2-2025: columnas adicionales (presentes solo en el dataset actualizado)
+  'lat', 'lon', 'nombre_propietario',
 ]
 
 // Terrenos y construcciones no agrícolas (BRTMPCATASNL) — 11 campos, varias
@@ -210,6 +213,14 @@ export function parseSuelosConstruccionesAgricolas(filePath) {
   }))
 }
 
+function toFloatOrNull(raw) {
+  if (raw === undefined || raw === null) return null
+  const trimmed = String(raw).trim().replace(',', '.')
+  if (trimmed === '') return null
+  const n = parseFloat(trimmed)
+  return Number.isNaN(n) ? null : n
+}
+
 /** @returns {AsyncGenerator<object>} un registro por rol no agrícola (urbano). */
 export function parseRolesNoAgricolas(filePath) {
   return mapAsync(parsePipeFile(filePath, ROLES_NO_AGRICOLAS_FIELDS), (r) => ({
@@ -228,6 +239,9 @@ export function parseRolesNoAgricolas(filePath) {
     superficie_terreno_m2: toIntOrNull(r.superficie_terreno_m2),
     codigo_ubicacion: toTextOrNull(r.codigo_ubicacion),
     rol_padre: normalizeRolTriple(r.padre_comuna, r.padre_manzana, r.padre_predio),
+    lat: toFloatOrNull(r.lat),
+    lng: toFloatOrNull(r.lon),
+    nombre_propietario: toTextOrNull(r.nombre_propietario),
   }))
 }
 
@@ -326,8 +340,9 @@ async function upsertRol(client, comunaId, rec, rawSource) {
       direccion, avaluo_fiscal_total, avaluo_exento, contribucion_semestral,
       codigo_destino_principal, codigo_ubicacion,
       superficie_terreno_m2, rol_bien_comun_1, rol_bien_comun_2, rol_padre,
+      lat, lng, nombre_propietario,
       raw_source
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
     ON CONFLICT (sii_comuna_code, manzana, predio) DO UPDATE SET
       direccion                = EXCLUDED.direccion,
       avaluo_fiscal_total       = EXCLUDED.avaluo_fiscal_total,
@@ -339,6 +354,9 @@ async function upsertRol(client, comunaId, rec, rawSource) {
       rol_bien_comun_1          = COALESCE(EXCLUDED.rol_bien_comun_1, sii_roles_cl.rol_bien_comun_1),
       rol_bien_comun_2          = COALESCE(EXCLUDED.rol_bien_comun_2, sii_roles_cl.rol_bien_comun_2),
       rol_padre                 = COALESCE(EXCLUDED.rol_padre, sii_roles_cl.rol_padre),
+      lat                       = COALESCE(EXCLUDED.lat, sii_roles_cl.lat),
+      lng                       = COALESCE(EXCLUDED.lng, sii_roles_cl.lng),
+      nombre_propietario        = COALESCE(EXCLUDED.nombre_propietario, sii_roles_cl.nombre_propietario),
       raw_source                = EXCLUDED.raw_source,
       updated_at                = now()
     RETURNING id
@@ -348,6 +366,7 @@ async function upsertRol(client, comunaId, rec, rawSource) {
       rec.direccion, rec.avaluo_fiscal_total, rec.avaluo_exento, rec.contribucion_semestral,
       rec.codigo_destino_principal, rec.codigo_ubicacion ?? null,
       rec.superficie_terreno_m2 ?? null, rec.rol_bien_comun_1 ?? null, rec.rol_bien_comun_2 ?? null, rec.rol_padre ?? null,
+      rec.lat ?? null, rec.lng ?? null, rec.nombre_propietario ?? null,
       rawSource,
     ]
   )
