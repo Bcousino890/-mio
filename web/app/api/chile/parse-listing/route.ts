@@ -163,32 +163,11 @@ function extractFromHtml(html: string) {
   }
 
   // ── 5. Extract specs (characteristics) from Portal Inmobiliario JSON ──────
-  // Format: "specs":[{"attributes":[{"id":"Superficie total","text":"450 m²"}, ...]}]
-  const specsMatch = html.match(/"specs"\s*:\s*(\[\{[^}]*"attributes"[\s\S]*?\}\])/);
+  // Portal Inmobiliario embeds attributes as: {"id":"Superficie total","text":"450 m²"}
   const attrs: Record<string, string> = {}
-
-  if (specsMatch) {
-    const specJson = tryParseJson(specsMatch[1])
-    if (specJson && Array.isArray(specJson)) {
-      for (const spec of specJson) {
-        if (spec.attributes && Array.isArray(spec.attributes)) {
-          for (const attr of spec.attributes) {
-            if (attr.id && attr.text) {
-              attrs[attr.id] = attr.text
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Fallback: if specs didn't work, try plain-text extraction
-  if (Object.keys(attrs).length === 0) {
-    // Extract from text labels like {"id":"Superficie total","text":"450 m²"}
-    const labelMatches = [...html.matchAll(/"id"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"/g)]
-    for (const m of labelMatches) {
-      attrs[m[1]] = m[2]
-    }
+  const labelMatches = [...html.matchAll(/"id"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"/g)]
+  for (const m of labelMatches) {
+    if (!attrs[m[1]]) attrs[m[1]] = m[2]
   }
 
   if (Object.keys(attrs).length > 0) {
