@@ -17,6 +17,7 @@ import {
   MapPinned,
   Database,
   Upload,
+  Link2,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -107,6 +108,13 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       icon: Users,
       description: 'Particulares · exclusivas rotas',
       badge: 'PRONTO',
+    },
+    {
+      href: '/chile/captar-url',
+      label: 'Captar desde URL',
+      icon: Link2,
+      description: 'Portal Inmobiliario → triangular con SII',
+      badge: 'NEW',
     },
     {
       href: '/settings',
