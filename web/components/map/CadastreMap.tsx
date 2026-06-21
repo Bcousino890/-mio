@@ -228,6 +228,17 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
             <div style="color:#94a3b8;font-size:11px;margin-top:2px">Fuente: ${parcel.source}</div>
           </div>
         `)
+
+        // Etiqueta de Rol siempre visible sobre la parcela — antes el Rol solo
+        // se veía dentro del popup, que requería click; con muchas parcelas en
+        // pantalla eso hacía parecer que el mapa no mostraba ningún Rol.
+        if (parcel.rol) {
+          layer.bindTooltip(parcel.rol, {
+            permanent: true,
+            direction: 'center',
+            className: 'parcel-rol-tooltip',
+          })
+        }
       })
 
       const parcelCentroidById = new Map(parcels.map((p) => [p.id, p.centroid]))

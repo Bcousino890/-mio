@@ -112,4 +112,19 @@ body {
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--c-bg); }
+
+/* ── Etiqueta de Rol SII sobre parcelas del catastro (mapa Chile) ── */
+.parcel-rol-tooltip {
+  background: rgba(15, 23, 42, 0.82) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: #e2e8f0 !important;
+  font-family: system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  pointer-events: none;
+}
+.parcel-rol-tooltip::before { display: none !important; }
 ::-webkit-scrollbar-thumb { background: var(--c-border-strong); border-radius: 3px; }
