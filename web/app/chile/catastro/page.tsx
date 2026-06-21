@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PageShell from '@/components/PageShell'
 import { MapPinned } from 'lucide-react'
@@ -11,9 +11,10 @@ const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap
 
 const ZONES = [
   // ── Barrio alto RM ────────────────────────────────────────────────────────
-  { id: 'vitacura',     label: 'Vitacura',     center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',     siiComunaCode: null },
+  { id: 'vitacura',     label: 'Vitacura',     center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',     siiComunaCode: '15131' },
   { id: 'las-condes',  label: 'Las Condes',   center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes',   siiComunaCode: '15108' },
-  { id: 'lo-barnechea',label: 'Lo Barnechea', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea', siiComunaCode: null },
+  { id: 'lo-barnechea',label: 'Lo Barnechea', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea', siiComunaCode: '15111' },
+  { id: 'colina',      label: 'Colina',       center: { lat: -33.2007, lng: -70.6769 }, comuna: 'Colina',       siiComunaCode: '13301' },
   { id: 'providencia', label: 'Providencia',  center: { lat: -33.4320, lng: -70.6145 }, comuna: 'Providencia',  siiComunaCode: null },
   { id: 'la-reina',    label: 'La Reina',     center: { lat: -33.4479, lng: -70.5458 }, comuna: 'La Reina',     siiComunaCode: null },
   { id: 'nunoa',       label: 'Ñuñoa',        center: { lat: -33.4574, lng: -70.5962 }, comuna: 'Ñuñoa',        siiComunaCode: null },
@@ -27,6 +28,15 @@ const ZONES = [
 export default function CatastroPage() {
   const [zoneId, setZoneId] = useState<(typeof ZONES)[number]['id']>('vitacura')
   const zone = ZONES.find((z) => z.id === zoneId)!
+  const [siiStats, setSiiStats] = useState<any>(null)
+
+  useEffect(() => {
+    if (!zone.siiComunaCode) { setSiiStats(null); return }
+    fetch(`/api/chile/sii-stats?sii_comuna_code=${zone.siiComunaCode}`)
+      .then(r => r.json())
+      .then(d => { if (d.success) setSiiStats(d) })
+      .catch(() => setSiiStats(null))
+  }, [zone.siiComunaCode])
 
   const parcels = useMemo(() => MOCK_PARCELS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
@@ -78,6 +88,54 @@ export default function CatastroPage() {
         </div>
         {zone.siiComunaCode && <SiiRolSearchPanel comunaCode={zone.siiComunaCode} comunaLabel={zone.label} />}
       </div>
+
+      {zone.siiComunaCode && siiStats && (
+        <div className="mt-4 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+          <p className="text-xs font-semibold text-slate-300 mb-3">Datos reales SII — {zone.label}</p>
+          <div className="grid grid-cols-4 gap-3 mb-4">
+            <div>
+              <p className="text-[11px] text-slate-500">Total roles</p>
+              <p className="text-sm font-bold text-slate-200">{siiStats.total_roles.toLocaleString('es-ES')}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-500">Habitacional</p>
+              <p className="text-sm font-bold text-slate-200">{siiStats.habitacional.toLocaleString('es-ES')}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-500">Avalúo promedio</p>
+              <p className="text-sm font-bold text-slate-200">{siiStats.avaluo_promedio ? `$${Math.round(siiStats.avaluo_promedio / 1_000_000)}M` : '—'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-slate-500">Sup. promedio</p>
+              <p className="text-sm font-bold text-slate-200">{siiStats.superficie_promedio_m2 ? `${siiStats.superficie_promedio_m2} m²` : '—'}</p>
+            </div>
+          </div>
+          {siiStats.sample_roles.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-slate-600 border-b border-[var(--c-border)]">
+                    <th className="text-left py-1.5 pr-3">Rol</th>
+                    <th className="text-left py-1.5 pr-3">Dirección</th>
+                    <th className="text-right py-1.5 pr-3">Avalúo fiscal</th>
+                    <th className="text-right py-1.5">Sup. terreno</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {siiStats.sample_roles.map((r: any) => (
+                    <tr key={r.rol} className="border-b border-[var(--c-border)]/30 hover:bg-[var(--c-surface)] transition-colors">
+                      <td className="py-1.5 pr-3 font-mono text-slate-400">{r.rol}</td>
+                      <td className="py-1.5 pr-3 text-slate-400 max-w-[200px] truncate">{r.direccion ?? '—'}</td>
+                      <td className="py-1.5 pr-3 text-right text-slate-300">{r.avaluo_fiscal_total ? `$${Math.round(r.avaluo_fiscal_total / 1_000_000)}M` : '—'}</td>
+                      <td className="py-1.5 text-right text-slate-400">{r.superficie_terreno_m2 ? `${r.superficie_terreno_m2} m²` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-2 text-xs text-slate-600">
         <MapPinned size={12} className="text-slate-700" />
