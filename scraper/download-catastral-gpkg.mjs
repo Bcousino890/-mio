@@ -16,17 +16,25 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 
 // ─── URLs de descarga catastral.cl ───────────────────────────────────────────
-// Patrón detectado: archivos servidos desde storage de Hetzner S3 (22.8 GB total)
-// según el repo crishernandezmaps/roles-backend. URL base a confirmar contra el
-// sitio — el script prueba los patrones conocidos en orden.
+// catastral.cl bloquea acceso programático con HTTP 403.
+// Las URLs reales de descarga requieren abrir el sitio en un navegador,
+// ir a la sección de descargas, e inspeccionar el Network tab para obtener
+// las URLs presignadas (probablemente S3/Hetzner con token temporal).
+//
+// Contacto para acceso: @crishernandezco (Twitter/LinkedIn) — proyecto Tremen.
+//
+// DISPONIBILIDAD: catastral.cl tiene datos hasta S2-2025.
+// S1-2026 aún no está procesado — usar SII CSV directamente.
+//
+// Si tienes las URLs reales, pásalas como argumentos:
+//   node download-catastral-gpkg.mjs --url-15108 "https://..." --out /data/gpkg
+//
+// O coloca los .gpkg descargados manualmente en --out y usa --load-only
 const BASE_CANDIDATES = [
   'https://storage.catastral.cl',
-  'https://data.catastral.cl',
-  'https://catastral.cl/data',
+  'https://files.catastral.cl',
+  'https://catastral.cl/files',
 ]
-
-// Semestre activo — S1-2026 o S2-2025 si aún no está disponible
-const SEMESTRES = ['2026_S1', '2025_S2', '2025_S1']
 
 // Comunas prioritarias con sus códigos SII y nombres de archivo esperados
 const COMUNAS = [
@@ -42,10 +50,11 @@ const COMUNAS = [
 
 const { values: args } = parseArgs({
   options: {
-    out:     { type: 'string', default: '/data/gpkg' },
-    comunas: { type: 'string' },
-    semestre:{ type: 'string', default: '2026_S1' },
+    out:       { type: 'string', default: '/data/gpkg' },
+    comunas:   { type: 'string' },
+    semestre:  { type: 'string', default: '2025_S2' },
     'dry-run': { type: 'boolean', default: false },
+    'load-only': { type: 'boolean', default: false },  // carga GPKGs ya en --out sin descargar
   },
   strict: false,
 })
@@ -135,8 +144,29 @@ async function downloadComuna(comuna) {
   return false
 }
 
+async function loadExistingGpkgs() {
+  const { readdirSync } = await import('node:fs')
+  const files = readdirSync(OUT_DIR).filter(f => f.endsWith('.gpkg'))
+  if (files.length === 0) {
+    console.log(`No hay .gpkg en ${OUT_DIR}`)
+    return
+  }
+  console.log(`Comandos ogr2ogr para cargar ${files.length} GeoPackage(s) en cadastre_parcels_cl:\n`)
+  for (const f of files) {
+    const path = join(OUT_DIR, f)
+    console.log(`ogr2ogr -f PostgreSQL "$DATABASE_URL" "${path}" \\`)
+    console.log(`  -nln cadastre_parcels_cl -append -progress\n`)
+  }
+}
+
 async function main() {
+  if (args['load-only']) {
+    await loadExistingGpkgs()
+    return
+  }
+
   console.log(`Descarga GeoPackages catastral.cl — semestre ${args.semestre}`)
+  console.log(`NOTA: catastral.cl bloquea bots. Si falla, descarga manualmente en https://catastral.cl`)
   console.log(`Destino: ${OUT_DIR}`)
   console.log(`Comunas: ${targetComunas.map(c => c.nombre).join(', ')}\n`)
 
@@ -148,10 +178,9 @@ async function main() {
 
   console.log(`\nResumen: ${ok} descargados, ${fail} fallidos`)
   if (fail > 0) {
-    console.log('\nPara las comunas fallidas, descarga manualmente desde:')
-    console.log('  https://catastral.cl')
-    console.log('Luego carga con ogr2ogr:')
-    console.log('  ogr2ogr -f PostgreSQL "$DATABASE_URL" archivo.gpkg -nln cadastre_parcels_cl -append')
+    console.log('\nDescarga manual: https://catastral.cl → sección Descargas')
+    console.log('Una vez descargados, ejecuta:')
+    console.log(`  node scraper/download-catastral-gpkg.mjs --out ${OUT_DIR} --load-only`)
   }
 }
 
