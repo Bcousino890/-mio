@@ -474,12 +474,22 @@ export default function CatastroPage() {
                       </div>
                     </div>
 
-                    {/* Propietario — no disponible vía SII, requiere Conservador de Bienes Raíces */}
+                    {/* Propietario — no disponible vía SII. El certificado de TGR sí lo
+                        incluye, pero su formulario está protegido con reCAPTCHA v3 y solo
+                        está pensado para consulta manual puntual — por eso se enlaza en vez
+                        de automatizarse. */}
                     <div>
                       <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Propietario</p>
-                      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 flex items-center gap-2">
-                        <span className="text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded flex-shrink-0">Próximamente</span>
-                        <span className="text-[11px] text-slate-600">Requiere datos del Conservador de Bienes Raíces (no disponible en SII)</span>
+                      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 space-y-2">
+                        <p className="text-[11px] text-slate-600">No disponible en SII. El Certificado de Deuda de Contribuciones de TGR incluye el nombre del propietario por rol — consulta manual (protegida con reCAPTCHA).</p>
+                        <a
+                          href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-blue-400 hover:text-blue-300"
+                        >
+                          Consultar en TGR (Rol {rolDetail.rol?.rol ?? '—'}) <ExternalLink size={12} />
+                        </a>
                       </div>
                     </div>
 
