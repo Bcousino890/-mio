@@ -200,7 +200,7 @@ export default function CaptarUrlPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
                         <span className="font-mono text-sm text-blue-400">{rol.rol}</span>
-                        {rol.rol_padre && <Layers size={11} className="text-purple-400" title="Unidad de edificio" />}
+                        {rol.rol_padre && <Layers size={11} className="text-purple-400" aria-label="Unidad de edificio" />}
                         {rol.codigo_destino_principal && (
                           <span className="text-[10px] text-slate-600">
                             {DESTINO_LABELS[rol.codigo_destino_principal] ?? rol.codigo_destino_principal}
