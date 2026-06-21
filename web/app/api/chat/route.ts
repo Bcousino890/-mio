@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'messages requerido' }, { status: 400 })
   }
 
-  const model = process.env.OPENROUTER_CHAT_MODEL || 'meta-llama/llama-3.3-70b-instruct:free'
+  const model = process.env.OPENROUTER_CHAT_MODEL || 'google/gemini-2.0-flash-exp:free'
 
   try {
     const res = await fetch(OPENROUTER_URL, {
