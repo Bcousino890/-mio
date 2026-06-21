@@ -35,6 +35,9 @@ const FILE_KIND_TO_ROLE: Record<string, keyof SiiIngestFiles> = {
 const KIND_PATTERN = Object.keys(FILE_KIND_TO_ROLE).sort((a, b) => b.length - a.length).join('|')
 const FILENAME_RE = new RegExp(`^(${KIND_PATTERN})_(\\d+)_(\\d+)_(\\d+)$`, 'i')
 
+// CSV nacional de catastral.cl — nombre: catastro_YYYY_N.csv o catastro_YYYYSN.csv
+const CATASTRAL_CL_RE = /^catastro[_\-]?\d{4}[_\-s]?\d\.csv$/i
+
 function sanitizeBaseName(name: string): string {
   // path.basename ya evita "../", pero el nombre puede traer separadores de
   // Windows si el zip se generó ahí.
@@ -182,6 +185,14 @@ export async function POST(request: NextRequest) {
     const filePorComuna: Record<string, { [key in keyof SiiIngestFiles]?: string }> = {}
 
     for (const entry of entries) {
+      // Detectar CSV nacional de catastral.cl (catastro_2025_2.csv, etc.)
+      if (CATASTRAL_CL_RE.test(entry.name)) {
+        const code = 'catastral_cl'
+        if (!filePorComuna[code]) filePorComuna[code] = {}
+        filePorComuna[code].catastralCl = entry.path
+        continue
+      }
+
       const base = entry.name.replace(/\.[^.]+$/, '')
       const match = base.match(FILENAME_RE)
       if (!match) {
@@ -206,18 +217,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Procesar cada comuna según su código (identificado automáticamente del filename)
-    // Continuar incluso si una comuna falla, para procesar el resto
+    // Procesar cada grupo (comunaCode o 'catastral_cl' para CSV nacional)
     for (const [comunaCode, files] of Object.entries(filePorComuna)) {
       try {
+        // catastral.cl tiene todas las comunas en un solo CSV — usamos '00000'
+        // como placeholder; el parser resuelve el cod_comuna por fila.
+        const resolvedCode = comunaCode === 'catastral_cl' ? '00000' : comunaCode
         const result = await ingestSiiCatastroComuna({
-          comunaCode,
+          comunaCode: resolvedCode,
           files: files as SiiIngestFiles,
           dbUrl: process.env.DATABASE_URL,
         })
         results.push({ comunaCode, ...result })
       } catch (err) {
-        console.error(`Error procesando comuna ${comunaCode}:`, err)
+        console.error(`Error procesando ${comunaCode}:`, err)
         results.push({
           comunaCode,
           ok: false,

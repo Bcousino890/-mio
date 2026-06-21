@@ -457,12 +457,171 @@ async function loadRolIdMap(client: Client, comunaCode: string): Promise<Map<str
   return map
 }
 
+// ─── Parser catastral.cl CSV ─────────────────────────────────────────────────
+// catastral.cl exporta un CSV con cabecera y todos los predios nacionales.
+// Los nombres de columna pueden variar — se mapean con alias conocidos.
+const CATASTRAL_CL_ALIASES: Record<string, string> = {
+  // Identificadores
+  cod_comuna: 'sii_comuna_code', comuna: 'sii_comuna_code',
+  manzana: 'manzana', predio: 'predio',
+  // Atributos
+  direccion: 'direccion', direccion_inmueble: 'direccion',
+  avaluo_fiscal_total: 'avaluo_fiscal_total', avaluo_total: 'avaluo_fiscal_total',
+  avaluo_exento: 'avaluo_exento',
+  contribucion_semestral: 'contribucion_semestral', contribucion: 'contribucion_semestral',
+  codigo_destino_principal: 'codigo_destino_principal', destino: 'codigo_destino_principal',
+  codigo_ubicacion: 'codigo_ubicacion',
+  superficie_terreno_m2: 'superficie_terreno_m2', sup_terreno: 'superficie_terreno_m2',
+  // Enriquecidos (S2-2025+)
+  lat: 'lat', latitud: 'lat',
+  lon: 'lng', lng: 'lng', longitud: 'lng',
+  nombre_propietario: 'nombre_propietario', propietario: 'nombre_propietario',
+}
+
+function toFloatOrNull(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null
+  const s = String(raw).trim().replace(',', '.')
+  if (s === '') return null
+  const n = parseFloat(s)
+  return Number.isNaN(n) ? null : n
+}
+
+function parseCsvLine(line: string, delim: string): string[] {
+  // Maneja campos entre comillas
+  const fields: string[] = []
+  let cur = ''
+  let inQuote = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') { inQuote = !inQuote; continue }
+    if (!inQuote && ch === delim) { fields.push(cur.trim()); cur = ''; continue }
+    cur += ch
+  }
+  fields.push(cur.trim())
+  return fields
+}
+
+async function* parseCatastralClCsv(filePath: string) {
+  let headerMap: Record<number, string> | null = null
+  let delim = ','
+  let lineNo = 0
+
+  for await (const line of readLines(filePath)) {
+    lineNo++
+    if (lineNo === 1) {
+      // Detectar delimitador
+      if (line.includes(';') && !line.includes(',')) delim = ';'
+      const rawHeaders = parseCsvLine(line, delim)
+      headerMap = {}
+      for (let i = 0; i < rawHeaders.length; i++) {
+        const key = rawHeaders[i].toLowerCase().replace(/[^a-z0-9_]/g, '_')
+        const mapped = CATASTRAL_CL_ALIASES[key]
+        if (mapped) headerMap[i] = mapped
+      }
+      continue
+    }
+    if (!headerMap) continue
+    const parts = parseCsvLine(line, delim)
+    const r: Record<string, string> = {}
+    for (const [idx, field] of Object.entries(headerMap)) {
+      r[field] = parts[parseInt(idx)] ?? ''
+    }
+    const sii = toTextOrNull(r.sii_comuna_code)
+    const manzana = toTextOrNull(r.manzana)
+    const predio = toTextOrNull(r.predio)
+    const rol = normalizeRol(manzana, predio)
+    if (!sii || !rol) continue
+    yield {
+      sii_comuna_code: sii,
+      manzana,
+      predio,
+      rol,
+      serie: 'no_agricola' as const,
+      direccion: toTextOrNull(r.direccion),
+      avaluo_fiscal_total: toIntOrNull(r.avaluo_fiscal_total),
+      avaluo_exento: toIntOrNull(r.avaluo_exento),
+      contribucion_semestral: toIntOrNull(r.contribucion_semestral),
+      codigo_destino_principal: toTextOrNull(r.codigo_destino_principal),
+      codigo_ubicacion: toTextOrNull(r.codigo_ubicacion),
+      superficie_terreno_m2: toIntOrNull(r.superficie_terreno_m2),
+      lat: toFloatOrNull(r.lat),
+      lng: toFloatOrNull(r.lng),
+      nombre_propietario: toTextOrNull(r.nombre_propietario),
+    }
+  }
+}
+
+interface RolEnriquecidoBatchRow extends RolBatchRow {
+  lat: number | null
+  lng: number | null
+  nombre_propietario: string | null
+}
+
+async function flushRolesEnriquecidosBatch(client: Client, batch: RolEnriquecidoBatchRow[]): Promise<number> {
+  if (batch.length === 0) return 0
+  const res = await client.query(
+    `
+    INSERT INTO sii_roles_cl (
+      comuna_id, sii_comuna_code, manzana, predio, rol, serie,
+      direccion, avaluo_fiscal_total, avaluo_exento, contribucion_semestral,
+      codigo_destino_principal, codigo_ubicacion,
+      superficie_terreno_m2, rol_bien_comun_1, rol_bien_comun_2, rol_padre,
+      lat, lng, nombre_propietario, raw_source
+    )
+    SELECT * FROM unnest(
+      $1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+      $7::text[], $8::bigint[], $9::bigint[], $10::bigint[],
+      $11::text[], $12::text[],
+      $13::int[], $14::text[], $15::text[], $16::text[],
+      $17::double precision[], $18::double precision[], $19::text[], $20::text[]
+    )
+    ON CONFLICT (sii_comuna_code, manzana, predio) DO UPDATE SET
+      direccion                = EXCLUDED.direccion,
+      avaluo_fiscal_total       = EXCLUDED.avaluo_fiscal_total,
+      avaluo_exento             = EXCLUDED.avaluo_exento,
+      contribucion_semestral    = EXCLUDED.contribucion_semestral,
+      codigo_destino_principal  = EXCLUDED.codigo_destino_principal,
+      codigo_ubicacion          = EXCLUDED.codigo_ubicacion,
+      superficie_terreno_m2     = COALESCE(EXCLUDED.superficie_terreno_m2, sii_roles_cl.superficie_terreno_m2),
+      lat                       = COALESCE(EXCLUDED.lat, sii_roles_cl.lat),
+      lng                       = COALESCE(EXCLUDED.lng, sii_roles_cl.lng),
+      nombre_propietario        = COALESCE(EXCLUDED.nombre_propietario, sii_roles_cl.nombre_propietario),
+      raw_source                = EXCLUDED.raw_source,
+      updated_at                = now()
+    `,
+    [
+      batch.map((r) => r.comuna_id),
+      batch.map((r) => r.sii_comuna_code),
+      batch.map((r) => r.manzana),
+      batch.map((r) => r.predio),
+      batch.map((r) => r.rol),
+      batch.map((r) => r.serie),
+      batch.map((r) => r.direccion),
+      batch.map((r) => r.avaluo_fiscal_total),
+      batch.map((r) => r.avaluo_exento),
+      batch.map((r) => r.contribucion_semestral),
+      batch.map((r) => r.codigo_destino_principal),
+      batch.map((r) => r.codigo_ubicacion),
+      batch.map((r) => r.superficie_terreno_m2),
+      batch.map((r) => r.rol_bien_comun_1),
+      batch.map((r) => r.rol_bien_comun_2),
+      batch.map((r) => r.rol_padre),
+      batch.map((r) => (r as RolEnriquecidoBatchRow).lat),
+      batch.map((r) => (r as RolEnriquecidoBatchRow).lng),
+      batch.map((r) => (r as RolEnriquecidoBatchRow).nombre_propietario),
+      batch.map((r) => r.raw_source),
+    ]
+  )
+  return res.rowCount ?? 0
+}
+
 export interface SiiIngestFiles {
   rolesNoAgricolas?: string
   construccionesNoAgricolas?: string
   rolesAgricolas?: string
   suelosConstruccionesAgricolas?: string
   rolDeCobro?: string
+  catastralCl?: string  // CSV nacional de catastral.cl (catastro_YYYY_N.csv)
 }
 
 export interface SiiIngestResult {
@@ -655,6 +814,43 @@ export async function ingestSiiCatastroComuna({
       } catch (err) {
         await client.query('ROLLBACK')
         counts.rol_de_cobro = 0
+        throw err
+      }
+    }
+
+    // 4) CSV de catastral.cl — formato nacional con cabecera, incluye lat/lng
+    if (files.catastralCl) {
+      const source = basename(files.catastralCl)
+      // Pre-cargar mapa de todas las comunas para no hacer un SELECT por fila
+      const comunaMapRes = await client.query(
+        `SELECT sii_comuna_code, id FROM chile_comunas WHERE sii_comuna_code IS NOT NULL`
+      )
+      const comunaIdMap = new Map<string, string>(
+        comunaMapRes.rows.map((r: { sii_comuna_code: string; id: string }) => [r.sii_comuna_code, r.id])
+      )
+      await client.query('BEGIN')
+      try {
+        let batch: RolEnriquecidoBatchRow[] = []
+        for await (const rec of parseCatastralClCsv(files.catastralCl)) {
+          batch.push({
+            ...rec,
+            rol: rec.rol!,
+            comuna_id: comunaIdMap.get(rec.sii_comuna_code ?? '') ?? null,
+            raw_source: source,
+            rol_bien_comun_1: null,
+            rol_bien_comun_2: null,
+            rol_padre: null,
+          })
+          if (batch.length >= BATCH_SIZE) {
+            counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatch(client, batch)
+            batch = []
+          }
+        }
+        counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatch(client, batch)
+        await client.query('COMMIT')
+      } catch (err) {
+        await client.query('ROLLBACK')
+        counts.catastral_cl = 0
         throw err
       }
     }
