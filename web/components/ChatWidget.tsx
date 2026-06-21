@@ -1,99 +1,80 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import { MessageCircle, X, Send, Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { MessageCircle, X, Send, Loader2, Bot } from 'lucide-react'
 
-interface Message {
+interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
 }
 
+const WELCOME: ChatMessage = {
+  role: 'assistant',
+  content: '¡Hola! Soy el asistente de Casafari Mio. Pregúntame sobre captación, anuncios o el catastro de Chile.',
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (open && messages.length === 0) {
-      setMessages([{
-        role: 'assistant',
-        content: '¡Hola! Soy el asistente de Casafari Mio. Pregúntame sobre captación, anuncios o el catastro de Chile.',
-      }])
-    }
-  }, [open, messages.length])
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [messages, open])
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
-
-  async function send() {
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault()
     const text = input.trim()
     if (!text || loading) return
-    setInput('')
-    const next: Message[] = [...messages, { role: 'user', content: text }]
+
+    const next = [...messages, { role: 'user', content: text } as ChatMessage]
     setMessages(next)
+    setInput('')
+    setError(null)
     setLoading(true)
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: next }),
       })
-      const data = await res.json()
-      setMessages(m => [...m, { role: 'assistant', content: data.content ?? 'Sin respuesta.' }])
-    } catch {
-      setMessages(m => [...m, { role: 'assistant', content: 'Error de conexión. Intenta de nuevo.' }])
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error ?? 'Error desconocido')
+      setMessages([...next, { role: 'assistant', content: json.reply }])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al contactar al asistente')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <>
-      {/* Bubble button */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="fixed bottom-5 right-5 z-50 w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors"
-        style={{ background: 'var(--c-accent, #7c3aed)' }}
-        aria-label="Abrir asistente"
-      >
-        {open
-          ? <X size={20} color="white" />
-          : <MessageCircle size={20} color="white" />}
-      </button>
-
-      {/* Chat panel */}
+    <div className="fixed bottom-5 right-5 z-[3000] flex flex-col items-end gap-3">
       {open && (
-        <div
-          className="fixed bottom-20 right-5 z-50 flex flex-col rounded-xl shadow-2xl overflow-hidden"
-          style={{
-            width: 340,
-            height: 460,
-            background: 'var(--c-surface, #1e1e2e)',
-            border: '1px solid var(--c-border, #333)',
-          }}
-        >
-          {/* Header */}
-          <div
-            className="flex items-center gap-2 px-4 py-3 font-semibold text-sm"
-            style={{ background: 'var(--c-accent, #7c3aed)', color: 'white' }}
-          >
-            <MessageCircle size={16} />
-            Asistente Casafari
+        <div className="w-80 h-[480px] rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] shadow-2xl flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--c-border-card)]">
+            <div className="flex items-center gap-2">
+              <Bot size={16} className="text-blue-400" />
+              <p className="text-sm font-semibold text-slate-200">Asistente Casafari</p>
+            </div>
+            <button onClick={() => setOpen(false)} className="text-slate-500 hover:text-slate-300">
+              <X size={16} />
+            </button>
           </div>
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 text-sm">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div
-                  className="max-w-[85%] rounded-lg px-3 py-2 leading-snug whitespace-pre-wrap"
-                  style={m.role === 'user'
-                    ? { background: 'var(--c-accent, #7c3aed)', color: 'white' }
-                    : { background: 'var(--c-bg2, #2a2a3e)', color: 'var(--c-text, #e5e7eb)' }
-                  }
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
+                    m.role === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-[var(--c-hover)] text-slate-200 border border-[var(--c-border)]'
+                  }`}
                 >
                   {m.content}
                 </div>
@@ -101,48 +82,38 @@ export default function ChatWidget() {
             ))}
             {loading && (
               <div className="flex justify-start">
-                <div
-                  className="rounded-lg px-3 py-2 flex items-center gap-2"
-                  style={{ background: 'var(--c-bg2, #2a2a3e)', color: 'var(--c-muted, #9ca3af)' }}
-                >
-                  <Loader2 size={14} className="animate-spin" />
-                  <span className="text-xs">Pensando...</span>
+                <div className="bg-[var(--c-hover)] border border-[var(--c-border)] rounded-lg px-3 py-2">
+                  <Loader2 size={14} className="animate-spin text-slate-500" />
                 </div>
               </div>
             )}
-            <div ref={bottomRef} />
+            {error && <p className="text-[11px] text-red-400 px-1">{error}</p>}
           </div>
 
-          {/* Input */}
-          <div
-            className="px-3 py-3 flex gap-2"
-            style={{ borderTop: '1px solid var(--c-border, #333)' }}
-          >
+          <form onSubmit={handleSend} className="flex items-center gap-2 p-2.5 border-t border-[var(--c-border-card)]">
             <input
-              className="flex-1 rounded-lg px-3 py-2 text-sm outline-none"
-              style={{
-                background: 'var(--c-bg, #111)',
-                color: 'var(--c-text, #e5e7eb)',
-                border: '1px solid var(--c-border, #333)',
-              }}
-              placeholder="Escribe tu pregunta..."
               value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-              disabled={loading}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Escribe tu pregunta..."
+              className="flex-1 bg-[var(--c-hover)] border border-[var(--c-border)] rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500"
             />
             <button
-              onClick={send}
+              type="submit"
               disabled={loading || !input.trim()}
-              className="rounded-lg px-3 py-2 transition-opacity disabled:opacity-40"
-              style={{ background: 'var(--c-accent, #7c3aed)', color: 'white' }}
-              aria-label="Enviar"
+              className="flex items-center justify-center w-8 h-8 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-colors flex-shrink-0"
             >
-              <Send size={16} />
+              <Send size={14} />
             </button>
-          </div>
+          </form>
         </div>
       )}
-    </>
+
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-12 h-12 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg flex items-center justify-center transition-colors"
+      >
+        {open ? <X size={20} /> : <MessageCircle size={20} />}
+      </button>
+    </div>
   )
 }
