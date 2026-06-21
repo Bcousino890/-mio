@@ -81,12 +81,19 @@ function curlJson(url) {
  * `/sites/MLC/search`, o { ok: false, status, reason }.
  */
 export async function searchListings({ comuna, operation = 'rent', limit = 50, offset = 0 } = {}) {
+  // Sanitiza limit/offset: valores no numéricos o negativos no deben llegar
+  // literalmente a la URL (ej. "limit=NaN" o "offset=undefined" si el
+  // llamador pasa algo inesperado) — los normalizamos a enteros válidos en
+  // vez de lanzar o de mandar basura a la API real.
+  const safeLimit = Number.isFinite(Number(limit)) && Number(limit) >= 0 ? Math.floor(Number(limit)) : 50
+  const safeOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0
+
   const params = new URLSearchParams({
     category: CATEGORY_INMOBILIARIA,
-    limit: String(limit),
-    offset: String(offset),
+    limit: String(safeLimit),
+    offset: String(safeOffset),
   })
-  if (comuna) params.set('q', comuna)
+  if (comuna && typeof comuna === 'string' && comuna.trim()) params.set('q', comuna.trim())
   // OPERATION es un atributo documentado (rent/sale); nombre exacto del filtro
   // (`OPERATION` vs algo distinto) sin confirmar contra la API real.
   if (operation) params.set('OPERATION', operation === 'sale' ? 'sale' : 'rent')

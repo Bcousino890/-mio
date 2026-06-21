@@ -25,6 +25,47 @@ EXCEPTION
   WHEN OTHERS THEN NULL;  -- ignorar si btree_gist no está disponible
 END $$;
 
+-- ─── Función auxiliar: Hamming distance (XOR nativo + popcount) ─────────────
+-- Como los pHash se guardan como texto (hex), convertimos a bits y hacemos XOR.
+-- Definida ANTES de calculate_match_signals porque esa función es
+-- `LANGUAGE sql STABLE` — Postgres valida su cuerpo (incluida la resolución
+-- de funciones que llama) en el momento del CREATE, no al invocarla; si
+-- hamming_distance no existe todavía, el CREATE FUNCTION de abajo falla.
+CREATE OR REPLACE FUNCTION hamming_distance(
+  phash_a text,
+  phash_b text
+)
+RETURNS integer
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  v_a bigint;
+  v_b bigint;
+  v_xor bigint;
+  v_count integer := 0;
+BEGIN
+  -- Si alguno es NULL o no son válidos, retornar NULL
+  IF phash_a IS NULL OR phash_b IS NULL OR length(phash_a) <> length(phash_b) THEN
+    RETURN NULL;
+  END IF;
+
+  -- Convertir hex strings a bigint (máx 64 bits para pHash)
+  BEGIN
+    v_a := ('x' || phash_a)::bit(64)::bigint;
+    v_b := ('x' || phash_b)::bit(64)::bigint;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+  END;
+
+  -- XOR y contar bits (popcount)
+  v_xor := v_a # v_b;
+  WHILE v_xor > 0 LOOP
+    v_count := v_count + (v_xor & 1)::int;
+    v_xor := v_xor >> 1;
+  END LOOP;
+
+  RETURN v_count;
+END $$;
+
 -- ─── Función para calcular señales atómicas de similitud ─────────────────────
 -- Calcula todas las señales que luego Node.js combinará con pesos.
 -- Devuelve jsonb con todas las señales crudas.
@@ -71,43 +112,6 @@ LANGUAGE sql STABLE AS $$
     'operation_same', COALESCE(p.a_op = p.b_op, FALSE)
   ) FROM pair p;
 $$;
-
--- ─── Función auxiliar: Hamming distance (XOR nativo + popcount) ─────────────
--- Como los pHash se guardan como texto (hex), convertimos a bits y hacemos XOR
-CREATE OR REPLACE FUNCTION hamming_distance(
-  phash_a text,
-  phash_b text
-)
-RETURNS integer
-LANGUAGE plpgsql IMMUTABLE AS $$
-DECLARE
-  v_a bigint;
-  v_b bigint;
-  v_xor bigint;
-  v_count integer := 0;
-BEGIN
-  -- Si alguno es NULL o no son válidos, retornar NULL
-  IF phash_a IS NULL OR phash_b IS NULL OR length(phash_a) <> length(phash_b) THEN
-    RETURN NULL;
-  END IF;
-
-  -- Convertir hex strings a bigint (máx 64 bits para pHash)
-  BEGIN
-    v_a := ('x' || phash_a)::bit(64)::bigint;
-    v_b := ('x' || phash_b)::bit(64)::bigint;
-  EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-  END;
-
-  -- XOR y contar bits (popcount)
-  v_xor := v_a # v_b;
-  WHILE v_xor > 0 LOOP
-    v_count := v_count + (v_xor & 1)::int;
-    v_xor := v_xor >> 1;
-  END LOOP;
-
-  RETURN v_count;
-END $$;
 
 -- ─── Tabla para gestionar el estado del job de deduplicación ────────────────
 CREATE TABLE IF NOT EXISTS dedup_job_state (

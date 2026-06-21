@@ -113,14 +113,19 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
 //    en UF (Unidad de Fomento, indexada a inflación) o CLP. Esta función
 //    acepta `row.price_clp` ya resuelto a CLP (preferido, si el caller ya
 //    hizo la conversión) o, si no viene, usa `row.price_uf` + `opts.ufRate`
-//    (CLP por 1 UF) para calcularlo. `opts.ufRate` debe venir resuelto por el
-//    caller — esta función NO hace I/O.
-//    TODO: implementar el lookup real de la tasa UF del día contra
-//    mindicador.cl (https://mindicador.cl/api/uf) o el Banco Central de Chile
-//    (serie UF en si3.bcentral.cl) y persistir también la fecha de la
-//    conversión, porque la UF cambia día a día — sin esto, cualquier
-//    comparación de precio entre anuncios de distintos días con UF≠CLP fijo
-//    queda sesgada. Por ahora exige que el caller resuelva la tasa.
+//    (CLP por 1 UF) para calcularlo. `opts.ufRate`/`opts.ufRateDate` deben
+//    venir resueltos por el caller — esta función NO hace I/O a propósito
+//    (sigue siendo una función pura de mapeo), pero el lookup real ya existe:
+//    `scraper/lib/uf-rate-cl.mjs::getUfRateCl()` consulta mindicador.cl
+//    (serie UF oficial del Banco Central de Chile, republicada por una API
+//    pública pensada para consumo programático) y cachea la tasa en memoria
+//    para que una corrida completa del scraper haga como máximo una petición
+//    de red en vez de una por anuncio. `scrape-multi-portal.mjs` es quien la
+//    llama y pasa el resultado aquí. Se persiste también `uf_rate_date` (la
+//    fecha de la serie usada, no necesariamente "hoy" si la API aún no
+//    publicó el valor del día) porque la UF cambia día a día y comparar
+//    precios de anuncios de distintas fechas con una tasa fija sesgaría
+//    cualquier análisis histórico.
 // 2. `comuna` normalizada vía `chile-comunas.mjs::normalizeComuna` en vez de
 //    barrio/distrito españoles.
 // 3. `location_confidence: 'none'` en vez de `rc_status: 'none'` directo: en
@@ -143,7 +148,7 @@ function resolvePriceClp(row, ufRate) {
   return null
 }
 
-export function toAppListingCl(row, { zoneSlug, ufRate, today = new Date().toISOString().slice(0, 10) } = {}) {
+export function toAppListingCl(row, { zoneSlug, ufRate, ufRateDate, today = new Date().toISOString().slice(0, 10) } = {}) {
   const isParticular = row.advertiser_type === 'particular'
   const price = resolvePriceClp(row, ufRate) ?? 0
   const sqm = row.square_meters ?? 0
@@ -170,7 +175,10 @@ export function toAppListingCl(row, { zoneSlug, ufRate, today = new Date().toISO
     operation: row.operation,
     price,
     price_uf: row.price_uf ?? null,
-    uf_rate: ufRate ?? null, // TODO: persistir junto a la fecha de conversión real (mindicador.cl/BCCh)
+    uf_rate: ufRate ?? null,
+    // Fecha de la serie UF usada para la conversión (ver getUfRateCl en
+    // uf-rate-cl.mjs) — null si no se necesitó conversión (anuncio ya en CLP).
+    uf_rate_date: ufRateDate ?? null,
     currency: row.currency ?? 'CLP',
     square_meters: sqm,
     price_sqm: priceSqm,
