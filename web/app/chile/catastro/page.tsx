@@ -399,7 +399,9 @@ export default function CatastroPage() {
                         ].map(({ label, value, color }) => (
                           <div key={label} className="rounded-lg bg-[var(--c-card)] border border-[var(--c-border-card)] p-2.5">
                             <p className="text-[10px] text-slate-600 mb-1">{label}</p>
-                            <p className={`text-sm font-bold ${color}`}>{fmtCLP(value)}</p>
+                            <div className="text-sm font-bold">
+                              {renderCurrencyDual(value)}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -489,7 +491,7 @@ export default function CatastroPage() {
                                   <p className="text-[10px] text-slate-600 truncate">{u.direccion ?? '—'}</p>
                                 </div>
                                 <div className="text-right flex-shrink-0">
-                                  <p className="text-[11px] text-slate-300 font-medium">{fmtCLP(u.avaluo_fiscal_total)}</p>
+                                  <p className={`text-[11px] font-medium ${showUF ? 'text-blue-400' : 'text-slate-300'}`}>{renderCurrency(u.avaluo_fiscal_total)}</p>
                                   {u.superficie_terreno_m2 && <p className="text-[10px] text-slate-600">{u.superficie_terreno_m2} m²</p>}
                                 </div>
                               </button>

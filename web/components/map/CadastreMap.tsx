@@ -323,7 +323,40 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
 
   // Handle highlighting parcel when highlightedParcelId changes
   useEffect(() => {
-    const parcelData = parcelLayersRef.current.get(highlightedParcelId ?? '')
+    if (!highlightedParcelId) {
+      // Reset all parcels to normal style when no highlight
+      parcelLayersRef.current.forEach(({ layer, parcel }) => {
+        const getNormalStyle = () => {
+          if (parcel.source === 'ide_chile') {
+            return {
+              color: '#22d3ee',
+              weight: 2.5,
+              fillColor: '#22d3ee',
+              fillOpacity: 0.16,
+            }
+          } else if (parcel.source === 'estimated') {
+            return {
+              color: '#f59e0b',
+              weight: 2.5,
+              dashArray: '4,3',
+              fillColor: '#f59e0b',
+              fillOpacity: 0.1,
+            }
+          } else {
+            return {
+              color: '#c4b5fd',
+              weight: 2.5,
+              fillColor: '#c4b5fd',
+              fillOpacity: 0.12,
+            }
+          }
+        }
+        layer.setStyle(getNormalStyle())
+      })
+      return
+    }
+
+    const parcelData = parcelLayersRef.current.get(highlightedParcelId)
     if (!parcelData) return
 
     const { layer, parcel } = parcelData
@@ -355,12 +388,8 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
       }
     }
 
-    if (highlightedParcelId) {
-      layer.setStyle(getHighlightStyle(true))
-      layer.bringToFront()
-    } else {
-      layer.setStyle(getHighlightStyle(false))
-    }
+    layer.setStyle(getHighlightStyle(true))
+    layer.bringToFront()
   }, [highlightedParcelId])
 
   return (

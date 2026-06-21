@@ -43,8 +43,11 @@ export async function GET(request: NextRequest) {
         `SELECT r.rol, r.manzana, r.predio, r.direccion, r.avaluo_fiscal_total,
                 r.avaluo_exento, r.contribucion_semestral, r.codigo_destino_principal,
                 r.codigo_ubicacion, r.superficie_terreno_m2, r.serie,
-                r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2
-         FROM sii_roles_cl r ${where}
+                r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2,
+                p.matched_parcel_id
+         FROM sii_roles_cl r
+         LEFT JOIN property_rc_cl p ON r.rol = p.sii_rol
+         ${where}
          ORDER BY ${sort}
          LIMIT ${pageSize} OFFSET ${offset}`,
         params
