@@ -54,7 +54,9 @@
 //     sqm: number|null, bedrooms: number|null, bathrooms: number|null,
 //     property_type: string|null,
 //     phone: string|null, agency_name: string|null,
-//     photo_phashes: string[]|null,  // puede venir vacío/null (phash.mjs deshabilitado hoy)
+//     photo_phashes: string[]|null,  // dHash hex de 16 chars vía phash.mjs;
+//                                     // puede venir vacío/null si el listing
+//                                     // no tiene fotos o el cálculo falló.
 //   }
 // Campos ausentes se degradan a "sin señal" (no se asume su presencia).
 //
@@ -68,6 +70,13 @@
 import { calculateMatchScore } from './matching.mjs';
 import { geocodeAddressCl, distanceMeters } from './geocode-cl.mjs';
 import { compareAerialSignature } from './aerial-signature-cl.mjs';
+import { detectSuspiciousPin } from './cadastre-cl.mjs';
+import { isImageDuplicate } from './phash.mjs';
+
+// Umbral de Hamming distance para considerar dos pHash "la misma foto"
+// (posiblemente reescalada/recomprimida por un portal/agencia distinta).
+// Mismo orden que el threshold recomendado en phash.mjs (5-10 bits de 64).
+const PHASH_MATCH_THRESHOLD = 10;
 
 // Pesos propios para la sub-señal de "huella física" reutilizando
 // calculateMatchScore de matching.mjs (estrategia #4). Distintos de
@@ -116,10 +125,10 @@ function normalizePhone(phone) {
  * de "es la misma propiedad" hay, más el centroide/moda de lat/lng de esos
  * candidatos (más confiable que un pin individual, según el research).
  *
- * Degrada con gracia: phash.mjs hoy devuelve null/[] (deshabilitado), así
- * que la señal de pHash simplemente no contribuye cuando no hay hashes —
- * NO se asume que falta de coincidencia de pHash sea evidencia de "no es la
- * misma propiedad".
+ * Degrada con gracia: si un listing no trae `photo_phashes` (sin fotos, o
+ * cálculo de phash.mjs falló para todas) la señal de pHash simplemente no
+ * contribuye — NO se asume que falta de coincidencia de pHash sea evidencia
+ * de "no es la misma propiedad".
  */
 function triangulateListings(listing, candidateListings = []) {
   if (!Array.isArray(candidateListings) || candidateListings.length === 0) {
@@ -147,7 +156,12 @@ function triangulateListings(listing, candidateListings = []) {
 
     const candHashes = Array.isArray(cand?.photo_phashes) ? cand.photo_phashes.filter(Boolean) : [];
     if (listingHashes.length > 0 && candHashes.length > 0) {
-      const shared = listingHashes.some((h) => candHashes.includes(h));
+      // Comparación por Hamming distance (no igualdad exacta de string):
+      // un pHash perceptual está diseñado para que la MISMA foto reescalada/
+      // recomprimida por otro portal o agencia caiga cerca en distancia, no
+      // necesariamente como string idéntico — igualdad exacta solo detectaría
+      // la foto re-hosteada byte a byte, perdiendo el propósito del pHash.
+      const shared = listingHashes.some((h) => candHashes.some((ch) => isImageDuplicate(h, ch, PHASH_MATCH_THRESHOLD)));
       if (shared) phashMatches++;
     }
 
@@ -210,23 +224,14 @@ async function checkGeocodeAgreement(listing) {
 
 // ── Estrategia #3: point-in-polygon + detector de pin sospechoso ───────────
 
-// Heurísticas de "pin puesto a mano" / sospechoso: coordenadas con
-// decimales redondos (ej. -33.4000, -70.6000) sugieren que alguien arrastró
-// el pin al centro aproximado de un mapa en vez de geolocalizar la propiedad
-// real.
-function hasSuspiciousRoundCoords(lat, lng) {
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-  const round = (n, decimals) => {
-    const factor = 10 ** decimals;
-    return Math.round(n * factor) / factor === n;
-  };
-  // 3 o menos decimales en AMBOS ejes es sospechosamente redondo para un pin
-  // residencial (equivale a ~110m de resolución o peor).
-  const latDecimals = (String(lat).split('.')[1] || '').length;
-  const lngDecimals = (String(lng).split('.')[1] || '').length;
-  return latDecimals <= 3 && lngDecimals <= 3;
-}
-
+// Detector de pin sospechoso real: reutiliza `detectSuspiciousPin` de
+// `cadastre-cl.mjs` (read-only, no se modifica ese archivo) en vez de
+// reimplementar una heurística local más débil. `comunaCentroid` se pasa
+// como null porque este codebase aún no tiene una tabla de centroides de
+// comuna disponible (ver scraper/lib/chile-comunas.mjs, sin lat/lng) — eso
+// simplemente desactiva ESA sub-heurística puntual dentro de
+// `detectSuspiciousPin` (coincidencia con centroide de comuna), las demás
+// (decimales pocos/redondos, terminación en ceros, lat==lng) siguen activas.
 function extractCentroid(parcel) {
   if (!parcel) return null;
   if (parcel.centroid && Number.isFinite(parcel.centroid.lat) && Number.isFinite(parcel.centroid.lng)) {
@@ -239,22 +244,31 @@ function extractCentroid(parcel) {
 
 async function resolveParcel({ listing, findParcelByPoint }) {
   if (typeof findParcelByPoint !== 'function') {
-    return { parcel: null, pinSuspect: false, reason: 'findParcelByPoint no inyectado' };
+    return { parcel: null, pinSuspect: false, pinSuspectReasons: [], reason: 'findParcelByPoint no inyectado' };
   }
   if (!Number.isFinite(listing?.lat) || !Number.isFinite(listing?.lng)) {
-    return { parcel: null, pinSuspect: false, reason: 'listing sin lat/lng' };
+    return { parcel: null, pinSuspect: false, pinSuspectReasons: [], reason: 'listing sin lat/lng' };
   }
 
   let parcel = null;
   try {
     parcel = await findParcelByPoint(listing.lat, listing.lng);
   } catch (err) {
-    return { parcel: null, pinSuspect: false, reason: `findParcelByPoint lanzó error: ${err.message || err}` };
+    return {
+      parcel: null,
+      pinSuspect: false,
+      pinSuspectReasons: [],
+      reason: `findParcelByPoint lanzó error: ${err.message || err}`,
+    };
   }
 
-  const pinSuspect = hasSuspiciousRoundCoords(listing.lat, listing.lng);
+  const { suspicious: pinSuspect, reasons: pinSuspectReasons } = detectSuspiciousPin({
+    lat: listing.lat,
+    lng: listing.lng,
+    comunaCentroid: null, // sin tabla de centroides de comuna disponible hoy, ver nota arriba
+  });
 
-  return { parcel: parcel || null, pinSuspect, reason: parcel ? null : 'sin parcela en ese punto' };
+  return { parcel: parcel || null, pinSuspect, pinSuspectReasons, reason: parcel ? null : 'sin parcela en ese punto' };
 }
 
 // ── Estrategia #4: huella física vs metadata SII (delegado a matching.mjs) ─
@@ -342,7 +356,12 @@ export async function resolvePropertyIdentity({ listing, candidateListings = [],
 
   const triangulation = triangulateListings(listing, candidateListings);
   const geocodeCheck = await checkGeocodeAgreement(listing);
-  const { parcel, pinSuspect, reason: parcelReason } = await resolveParcel({ listing, findParcelByPoint });
+  const {
+    parcel,
+    pinSuspect,
+    pinSuspectReasons,
+    reason: parcelReason,
+  } = await resolveParcel({ listing, findParcelByPoint });
   const footprint = scoreFootprintMatch(listing, parcel);
   const aerial = await scoreAerialSignature(listing, parcel);
 
@@ -412,7 +431,7 @@ export async function resolvePropertyIdentity({ listing, candidateListings = [],
       ? `geocode_agrees=${geocodeCheck.agrees}(${geocodeCheck.distance_m?.toFixed(0)}m)`
       : 'geocode=unavailable',
     parcel ? `parcel=${parcel.rol || 'found'}` : `parcel=none(${parcelReason})`,
-    pinSuspect ? 'pin_suspect=true' : null,
+    pinSuspect ? `pin_suspect=true(${pinSuspectReasons.join('|')})` : null,
     footprint.available ? `footprint=${footprint.score.toFixed(2)}` : null,
     aerial.available ? `aerial=${aerial.signal_strength.toFixed(2)}` : null,
   ].filter(Boolean);
@@ -427,6 +446,7 @@ export async function resolvePropertyIdentity({ listing, candidateListings = [],
       geocode: geocodeCheck,
       parcel: parcel ? { rol: parcel.rol, rol_matriz: parcel.rol_matriz, rol_unidad: parcel.rol_unidad, source: parcel.source } : null,
       pin_suspect: pinSuspect,
+      pin_suspect_reasons: pinSuspectReasons,
       footprint,
       aerial,
       components,
