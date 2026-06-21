@@ -116,18 +116,27 @@ function extractFromHtml(html: string) {
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/)
   if (titleMatch) data.title = titleMatch[1].replace(/\s*\|.*/, '').trim()
 
-  // ── 2. Geo: lat/lng from JSON-LD, maps scripts, or og tags ────────────────
-  const latMatch = html.match(/"latitude"\s*:\s*(-?\d{1,3}\.\d+)/) ||
-    html.match(/lat(?:itude)?\s*[:=]\s*["']?(-?\d{1,3}\.\d+)/)
-  const lngMatch = html.match(/"longitude"\s*:\s*(-?\d{1,3}\.\d+)/) ||
-    html.match(/l(?:ng|on)(?:gitude)?\s*[:=]\s*["']?(-?\d{1,3}\.\d+)/)
-  if (latMatch) data.lat = parseFloat(latMatch[1])
-  if (lngMatch) data.lng = parseFloat(lngMatch[1])
+  // ── 2. Geo: lat/lng from various sources ──────────────────────────────────
+  // Try Google Maps Static API URL first: ...&center=-33.38,-70.57&...
+  const mapsStaticMatch = html.match(/[?&]center=(-?\d{1,3}\.\d+)%2C(-?\d{1,3}\.\d+)/)
+  if (mapsStaticMatch) {
+    data.lat = parseFloat(mapsStaticMatch[1])
+    data.lng = parseFloat(mapsStaticMatch[2])
+  }
 
-  // Also look for pin position in maps embed URLs
+  // Try JSON-LD latitude/longitude
   if (!data.lat) {
-    const pinMatch = html.match(/[?&](?:center|q)=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
-    if (pinMatch) { data.lat = parseFloat(pinMatch[1]); data.lng = parseFloat(pinMatch[2]) }
+    const latMatch = html.match(/"latitude"\s*:\s*(-?\d{1,3}\.\d+)/)
+    const lngMatch = html.match(/"longitude"\s*:\s*(-?\d{1,3}\.\d+)/)
+    if (latMatch) data.lat = parseFloat(latMatch[1])
+    if (lngMatch) data.lng = parseFloat(lngMatch[1])
+  }
+
+  // Try plain lat/lng patterns
+  if (!data.lat) {
+    const pinMatch = html.match(/lat(?:itude)?\s*[:=]\s*["']?(-?\d{1,3}\.\d+)/) ||
+      html.match(/[?&]q=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
+    if (pinMatch) { data.lat = parseFloat(pinMatch[1]); data.lng = pinMatch[2] ? parseFloat(pinMatch[2]) : data.lng }
   }
 
   // ── 3. Address ────────────────────────────────────────────────────────────
@@ -153,60 +162,72 @@ function extractFromHtml(html: string) {
     else if (html.match(/["']currency_id["']\s*:\s*["']CLP["']/)) data.currency = 'CLP'
   }
 
-  // ── 5. Core attributes via JSON-LD schema or attribute arrays ─────────────
-  // JSON-LD floorSize / numberOfRooms
-  const floorSizeMatch = html.match(/"floorSize"\s*:\s*\{[^}]*"value"\s*:\s*([\d.]+)/)
-  if (floorSizeMatch) data.sqm = parseFloat(floorSizeMatch[1])
-  const roomsMatch = html.match(/"numberOfRooms"\s*:\s*(\d+)/)
-  if (roomsMatch) data.bedrooms_jsonld = parseInt(roomsMatch[1])
-
-  // Try to extract the "attributes" array from Portal Inmobiliario's page JSON
-  // It looks like: {"id":"BEDROOMS","value_name":"6"} or {"id":"TOTAL_AREA","value_name":"450"}
-  const attrSections = [...html.matchAll(/"id"\s*:\s*"([A-Z_]+)"\s*,\s*"(?:name|value_name)"\s*:\s*"([^"]+)"/g)]
+  // ── 5. Extract specs (characteristics) from Portal Inmobiliario JSON ──────
+  // Format: "specs":[{"attributes":[{"id":"Superficie total","text":"450 m²"}, ...]}]
+  const specsMatch = html.match(/"specs"\s*:\s*(\[\{[^}]*"attributes"[\s\S]*?\}\])/);
   const attrs: Record<string, string> = {}
-  for (const m of attrSections) {
-    attrs[m[1]] = m[2]
+
+  if (specsMatch) {
+    const specJson = tryParseJson(specsMatch[1])
+    if (specJson && Array.isArray(specJson)) {
+      for (const spec of specJson) {
+        if (spec.attributes && Array.isArray(spec.attributes)) {
+          for (const attr of spec.attributes) {
+            if (attr.id && attr.text) {
+              attrs[attr.id] = attr.text
+            }
+          }
+        }
+      }
+    }
   }
 
-  // Also capture pattern: {"id":"BEDROOMS","value_name":"6"}
-  const attrFull = [...html.matchAll(/"id"\s*:\s*"([A-Z_]+)"[^}]*?"value_name"\s*:\s*"([^"]+)"/g)]
-  for (const m of attrFull) {
-    if (!attrs[m[1]]) attrs[m[1]] = m[2]
+  // Fallback: if specs didn't work, try plain-text extraction
+  if (Object.keys(attrs).length === 0) {
+    // Extract from text labels like {"id":"Superficie total","text":"450 m²"}
+    const labelMatches = [...html.matchAll(/"id"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"/g)]
+    for (const m of labelMatches) {
+      attrs[m[1]] = m[2]
+    }
   }
 
   if (Object.keys(attrs).length > 0) {
     data.attributes_raw = attrs
 
-    const n = (k: string) => { const v = attrs[k]; return v ? parseFloat(v) || v : null }
-    const s = (k: string) => attrs[k] ?? null
+    // Helper to extract number from text like "450 m²"
+    const extractNum = (s: string): number | null => {
+      const m = s.match(/(\d+(?:\.\d+)?)/)
+      return m ? parseFloat(m[1]) : null
+    }
 
-    data.sqm              = data.sqm ?? n('TOTAL_AREA') ?? n('SURFACE_COVERED')
-    data.sqm_util         = n('COVERED_AREA') ?? n('SURFACE_TOTAL')
-    data.bedrooms         = n('BEDROOMS') ?? data.bedrooms_jsonld ?? null
-    data.bathrooms        = n('FULL_BATHROOMS') ?? n('BATHROOMS') ?? null
-    data.parking          = n('PARKING_LOTS')
-    data.floors           = n('FLOORS')
-    data.antiquity        = s('PROPERTY_AGE')
-    data.property_type_detail = s('PROPERTY_TYPE') ?? s('SUBTYPE')
-    data.orientation      = s('ORIENTATION')
-    data.furnished        = s('FURNISHED')
-    data.storage          = n('STORAGE_ROOMS')
-    data.allows_pets      = s('PETS_ALLOWED')
-    data.common_expenses  = s('MAINTENANCE_FEE')
+    // Map attribute IDs to fields
+    data.sqm              = extractNum(attrs['Superficie total'] ?? '') ?? extractNum(attrs['Sup. total'] ?? '')
+    data.sqm_util         = extractNum(attrs['Superficie útil'] ?? '') ?? extractNum(attrs['Sup. útil'] ?? '')
+    data.bedrooms         = extractNum(attrs['Dormitorios'] ?? '') ?? extractNum(attrs['Dorm.'] ?? '')
+    data.bathrooms        = extractNum(attrs['Baños'] ?? '') ?? extractNum(attrs['Ba.'] ?? '')
+    data.parking          = extractNum(attrs['Estacionamientos'] ?? '') ?? extractNum(attrs['Estac.'] ?? '')
+    data.floors           = extractNum(attrs['Cantidad de pisos'] ?? '') ?? extractNum(attrs['Pisos'] ?? '')
+    data.storage          = extractNum(attrs['Bodegas'] ?? '')
+    data.antiquity        = (attrs['Antigüedad'] ?? null)
+    data.property_type_detail = (attrs['Tipo de casa'] ?? attrs['Tipo'] ?? null)
+    data.orientation      = (attrs['Orientación'] ?? attrs['Orient.'] ?? null)
+    data.furnished        = (attrs['Amoblado'] ?? null)
+    data.allows_pets      = (attrs['Admite mascotas'] ?? null)
+    data.common_expenses  = (attrs['Gastos comunes'] ?? null)
 
-    // Amenities / boolean features
-    const amenityKeys: Record<string, string> = {
-      PARRILLA: 'parrilla', ALARM: 'alarma', CONCIERGE: 'conserjeria',
-      HEATING: 'calefaccion', AIR_CONDITIONER: 'aire_acondicionado',
-      CABLE_TV: 'tv_cable', PHONE: 'linea_telefonica',
-      NATURAL_GAS: 'gas_natural', WASHING_MACHINE_CONNECTION: 'conexion_lavarropas',
-      SATELLITE_TV: 'tv_satelital', RUNNING_WATER: 'agua_corriente',
-      BOILER: 'caldera', POOL: 'piscina', GYM: 'gimnasio',
-      ELEVATOR: 'ascensor', LAUNDRY: 'lavanderia', TERRACE: 'terraza',
+    // Amenities: check common amenity labels
+    const amenityLabels: Record<string, string> = {
+      'Parrilla': 'parrilla', 'Alarm': 'alarma', 'Conserjería': 'conserjeria',
+      'Calefacción': 'calefaccion', 'Aire acondicionado': 'aire_acondicionado',
+      'TV cable': 'tv_cable', 'Línea telefónica': 'linea_telefonica',
+      'Gas natural': 'gas_natural', 'Conexión para lavarropas': 'conexion_lavarropas',
+      'TV satelital': 'tv_satelital', 'Agua corriente': 'agua_corriente',
+      'Caldera': 'caldera', 'Piscina': 'piscina', 'Gimnasio': 'gimnasio',
+      'Ascensor': 'ascensor', 'Lavandería': 'lavanderia', 'Terraza': 'terraza',
     }
     const amenities: Record<string, string> = {}
-    for (const [attrId, label] of Object.entries(amenityKeys)) {
-      if (attrs[attrId] !== undefined) amenities[label] = attrs[attrId]
+    for (const [label, key] of Object.entries(amenityLabels)) {
+      if (attrs[label]) amenities[key] = attrs[label]
     }
     if (Object.keys(amenities).length > 0) data.amenities = amenities
   } else {
