@@ -11,6 +11,8 @@ interface Props {
   center?: { lat: number; lng: number }
   zoom?: number
   onShapeDrawn?: (shape: DrawnShape | null) => void
+  highlightedParcelId?: string | null
+  onMapClick?: () => void
 }
 
 export interface DrawnShape {
@@ -120,7 +122,7 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn }: Props) {
+export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -128,6 +130,8 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
   const drawnItemsRef = useRef<any>(null)
   const initializingRef = useRef(false)
   const [activeShape, setActiveShape] = useState<DrawnShape | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parcelLayersRef = useRef<Map<string, any>>(new Map())
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -157,15 +161,64 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
       L.control.zoom({ position: 'topright' }).addTo(map)
       L.control.attribution({ position: 'bottomright', prefix: false }).addTo(map)
 
-      parcels.forEach((parcel) => {
-        const style =
-          parcel.source === 'ide_chile'
-            ? { color: '#22d3ee', weight: 2, fillColor: '#22d3ee', fillOpacity: 0.12 }
-            : parcel.source === 'estimated'
-              ? { color: '#f59e0b', weight: 2, dashArray: '4,3', fillColor: '#f59e0b', fillOpacity: 0.08 }
-              : { color: '#a78bfa', weight: 2, fillColor: '#a78bfa', fillOpacity: 0.1 }
+      let selectedParcelLayer: { layer: L.GeoJSON; parcel: typeof parcels[0] } | null = null
 
-        const layer = L.geoJSON(parcel.geojson, { style }).addTo(map)
+      // Helper function to compute parcel style
+      const getParcelStyle = (parcelSource: string, isSelected: boolean = false, isHovered: boolean = false) => {
+        if (parcelSource === 'ide_chile') {
+          return {
+            color: isSelected ? '#0891b2' : isHovered ? '#06b6d4' : '#22d3ee',
+            weight: isSelected ? 4 : isHovered ? 3 : 2.5,
+            fillColor: isSelected ? '#0891b2' : isHovered ? '#06b6d4' : '#22d3ee',
+            fillOpacity: isSelected ? 0.28 : isHovered ? 0.22 : 0.16,
+          }
+        } else if (parcelSource === 'estimated') {
+          return {
+            color: isSelected ? '#d97706' : isHovered ? '#f97316' : '#f59e0b',
+            weight: isSelected ? 4 : isHovered ? 3 : 2.5,
+            dashArray: '4,3',
+            fillColor: isSelected ? '#d97706' : isHovered ? '#f97316' : '#f59e0b',
+            fillOpacity: isSelected ? 0.2 : isHovered ? 0.14 : 0.1,
+          }
+        } else {
+          return {
+            color: isSelected ? '#7c3aed' : isHovered ? '#a78bfa' : '#c4b5fd',
+            weight: isSelected ? 4 : isHovered ? 3 : 2.5,
+            fillColor: isSelected ? '#7c3aed' : isHovered ? '#a78bfa' : '#c4b5fd',
+            fillOpacity: isSelected ? 0.24 : isHovered ? 0.18 : 0.12,
+          }
+        }
+      }
+
+      parcels.forEach((parcel) => {
+
+        const layer = L.geoJSON(parcel.geojson, { style: () => getParcelStyle(parcel.source) }).addTo(map)
+
+        // Store layer reference for highlighting from parent
+        parcelLayersRef.current.set(parcel.id, { layer, parcel })
+
+        layer.on('mouseenter', () => {
+          const isSelected = selectedParcelLayer?.layer === layer || parcel.id === highlightedParcelId
+          layer.setStyle(getParcelStyle(parcel.source, isSelected, true))
+          layer.bringToFront()
+        })
+
+        layer.on('mouseleave', () => {
+          const isSelected = selectedParcelLayer?.layer === layer || parcel.id === highlightedParcelId
+          layer.setStyle(getParcelStyle(parcel.source, isSelected, false))
+        })
+
+        layer.on('click', () => {
+          if (selectedParcelLayer && selectedParcelLayer.layer !== layer) {
+            const wasHighlighted = selectedParcelLayer.parcel.id === highlightedParcelId
+            selectedParcelLayer.layer.setStyle(getParcelStyle(selectedParcelLayer.parcel.source, wasHighlighted, false))
+          }
+          selectedParcelLayer = { layer, parcel }
+          layer.setStyle(getParcelStyle(parcel.source, true, false))
+          layer.bringToFront()
+          onMapClick?.()
+        })
+
         layer.bindPopup(`
           <div style="font-family:system-ui;font-size:12px;line-height:1.5">
             <div style="font-weight:700;color:#0f172a">${parcel.comuna}</div>
@@ -267,6 +320,48 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Handle highlighting parcel when highlightedParcelId changes
+  useEffect(() => {
+    const parcelData = parcelLayersRef.current.get(highlightedParcelId ?? '')
+    if (!parcelData) return
+
+    const { layer, parcel } = parcelData
+
+    // Helper to compute style for highlighting
+    const getHighlightStyle = (isSelected: boolean = false) => {
+      if (parcel.source === 'ide_chile') {
+        return {
+          color: isSelected ? '#0891b2' : '#22d3ee',
+          weight: isSelected ? 4 : 2.5,
+          fillColor: isSelected ? '#0891b2' : '#22d3ee',
+          fillOpacity: isSelected ? 0.28 : 0.16,
+        }
+      } else if (parcel.source === 'estimated') {
+        return {
+          color: isSelected ? '#d97706' : '#f59e0b',
+          weight: isSelected ? 4 : 2.5,
+          dashArray: '4,3',
+          fillColor: isSelected ? '#d97706' : '#f59e0b',
+          fillOpacity: isSelected ? 0.2 : 0.1,
+        }
+      } else {
+        return {
+          color: isSelected ? '#7c3aed' : '#c4b5fd',
+          weight: isSelected ? 4 : 2.5,
+          fillColor: isSelected ? '#7c3aed' : '#c4b5fd',
+          fillOpacity: isSelected ? 0.24 : 0.12,
+        }
+      }
+    }
+
+    if (highlightedParcelId) {
+      layer.setStyle(getHighlightStyle(true))
+      layer.bringToFront()
+    } else {
+      layer.setStyle(getHighlightStyle(false))
+    }
+  }, [highlightedParcelId])
 
   return (
     <div className="relative w-full h-full">

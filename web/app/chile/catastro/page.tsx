@@ -6,9 +6,10 @@ import Link from 'next/link'
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
-  BarChart3, RefreshCw, ExternalLink, Filter, Layers
+  BarChart3, RefreshCw, ExternalLink, Filter, Layers, Toggle2
 } from 'lucide-react'
 import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
+import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
 
@@ -56,10 +57,7 @@ type ZoneId = (typeof ZONES)[number]['id']
 type SortKey = 'avaluo_desc' | 'avaluo_asc' | 'superficie_desc' | 'rol_asc'
 
 function fmtCLP(n: number | null) {
-  if (!n) return '—'
-  if (n >= 1_000_000_000) return `$${(n/1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000) return `$${Math.round(n/1_000_000)}M`
-  return `$${n.toLocaleString('es-CL')}`
+  return formatCLP(n)
 }
 
 export default function CatastroPage() {
@@ -73,6 +71,9 @@ export default function CatastroPage() {
   const [destino, setDestino] = useState('')
   const [sort, setSort] = useState<SortKey>('avaluo_desc')
   const [page, setPage] = useState(1)
+
+  // Currency display state
+  const [showUF, setShowUF] = useState(false)
 
   // Data state
   const [stats, setStats] = useState<any>(null)
@@ -165,6 +166,28 @@ export default function CatastroPage() {
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
+
+  // Helper to render currency with optional dual display
+  const renderCurrency = (value: number | null) => {
+    if (!value) return '—'
+    if (showUF) {
+      return formatUF(value, 2)
+    }
+    return formatCLP(value)
+  }
+
+  // Helper to render currency with both units for detail views
+  const renderCurrencyDual = (value: number | null) => {
+    if (!value) return '—'
+    const clp = formatCLP(value)
+    const uf = formatUF(value, 2)
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className={showUF ? 'text-blue-400 font-semibold' : 'text-slate-300'}>{showUF ? uf : clp}</span>
+        <span className={`text-[10px] ${showUF ? 'text-slate-500' : 'text-slate-600'}`}>{showUF ? clp : uf}</span>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[var(--c-bg)]">
@@ -286,7 +309,7 @@ export default function CatastroPage() {
             </div>
           </div>
 
-          {/* Roles count */}
+          {/* Roles count + Currency toggle */}
           <div className="flex-none flex items-center justify-between px-3 py-1.5 border-b border-[var(--c-border-card)]">
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <p className="text-[11px] text-slate-600">
@@ -301,7 +324,21 @@ export default function CatastroPage() {
                 </button>
               )}
             </div>
-            {loading && <RefreshCw size={11} className="text-slate-600 animate-spin" />}
+            <div className="flex items-center gap-2">
+              {loading && <RefreshCw size={11} className="text-slate-600 animate-spin" />}
+              <button
+                onClick={() => setShowUF(!showUF)}
+                className={`flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-lg border transition-colors ${
+                  showUF
+                    ? 'bg-blue-950/40 border-blue-900/50 text-blue-400'
+                    : 'bg-slate-900/40 border-slate-800/50 text-slate-500 hover:text-slate-300'
+                }`}
+                title={`Mostrar en ${showUF ? 'CLP' : 'UF'} (1 UF ≈ ${getUFValue().toLocaleString('es-CL')} CLP)`}
+              >
+                <Toggle2 size={10} />
+                {showUF ? 'UF' : 'CLP'}
+              </button>
+            </div>
           </div>
 
           {/* Roles table + detail */}
@@ -498,7 +535,9 @@ export default function CatastroPage() {
                               </div>
                             </td>
                             <td className="px-3 py-2 text-slate-400 max-w-[160px] truncate">{r.direccion ?? '—'}</td>
-                            <td className="px-3 py-2 text-right text-slate-300 font-medium whitespace-nowrap">{fmtCLP(r.avaluo_fiscal_total)}</td>
+                            <td className={`px-3 py-2 text-right font-medium whitespace-nowrap ${showUF ? 'text-blue-400' : 'text-slate-300'}`}>
+                              {renderCurrency(r.avaluo_fiscal_total)}
+                            </td>
                             <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{r.superficie_terreno_m2 ?? '—'}</td>
                           </tr>
                         )
@@ -528,7 +567,14 @@ export default function CatastroPage() {
 
         {/* RIGHT: map */}
         <div className="flex-1 relative">
-          <CadastreMap parcels={parcels} pins={pins} center={zone.center} zoom={15} />
+          <CadastreMap
+            parcels={parcels}
+            pins={pins}
+            center={zone.center}
+            zoom={15}
+            highlightedParcelId={selectedRol?.matched_parcel_id || null}
+            onMapClick={() => setSelectedRol(null)}
+          />
         </div>
       </div>
     </div>
