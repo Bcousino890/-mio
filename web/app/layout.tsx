@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
 import ThemeProvider from '@/components/ThemeProvider'
+import ChatWidget from '@/components/ChatWidget'
 
 export const metadata: Metadata = {
   title: 'Casafari Mio · Madrid',
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           >
             {children}
           </main>
+          <ChatWidget />
         </ThemeProvider>
       </body>
     </html>
