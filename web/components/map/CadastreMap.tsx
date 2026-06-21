@@ -1,7 +1,8 @@
 'use client'
 
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useRef } from 'react'
+import 'leaflet-draw/dist/leaflet.draw.css'
+import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
 
 interface Props {
@@ -9,6 +10,14 @@ interface Props {
   pins: CadastreListingPin[]
   center?: { lat: number; lng: number }
   zoom?: number
+  onShapeDrawn?: (shape: DrawnShape | null) => void
+}
+
+export interface DrawnShape {
+  type: 'polygon' | 'circle' | 'rectangle'
+  coordinates?: [number, number][]
+  center?: [number, number]
+  radius?: number
 }
 
 const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
@@ -56,16 +65,24 @@ function popupHtml(pin: CadastreListingPin) {
 let leafletPromise: Promise<any> | null = null
 function loadLeaflet() {
   if (!leafletPromise) {
-    leafletPromise = import('leaflet').then((L) => L)
+    leafletPromise = import('leaflet').then(async (L) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(window as any).L = L
+      await import('leaflet-draw')
+      return L
+    })
   }
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props) {
+export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drawnItemsRef = useRef<any>(null)
   const initializingRef = useRef(false)
+  const [activeShape, setActiveShape] = useState<DrawnShape | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -124,6 +141,62 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props)
         marker.bindPopup(popupHtml(pin), { maxWidth: 240, offset: [0, -4] })
       })
 
+      // Draw tools
+      const drawnItems = new (L as any).FeatureGroup()
+      map.addLayer(drawnItems)
+      drawnItemsRef.current = drawnItems
+
+      const drawControl = new (L as any).Control.Draw({
+        position: 'topright',
+        edit: { featureGroup: drawnItems, remove: true },
+        draw: {
+          polygon: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          circle: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          rectangle: { shapeOptions: { color: '#22d3ee', fillOpacity: 0.12, weight: 2 } },
+          polyline: false,
+          marker: false,
+          circlemarker: false,
+        },
+      })
+      map.addControl(drawControl)
+
+      map.on((L as any).Draw.Event.CREATED, (e: any) => {
+        drawnItems.clearLayers()
+        drawnItems.addLayer(e.layer)
+        let shape: DrawnShape | null = null
+        if (e.layerType === 'circle') {
+          const c = e.layer.getLatLng()
+          shape = { type: 'circle', center: [c.lat, c.lng], radius: e.layer.getRadius() }
+        } else {
+          const coords: [number, number][] = e.layer.getLatLngs()[0].map((ll: any) => [ll.lat, ll.lng])
+          coords.push(coords[0])
+          shape = { type: e.layerType === 'rectangle' ? 'rectangle' : 'polygon', coordinates: coords }
+        }
+        setActiveShape(shape)
+        onShapeDrawn?.(shape)
+      })
+
+      map.on((L as any).Draw.Event.DELETED, () => {
+        setActiveShape(null)
+        onShapeDrawn?.(null)
+      })
+
+      map.on((L as any).Draw.Event.EDITED, (e: any) => {
+        e.layers.eachLayer((layer: any) => {
+          let shape: DrawnShape
+          if (typeof layer.getRadius === 'function') {
+            const c = layer.getLatLng()
+            shape = { type: 'circle', center: [c.lat, c.lng], radius: layer.getRadius() }
+          } else {
+            const coords: [number, number][] = layer.getLatLngs()[0].map((ll: any) => [ll.lat, ll.lng])
+            coords.push(coords[0])
+            shape = { type: 'polygon', coordinates: coords }
+          }
+          setActiveShape(shape)
+          onShapeDrawn?.(shape)
+        })
+      })
+
       mapRef.current = map
     })
 
@@ -141,6 +214,21 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16 }: Props)
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
+      {activeShape && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-cyan-600/90 backdrop-blur border border-cyan-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
+          <span>Zona dibujada activa</span>
+          <button
+            onClick={() => {
+              drawnItemsRef.current?.clearLayers()
+              setActiveShape(null)
+              onShapeDrawn?.(null)
+            }}
+            className="w-4 h-4 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/30 transition-colors"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="absolute bottom-5 left-4 z-[1000] bg-white/95 backdrop-blur border border-black/8 rounded-xl px-3 py-2 text-xs text-slate-600 space-y-1 pointer-events-none shadow-md">
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-[#22c55e] inline-block flex-shrink-0" />
