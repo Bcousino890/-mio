@@ -6,13 +6,36 @@ import Link from 'next/link'
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
-  BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight
+  BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock
 } from 'lucide-react'
-import { MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
+import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
+import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
+import type { DrawnShape } from '@/components/map/CadastreMap'
 
 const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
+
+const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
+  confirmed: 'Confirmado (catastro)',
+  candidate: 'Candidato',
+  pin_suspect: 'Pin sospechoso',
+  none: 'Sin resolver',
+}
+
+const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
+  confirmed: '#22c55e',
+  candidate: '#f59e0b',
+  pin_suspect: '#ef4444',
+  none: '#94a3b8',
+}
+
+const LAYER_TABS = [
+  { id: 'catastro', label: 'Catastro' },
+  { id: 'oferta', label: 'Oferta' },
+  { id: 'ventas', label: 'Ventas' },
+] as const
+type LayerTab = (typeof LAYER_TABS)[number]['id']
 
 // SII destination code labels
 const DESTINO_LABELS: Record<string, string> = {
@@ -21,6 +44,24 @@ const DESTINO_LABELS: Record<string, string> = {
   E: 'Educación', F: 'Forestal', G: 'Hotel/Motel', L: 'Bodega',
   M: 'Minería', P: 'Administración Pública', Q: 'Culto',
   S: 'Salud', T: 'Transporte', V: 'Otros', W: 'Sitio Eriazo', Z: 'Estacionamiento',
+}
+
+// Clases de material según resolución SII (verificado externamente; el código
+// "D" y los códigos de condición especial no están documentados públicamente,
+// por eso no se incluyen — se muestra el código crudo en esos casos).
+const MATERIAL_LABELS: Record<string, string> = {
+  A: 'Acero',
+  B: 'Hormigón armado',
+  C: 'Albañilería (ladrillo, piedra o bloque de cemento)',
+  E: 'Madera',
+}
+
+const CALIDAD_LABELS: Record<string, string> = {
+  '1': 'Superior',
+  '2': 'Media superior',
+  '3': 'Media',
+  '4': 'Media inferior',
+  '5': 'Inferior',
 }
 
 const DESTINO_OPTIONS = [
@@ -91,6 +132,12 @@ export default function CatastroPage() {
   const [showBuildingUnits, setShowBuildingUnits] = useState(false)
   // Filter by building
   const [filterRolPadre, setFilterRolPadre] = useState<string | null>(null)
+  // Layer tab: Catastro (roles SII) / Oferta (anuncios) / Ventas (próximamente, requiere CBR)
+  const [layerTab, setLayerTab] = useState<LayerTab>('catastro')
+  // Drawn zone (polygon/circle/rectangle) + record count within it
+  const [drawnShape, setDrawnShape] = useState<DrawnShape | null>(null)
+  const [zoneCount, setZoneCount] = useState<number | null>(null)
+  const [zoneCountLoading, setZoneCountLoading] = useState(false)
 
   const PAGE_SIZE = 50
 
@@ -162,8 +209,27 @@ export default function CatastroPage() {
       .finally(() => setBuildingUnitsLoading(false))
   }, [zone.siiCode])
 
+  // Count SII roles within a drawn zone (polygon/circle/rectangle)
+  useEffect(() => {
+    if (!drawnShape || !zone.siiCode) { setZoneCount(null); return }
+    const controller = new AbortController()
+    setZoneCountLoading(true)
+    fetch('/api/chile/sii-roles-in-zone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sii_comuna_code: zone.siiCode, shape: drawnShape }),
+      signal: controller.signal,
+    })
+      .then(r => r.json())
+      .then(d => { if (d.success) setZoneCount(d.count) })
+      .catch(() => setZoneCount(null))
+      .finally(() => setZoneCountLoading(false))
+    return () => controller.abort()
+  }, [drawnShape, zone.siiCode])
+
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
-  const pins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
+  const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
+  const pins = layerTab === 'oferta' ? allPins : []
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
@@ -272,6 +338,25 @@ export default function CatastroPage() {
         {/* LEFT: roles panel */}
         <div className="w-[42%] flex flex-col border-r border-[var(--c-border-card)] overflow-hidden">
 
+          {/* Layer tabs */}
+          <div className="flex-none flex items-center gap-1 px-3 pt-2.5">
+            {LAYER_TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setLayerTab(t.id)}
+                className={`flex-1 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                  layerTab === t.id
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {layerTab === 'catastro' && (
+          <>
           {/* Search & filters */}
           <div className="flex-none px-3 py-2.5 border-b border-[var(--c-border-card)] space-y-2">
             <div className="relative">
@@ -389,6 +474,15 @@ export default function CatastroPage() {
                       </div>
                     </div>
 
+                    {/* Propietario — no disponible vía SII, requiere Conservador de Bienes Raíces */}
+                    <div>
+                      <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Propietario</p>
+                      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 flex items-center gap-2">
+                        <span className="text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded flex-shrink-0">Próximamente</span>
+                        <span className="text-[11px] text-slate-600">Requiere datos del Conservador de Bienes Raíces (no disponible en SII)</span>
+                      </div>
+                    </div>
+
                     {/* Avalúos */}
                     <div>
                       <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Avalúos fiscales</p>
@@ -408,26 +502,70 @@ export default function CatastroPage() {
                       </div>
                     </div>
 
+                    {/* Distribución de superficies */}
+                    {(rolDetail.rol?.superficie_terreno_m2 || rolDetail.construcciones?.length > 0) && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Distribución de superficies</p>
+                        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-3">
+                          <SurfaceDistributionBar
+                            terrenoM2={rolDetail.rol?.superficie_terreno_m2 ?? null}
+                            construcciones={rolDetail.construcciones ?? []}
+                            destinoLabels={DESTINO_LABELS}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {/* Construcciones */}
                     {rolDetail.construcciones?.length > 0 && (
                       <div>
                         <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Construcciones ({rolDetail.construcciones.length})</p>
                         <div className="space-y-1.5">
                           {rolDetail.construcciones.map((c: any, i: number) => (
-                            <div key={i} className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 flex items-center gap-3">
-                              <Building2 size={14} className="text-slate-600 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs text-slate-300 font-medium">{c.destino ?? 'Sin destino'}</p>
-                                <p className="text-[10px] text-slate-600 mt-0.5">
-                                  {[c.anio_construccion && `Año ${c.anio_construccion}`, c.numero_pisos && `${c.numero_pisos} pisos`, c.calidad && c.calidad].filter(Boolean).join(' · ')}
-                                </p>
+                            <div key={i} className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5">
+                              <div className="flex items-center gap-3">
+                                <Building2 size={14} className="text-slate-600 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs text-slate-300 font-medium">{c.destino_code ? (DESTINO_LABELS[c.destino_code] ?? c.destino_code) : 'Sin destino'}</p>
+                                  <p className="text-[10px] text-slate-600 mt-0.5">
+                                    {[c.anio_construccion && `Año ${c.anio_construccion}`, c.numero_pisos && `${c.numero_pisos} pisos`].filter(Boolean).join(' · ')}
+                                  </p>
+                                </div>
+                                {c.superficie_m2 && <p className="text-xs font-semibold text-slate-300 flex-shrink-0">{c.superficie_m2} m²</p>}
                               </div>
-                              {c.superficie_m2 && <p className="text-xs font-semibold text-slate-300 flex-shrink-0">{c.superficie_m2} m²</p>}
+                              {(c.material_code || c.calidad_code || c.condicion_especial) && (
+                                <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-[var(--c-border-card)]/40">
+                                  {c.material_code && (
+                                    <span className="text-[10px] bg-slate-900/40 border border-slate-800/50 text-slate-400 px-1.5 py-0.5 rounded">
+                                      Material: {MATERIAL_LABELS[c.material_code] ?? c.material_code}
+                                    </span>
+                                  )}
+                                  {c.calidad_code && (
+                                    <span className="text-[10px] bg-slate-900/40 border border-slate-800/50 text-slate-400 px-1.5 py-0.5 rounded">
+                                      Calidad: {CALIDAD_LABELS[c.calidad_code] ?? c.calidad_code}
+                                    </span>
+                                  )}
+                                  {c.condicion_especial && (
+                                    <span className="text-[10px] bg-amber-950/30 border border-amber-900/40 text-amber-500 px-1.5 py-0.5 rounded" title="Código SII sin etiqueta verificada públicamente">
+                                      Cond. especial: {c.condicion_especial}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
+
+                    {/* Ventas históricas — no disponible vía SII, requiere Conservador de Bienes Raíces */}
+                    <div>
+                      <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Ventas históricas</p>
+                      <div className="rounded-xl border border-dashed border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-4 text-center">
+                        <span className="inline-block text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded mb-2">Próximamente</span>
+                        <p className="text-[11px] text-slate-600">El historial de compraventas proviene del Conservador de Bienes Raíces, no del SII. Estamos evaluando fuentes de datos (ej. databam.cl) para incorporarlo.</p>
+                      </div>
+                    </div>
 
                     {/* Building links */}
                     {rolDetail.rol?.rol_padre && (
@@ -566,6 +704,40 @@ export default function CatastroPage() {
               </button>
             </div>
           )}
+          </>
+          )}
+
+          {layerTab === 'oferta' && (
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              <p className="text-[10px] text-slate-600 px-1">Anuncios de demostración — pendiente conexión a fuente de oferta en vivo (scraper Portalinmobiliario).</p>
+              {allPins.length === 0 ? (
+                <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Sin anuncios para {zone.label}</div>
+              ) : (
+                allPins.map((p) => (
+                  <div key={p.id} className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5">
+                    <p className="text-xs font-medium text-slate-300">{p.title}</p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: CONFIDENCE_COLOR[p.location_confidence] }} />
+                      <span className="text-[10px] text-slate-500">{CONFIDENCE_LABEL[p.location_confidence]}</span>
+                      {p.rol_matriz && <span className="text-[10px] text-slate-600 font-mono">Rol: {p.rol_matriz}</span>}
+                      {p.agency_count > 1 && <span className="text-[10px] text-blue-400 font-medium">{p.agency_count} corredoras</span>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {layerTab === 'ventas' && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <Clock size={32} className="text-slate-700" />
+              <div className="max-w-xs">
+                <span className="inline-block text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded mb-2">Próximamente</span>
+                <p className="text-sm font-medium text-slate-500 mb-1">Historial de ventas</p>
+                <p className="text-xs text-slate-700">El SII no publica compraventas ni propietarios — esos datos viven en el Conservador de Bienes Raíces. Estamos evaluando fuentes (ej. databam.cl) para incorporar esta capa.</p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* RIGHT: map */}
@@ -577,6 +749,9 @@ export default function CatastroPage() {
             zoom={15}
             highlightedParcelId={selectedRol?.matched_parcel_id || null}
             onMapClick={() => setSelectedRol(null)}
+            onShapeDrawn={setDrawnShape}
+            zoneRecordCount={zoneCount}
+            zoneRecordLoading={zoneCountLoading}
           />
         </div>
       </div>

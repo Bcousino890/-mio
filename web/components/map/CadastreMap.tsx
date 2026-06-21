@@ -13,6 +13,8 @@ interface Props {
   onShapeDrawn?: (shape: DrawnShape | null) => void
   highlightedParcelId?: string | null
   onMapClick?: () => void
+  zoneRecordCount?: number | null
+  zoneRecordLoading?: boolean
 }
 
 export interface DrawnShape {
@@ -22,14 +24,14 @@ export interface DrawnShape {
   radius?: number
 }
 
-const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
+export const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
   confirmed: '#22c55e',
   candidate: '#f59e0b',
   pin_suspect: '#ef4444',
   none: '#94a3b8',
 }
 
-const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
+export const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
   confirmed: 'Confirmado (catastro)',
   candidate: 'Candidato',
   pin_suspect: 'Pin sospechoso',
@@ -122,7 +124,7 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick }: Props) {
+export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, zoneRecordCount, zoneRecordLoading }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -397,7 +399,15 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
       <div ref={containerRef} className="w-full h-full" />
       {activeShape && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-cyan-600/90 backdrop-blur border border-cyan-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
-          <span>Zona dibujada activa</span>
+          <span>Zona dibujada</span>
+          <span className="w-px h-3 bg-white/30" />
+          <span className="font-semibold">
+            {zoneRecordLoading
+              ? 'Calculando…'
+              : zoneRecordCount != null
+                ? `${zoneRecordCount.toLocaleString('es-CL')} registros`
+                : '—'}
+          </span>
           <button
             onClick={() => {
               drawnItemsRef.current?.clearLayers()

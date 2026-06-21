@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
     let construcciones: any[] = []
     try {
       const constRes = await pool.query(
-        `SELECT destino, anio_construccion, superficie_m2, numero_pisos, calidad
+        `SELECT destino_code, material_code, calidad_code, condicion_especial,
+                anio_construccion, superficie_m2, numero_pisos
          FROM sii_construcciones_cl WHERE rol_id = $1 ORDER BY superficie_m2 DESC NULLS LAST`,
         [rolRow.id]
       )
