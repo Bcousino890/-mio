@@ -493,7 +493,7 @@ export default function CatastroPage() {
                           >
                             <td className="px-3 py-2 font-mono text-blue-400 whitespace-nowrap">
                               <div className="flex items-center gap-1">
-                                {isUnit && <Layers size={9} className="text-purple-400 flex-shrink-0" title="Unidad de edificio" />}
+                                {isUnit && <Layers size={9} className="text-purple-400 flex-shrink-0" aria-label="Unidad de edificio" />}
                                 {r.rol}
                               </div>
                             </td>
