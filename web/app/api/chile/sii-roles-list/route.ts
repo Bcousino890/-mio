@@ -32,7 +32,10 @@ export async function GET(request: NextRequest) {
 
     if (serie) conditions.push(`r.serie = ${addParam(serie)}`)
     if (rolPadre) conditions.push(`r.rol_padre = ${addParam(rolPadre)}`)
-    if (q) conditions.push(`r.direccion ILIKE ${addParam(`%${q}%`)}`)
+    if (q) {
+      const qParam = addParam(`%${q}%`)
+      conditions.push(`(r.rol ILIKE ${qParam} OR r.direccion ILIKE ${qParam})`)
+    }
     if (destino) conditions.push(`r.codigo_destino_principal = ${addParam(destino)}`)
 
     const where = `WHERE ${conditions.join(' AND ')}`

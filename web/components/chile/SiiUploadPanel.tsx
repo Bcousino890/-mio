@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect } from 'react'
-import { UploadCloud, Loader2, CheckCircle2, XCircle, FileWarning } from 'lucide-react'
+import { UploadCloud, Loader2, CheckCircle2, XCircle, FileWarning, Link2 } from 'lucide-react'
 
 interface Comuna {
   id: string
@@ -28,15 +28,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+type UploadPhase = 'uploading' | 'downloading' | 'processing'
+
 interface UploadStats {
+  phase: UploadPhase
   percent: number
   loadedBytes: number
   totalBytes: number
-  startTime: number
   elapsedSeconds: number
-  speedMBps: number
-  estimatedSecondsRemaining: number
-  isProcessing: boolean
+  rowsProcessed: number
+}
+
+const PHASE_LABEL: Record<UploadPhase, string> = {
+  uploading: 'Subiendo',
+  downloading: 'Descargando desde Google Drive',
+  processing: 'Procesando en servidor',
 }
 
 export default function SiiUploadPanel() {
@@ -50,6 +56,7 @@ export default function SiiUploadPanel() {
   const [selectedComunaId, setSelectedComunaId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [dragActive, setDragActive] = useState(false)
+  const [driveUrl, setDriveUrl] = useState('')
 
   useEffect(() => {
     fetch('/api/admin/chile-comunas')
@@ -94,66 +101,113 @@ export default function SiiUploadPanel() {
     }
   }
 
+  // Lee el body NDJSON que ambos endpoints (subida manual y from-url) envían
+  // en streaming, actualizando uploadStats en tiempo real a medida que
+  // llegan mensajes de progreso, en vez de esperar a un único JSON final.
+  async function consumeNdjsonResponse(res: Response, startTime: number): Promise<{ results: IngestResult[]; skipped: string[] }> {
+    if (!res.ok || !res.body) throw new Error(`Error ${res.status}`)
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const results: IngestResult[] = []
+    let skipped: string[] = []
+    let rowsProcessed = 0
+
+    function setProgress(phase: UploadPhase, percent: number, loadedBytes: number, totalBytes: number) {
+      setUploadStats({
+        phase,
+        percent: Math.max(0, Math.min(99, Math.round(percent))),
+        loadedBytes,
+        totalBytes,
+        elapsedSeconds: Math.round((Date.now() - startTime) / 1000),
+        rowsProcessed,
+      })
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+        let msg: any
+        try {
+          msg = JSON.parse(line)
+        } catch {
+          continue // línea incompleta cortada entre chunks — se ignora
+        }
+
+        if (msg.done) {
+          if (!msg.success) throw new Error(msg.error ?? 'Error al procesar')
+          skipped = msg.data?.skipped ?? skipped
+        } else if (msg.phase === 'uploading') {
+          setProgress('uploading', (msg.loadedBytes / (msg.totalBytes || 1)) * 90, msg.loadedBytes, msg.totalBytes)
+        } else if (msg.phase === 'downloading') {
+          setProgress('downloading', 5, 0, 0)
+        } else if (msg.progress && typeof msg.rowsProcessed === 'number') {
+          rowsProcessed = msg.rowsProcessed
+          setProgress('processing', 90 + (msg.processedBytes / (msg.totalBytes || 1)) * 10, msg.processedBytes, msg.totalBytes)
+        } else if (msg.progress && msg.counts) {
+          results.push({ comunaCode: msg.comunaCode, ok: msg.status === 'ok', counts: msg.counts, error: msg.error })
+        } else if (msg.progress && msg.status === 'error') {
+          results.push({ comunaCode: msg.comunaCode, ok: false, counts: {}, error: msg.error })
+        }
+      }
+    }
+
+    return { results, skipped }
+  }
+
   async function handleUpload() {
     if (files.length === 0) return
     setUploading(true)
     setUploadStats(null)
     setError(null)
     setResponse(null)
-
     const startTime = Date.now()
-    const totalFileSize = files.reduce((sum, f) => sum + f.size, 0)
 
     try {
       const formData = new FormData()
       for (const f of files) formData.append('files', f)
       formData.append('comunaId', selectedComunaId)
 
-      // Usamos fetch con streaming para archivos grandes (9.4M filas = 30+ min).
-      // El servidor envía líneas JSON de progreso mientras procesa.
       const res = await fetch('/api/admin/sii-upload', { method: 'POST', body: formData })
-      if (!res.ok || !res.body) throw new Error(`Error ${res.status}`)
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const results: any[] = []
-      let skipped: string[] = []
-
-      setUploadStats({ percent: 95, loadedBytes: totalFileSize, totalBytes: totalFileSize,
-        startTime, elapsedSeconds: 0, speedMBps: 0, estimatedSecondsRemaining: 0, isProcessing: true })
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          try {
-            const msg = JSON.parse(line)
-            if (msg.done) {
-              if (!msg.success) throw new Error(msg.error ?? 'Error al procesar')
-              skipped = msg.data?.skipped ?? skipped
-            } else if (msg.progress && msg.counts) {
-              results.push({ comunaCode: msg.comunaCode, ok: msg.status === 'ok', counts: msg.counts, error: msg.error })
-            } else if (msg.progress && msg.status === 'error') {
-              results.push({ comunaCode: msg.comunaCode, ok: false, counts: {}, error: msg.error })
-            }
-            const elapsed = Math.round((Date.now() - startTime) / 1000)
-            setUploadStats(prev => prev ? { ...prev, elapsedSeconds: elapsed } : null)
-          } catch (e) {
-            if ((e as Error).message !== 'Unexpected end of JSON input') throw e
-          }
-        }
-      }
+      const { results, skipped } = await consumeNdjsonResponse(res, startTime)
 
       setResponse({ success: true, data: { results, skipped } })
-      if (results.every(r => r.ok)) setFiles([])
+      if (results.every((r) => r.ok)) setFiles([])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al subir los archivos')
+    } finally {
+      setUploading(false)
+      setUploadStats(null)
+    }
+  }
+
+  async function handleImportFromUrl() {
+    if (!driveUrl.trim()) return
+    setUploading(true)
+    setUploadStats(null)
+    setError(null)
+    setResponse(null)
+    const startTime = Date.now()
+
+    try {
+      const res = await fetch('/api/admin/sii-upload/from-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveUrl: driveUrl.trim() }),
+      })
+      const { results, skipped } = await consumeNdjsonResponse(res, startTime)
+
+      setResponse({ success: true, data: { results, skipped } })
+      if (results.every((r) => r.ok)) setDriveUrl('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al importar desde Google Drive')
     } finally {
       setUploading(false)
       setUploadStats(null)
@@ -253,35 +307,61 @@ export default function SiiUploadPanel() {
         {uploading ? 'Subiendo e ingiriendo (puede tardar varios minutos en comunas grandes)…' : 'Subir e ingerir'}
       </button>
 
+      <div className="flex items-center gap-2 my-3">
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+        <span className="text-[10px] text-slate-600">o</span>
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+      </div>
+
+      <div className="mb-1">
+        <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-1.5">
+          <Link2 size={12} className="text-slate-500" />
+          Importar CSV de catastral.cl desde un link de Google Drive
+        </label>
+        <p className="text-[11px] text-slate-600 mb-2">
+          Pega el enlace para compartir de Google Drive — el archivo se descarga directo en el servidor, sin pasar por tu navegador.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={driveUrl}
+            onChange={(e) => setDriveUrl(e.target.value)}
+            disabled={uploading}
+            placeholder="https://drive.google.com/file/d/.../view"
+            className="flex-1 px-3 py-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={handleImportFromUrl}
+            disabled={uploading || !driveUrl.trim()}
+            className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors shrink-0"
+          >
+            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+            Importar
+          </button>
+        </div>
+      </div>
+
       {uploading && uploadStats && (
         <div className="mt-3 space-y-2">
           <div className="flex items-center justify-between mb-1">
-            <div>
-              <span className="text-[11px] text-slate-400">
-                {uploadStats.isProcessing ? 'Procesando' : 'Subiendo'} • {formatBytes(uploadStats.loadedBytes)} / {formatBytes(uploadStats.totalBytes)}
-              </span>
-              {uploadStats.speedMBps > 0 && (
-                <span className="text-[11px] text-slate-500 ml-2">
-                  {uploadStats.speedMBps} MB/s
-                </span>
+            <span className="text-[11px] text-slate-400">
+              {PHASE_LABEL[uploadStats.phase]}
+              {uploadStats.totalBytes > 0 && ` • ${formatBytes(uploadStats.loadedBytes)} / ${formatBytes(uploadStats.totalBytes)}`}
+              {uploadStats.phase === 'processing' && uploadStats.rowsProcessed > 0 && (
+                <span className="text-slate-500"> • {uploadStats.rowsProcessed.toLocaleString('es-CL')} filas procesadas</span>
               )}
-            </div>
+            </span>
             <span className="text-[11px] text-slate-400 font-medium">{uploadStats.percent}%</span>
           </div>
           <div className="w-full bg-[var(--c-hover)] border border-[var(--c-border)] rounded-full h-2 overflow-hidden">
             <div
-              className={`h-full transition-all duration-200 ${uploadStats.isProcessing ? 'bg-amber-500' : 'bg-blue-500'}`}
+              className={`h-full transition-all duration-200 ${uploadStats.phase === 'processing' ? 'bg-amber-500' : 'bg-blue-500'}`}
               style={{ width: `${uploadStats.percent}%` }}
             />
           </div>
           <div className="flex items-center justify-between text-[10px] text-slate-500">
             <span>Transcurrido: {formatTime(uploadStats.elapsedSeconds)}</span>
-            {!uploadStats.isProcessing && uploadStats.estimatedSecondsRemaining > 0 && (
-              <span>Estimado: {formatTime(uploadStats.estimatedSecondsRemaining)}</span>
-            )}
-            {uploadStats.isProcessing && (
-              <span className="text-amber-400">Procesando en servidor...</span>
-            )}
           </div>
         </div>
       )}
@@ -300,7 +380,11 @@ export default function SiiUploadPanel() {
                 {r.ok ? <CheckCircle2 size={12} className="text-emerald-400" /> : <XCircle size={12} className="text-red-400" />}
                 <span className="text-xs font-medium text-slate-200">Comuna {r.comunaCode}</span>
               </div>
-              {r.ok ? (
+              {r.ok && r.comunaCode === 'catastral_cl' ? (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Filas ingresadas: {(r.counts.catastral_cl ?? 0).toLocaleString('es-CL')}
+                </p>
+              ) : r.ok ? (
                 <p className="text-[11px] text-slate-500 mt-1">
                   Roles: {r.counts.roles_no_agricolas + r.counts.roles_agricolas} · Construcciones:{' '}
                   {r.counts.construcciones_no_agricolas + r.counts.suelos_construcciones_agricolas} · Rol de cobro: {r.counts.rol_de_cobro}

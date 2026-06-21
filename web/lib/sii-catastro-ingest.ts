@@ -24,6 +24,7 @@
 // petición HTTP/scraping contra sii.cl. Ver migración 0021_sii_catastro_cl.sql.
 // ─────────────────────────────────────────────────────────────────────────────
 import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { Client } from 'pg'
 
@@ -71,13 +72,20 @@ function normalizeRolTriple(comuna: unknown, manzana: unknown, predio: unknown):
   return `${c}-${stripLeadingZeros(manzana)}-${stripLeadingZeros(predio)}`
 }
 
-async function* readLines(filePath: string): AsyncGenerator<string> {
+async function* readLines(filePath: string, onBytes?: (bytesRead: number) => void): AsyncGenerator<string> {
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream, crlfDelay: Infinity })
+  let lineCount = 0
   for await (const line of rl) {
     if (line.length === 0) continue
+    lineCount++
+    // bytesRead del ReadStream da progreso real sin una pasada extra sobre
+    // el archivo; se reporta cada 5000 líneas para no llamar al callback en
+    // cada iteración de un archivo de millones de filas.
+    if (onBytes && lineCount % 5000 === 0) onBytes(stream.bytesRead)
     yield line
   }
+  onBytes?.(stream.bytesRead)
 }
 
 const ROLES_AGRICOLAS_FIELDS = [
@@ -507,12 +515,12 @@ function parseCsvLine(line: string, delim: string): string[] {
   return fields
 }
 
-async function* parseCatastralClCsv(filePath: string) {
+async function* parseCatastralClCsv(filePath: string, onBytes?: (bytesRead: number) => void) {
   let headerMap: Record<number, string> | null = null
   let delim = ','
   let lineNo = 0
 
-  for await (const line of readLines(filePath)) {
+  for await (const line of readLines(filePath, onBytes)) {
     lineNo++
     if (lineNo === 1) {
       // Detectar delimitador
@@ -624,6 +632,24 @@ async function flushRolesEnriquecidosBatch(client: Client, batch: RolEnriquecido
   return res.rowCount ?? 0
 }
 
+// A diferencia del resto de bloques (que ingestan dentro de una única
+// transacción de tamaño acotado por comuna), el CSV de catastral.cl tiene
+// ~9.4M filas a nivel nacional: una sola transacción para todo el archivo no
+// da feedback incremental y, si algo falla cerca del final, se pierde horas
+// de trabajo. Aquí cada lote se commitea por separado.
+async function flushRolesEnriquecidosBatchCommitted(client: Client, batch: RolEnriquecidoBatchRow[]): Promise<number> {
+  if (batch.length === 0) return 0
+  await client.query('BEGIN')
+  try {
+    const n = await flushRolesEnriquecidosBatch(client, batch)
+    await client.query('COMMIT')
+    return n
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  }
+}
+
 export interface SiiIngestFiles {
   rolesNoAgricolas?: string
   construccionesNoAgricolas?: string
@@ -648,10 +674,12 @@ export async function ingestSiiCatastroComuna({
   comunaCode,
   files = {},
   dbUrl = process.env.DATABASE_URL,
+  onProgress,
 }: {
   comunaCode: string
   files?: SiiIngestFiles
   dbUrl?: string
+  onProgress?: (info: { rowsProcessed: number; processedBytes: number; totalBytes: number }) => void
 }): Promise<SiiIngestResult> {
   const counts: Record<string, number> = {
     roles_agricolas: 0, suelos_construcciones_agricolas: 0,
@@ -827,9 +855,13 @@ export async function ingestSiiCatastroComuna({
       }
     }
 
-    // 4) CSV de catastral.cl — formato nacional con cabecera, incluye lat/lng
+    // 4) CSV de catastral.cl — formato nacional con cabecera, incluye lat/lng.
+    //    Ver comentario de flushRolesEnriquecidosBatchCommitted: aquí se
+    //    commitea por lote (no en una única transacción) y se reporta
+    //    progreso real (filas + bytes leídos del archivo) vía onProgress.
     if (files.catastralCl) {
       const source = basename(files.catastralCl)
+      const totalBytes = (await stat(files.catastralCl)).size
       // Pre-cargar mapa de todas las comunas para no hacer un SELECT por fila
       const comunaMapRes = await client.query(
         `SELECT sii_comuna_code, id FROM chile_comunas WHERE sii_comuna_code IS NOT NULL`
@@ -837,31 +869,34 @@ export async function ingestSiiCatastroComuna({
       const comunaIdMap = new Map<string, string>(
         comunaMapRes.rows.map((r: { sii_comuna_code: string; id: string }) => [r.sii_comuna_code, r.id])
       )
-      await client.query('BEGIN')
-      try {
-        let batch: RolEnriquecidoBatchRow[] = []
-        for await (const rec of parseCatastralClCsv(files.catastralCl)) {
-          batch.push({
-            ...rec,
-            rol: rec.rol!,
-            comuna_id: comunaIdMap.get(rec.sii_comuna_code ?? '') ?? null,
-            raw_source: source,
-            rol_bien_comun_1: null,
-            rol_bien_comun_2: null,
-            rol_padre: null,
-          })
-          if (batch.length >= BATCH_SIZE) {
-            counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatch(client, batch)
-            batch = []
+
+      let rowsProcessed = 0
+      let processedBytes = 0
+      let batchesSinceProgress = 0
+      let batch: RolEnriquecidoBatchRow[] = []
+      for await (const rec of parseCatastralClCsv(files.catastralCl, (bytesRead) => { processedBytes = bytesRead })) {
+        rowsProcessed++
+        batch.push({
+          ...rec,
+          rol: rec.rol!,
+          comuna_id: comunaIdMap.get(rec.sii_comuna_code ?? '') ?? null,
+          raw_source: source,
+          rol_bien_comun_1: null,
+          rol_bien_comun_2: null,
+          rol_padre: null,
+        })
+        if (batch.length >= BATCH_SIZE) {
+          counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatchCommitted(client, batch)
+          batch = []
+          batchesSinceProgress++
+          if (batchesSinceProgress >= 50) {
+            batchesSinceProgress = 0
+            onProgress?.({ rowsProcessed, processedBytes, totalBytes })
           }
         }
-        counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatch(client, batch)
-        await client.query('COMMIT')
-      } catch (err) {
-        await client.query('ROLLBACK')
-        counts.catastral_cl = 0
-        throw err
       }
+      counts.catastral_cl = (counts.catastral_cl ?? 0) + await flushRolesEnriquecidosBatchCommitted(client, batch)
+      onProgress?.({ rowsProcessed, processedBytes, totalBytes })
     }
 
     return { ok: true, counts }
