@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
-  BarChart3, RefreshCw, ExternalLink, Filter, Layers, Toggle2
+  BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight
 } from 'lucide-react'
 import { MOCK_PARCELS, MOCK_LISTING_PINS } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
@@ -335,7 +335,7 @@ export default function CatastroPage() {
                 }`}
                 title={`Mostrar en ${showUF ? 'CLP' : 'UF'} (1 UF ≈ ${getUFValue().toLocaleString('es-CL')} CLP)`}
               >
-                <Toggle2 size={10} />
+                <ToggleRight size={10} />
                 {showUF ? 'UF' : 'CLP'}
               </button>
             </div>
