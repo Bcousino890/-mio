@@ -10,7 +10,6 @@
   "dependencies": {
     "pg": "^8.13.1",
     "sharp": "^0.33.0",
-    "imghash": "^0.0.9",
     "pg-boss": "^10.1.0",
     "graphology": "^0.25.4",
     "graphology-components": "^1.0.0"
