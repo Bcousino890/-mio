@@ -82,9 +82,9 @@ function tryParseJson(s: string): any {
 function extractInitialState(html: string): Record<string, any> | null {
   // Patterns used by Portal Inmobiliario
   const patterns = [
-    /window\.__PRELOADED_STATE__\s*=\s*({.+?})(?=;<\/script>|;\s*window\.)/s,
-    /window\.MeliGA\s*=\s*({.+?})(?=;<\/script>)/s,
-    /"initialState"\s*:\s*({.+?})(?=};<\/script>)/s,
+    /window\.__PRELOADED_STATE__\s*=\s*(\{[\s\S]+?\})(?=;<\/script>|;\s*window\.)/,
+    /window\.MeliGA\s*=\s*(\{[\s\S]+?\})(?=;<\/script>)/,
+    /"initialState"\s*:\s*(\{[\s\S]+?\})(?=};<\/script>)/,
   ]
   for (const pat of patterns) {
     const m = html.match(pat)
