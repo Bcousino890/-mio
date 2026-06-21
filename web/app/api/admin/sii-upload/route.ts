@@ -8,7 +8,13 @@ import { pipeline } from 'node:stream/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import Busboy from 'busboy'
-import { ingestSiiCatastroComuna, type SiiIngestFiles } from '@/lib/sii-catastro-ingest'
+import {
+  groupSiiFiles,
+  ingestGroupedFilesStreaming,
+  createNdjsonEncoder,
+  sanitizeBaseName,
+  type UploadedFile,
+} from '@/lib/sii-upload-stream'
 
 const execFileAsync = promisify(execFile)
 
@@ -18,37 +24,6 @@ const MAX_FILES = 10
 const MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024 // 10GiB por archivo
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024 // 20GiB agregados por subida (limitado por disco real del VPS)
 
-// Nombres oficiales de los 5 archivos planos del SII (ver glosarios
-// "Estructura de archivo para Detalle Catastral / Rol de Cobro" en
-// sii.cl → Descarga de Información Vigente por Comuna). Siempre terminan en
-// "_<año>_<semestre>_<códigoComuna>", con o sin extensión.
-const FILE_KIND_TO_ROLE: Record<string, keyof SiiIngestFiles> = {
-  BRTMPCATASN: 'rolesNoAgricolas',
-  BRTMPCATASNL: 'construccionesNoAgricolas',
-  BRTMPCATASA: 'rolesAgricolas',
-  BRTMPCATASAL: 'suelosConstruccionesAgricolas',
-  BRTMPROLSEM: 'rolDeCobro',
-}
-// Orden con los prefijos más largos primero (BRTMPCATASNL antes de
-// BRTMPCATASN, BRTMPCATASAL antes de BRTMPCATASA) para que el regex no
-// matchee el prefijo corto por error.
-const KIND_PATTERN = Object.keys(FILE_KIND_TO_ROLE).sort((a, b) => b.length - a.length).join('|')
-const FILENAME_RE = new RegExp(`^(${KIND_PATTERN})_(\\d+)_(\\d+)_(\\d+)$`, 'i')
-
-// CSV nacional de catastral.cl — nombre: catastro_YYYY_N.csv o catastro_YYYYSN.csv
-const CATASTRAL_CL_RE = /^catastro[_\-]?\d{4}[_\-s]?\d\.csv$/i
-
-function sanitizeBaseName(name: string): string {
-  // path.basename ya evita "../", pero el nombre puede traer separadores de
-  // Windows si el zip se generó ahí.
-  return name.split(/[\\/]/).pop() ?? name
-}
-
-interface UploadedFile {
-  name: string
-  path: string
-}
-
 interface ParsedUpload {
   files: UploadedFile[]
   comunaId: string | null
@@ -56,8 +31,14 @@ interface ParsedUpload {
 
 // Parsea el multipart en streaming, escribiendo cada archivo directo a disco
 // (sin bufferizarlo en memoria) — necesario para soportar archivos de hasta
-// MAX_FILE_BYTES sin reventar la heap de Node.
-async function parseMultipart(request: NextRequest, workDir: string): Promise<ParsedUpload> {
+// MAX_FILE_BYTES sin reventar la heap de Node. `onProgress` se invoca con el
+// total de bytes recibidos hasta el momento, para poder reportar avance de
+// la fase de subida antes de que termine de llegar el body completo.
+async function parseMultipart(
+  request: NextRequest,
+  workDir: string,
+  onProgress?: (loadedBytes: number) => void
+): Promise<ParsedUpload> {
   const contentType = request.headers.get('content-type') ?? undefined
   const body = request.body
   if (!body) throw new Error('Solicitud sin cuerpo')
@@ -93,6 +74,7 @@ async function parseMultipart(request: NextRequest, workDir: string): Promise<Pa
 
       fileStream.on('data', (chunk: Buffer) => {
         totalBytes += chunk.length
+        onProgress?.(totalBytes)
         if (totalBytes > MAX_TOTAL_BYTES) {
           fail(new Error(`Tamaño total excede ${MAX_TOTAL_BYTES / 1024 / 1024 / 1024}GB`))
         }
@@ -158,96 +140,76 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Configuración de base de datos no disponible' }, { status: 500 })
   }
 
-  let workDir: string | null = null
-  try {
-    workDir = await mkdtemp(join(tmpdir(), 'sii-upload-'))
+  const dbUrl = process.env.DATABASE_URL
+  const encode = createNdjsonEncoder()
 
-    const { files: uploaded, comunaId: _comunaId } = await parseMultipart(request, workDir)
-
-    if (uploaded.length === 0) {
-      return NextResponse.json({ success: false, error: 'No se recibió ningún archivo' }, { status: 400 })
-    }
-
-    const zipExtractDir = join(workDir, 'zip-extract')
-    const entries: UploadedFile[] = []
-    for (const file of uploaded) {
-      if (file.name.toLowerCase().endsWith('.zip')) {
-        entries.push(...(await extractZip(file.path, zipExtractDir)))
-      } else {
-        entries.push(file)
-      }
-    }
-
-    const skipped: string[] = []
-    const results: any[] = []
-
-    // Agrupar archivos por código de comuna (extraído del filename)
-    const filePorComuna: Record<string, { [key in keyof SiiIngestFiles]?: string }> = {}
-
-    for (const entry of entries) {
-      // Detectar CSV nacional de catastral.cl (catastro_2025_2.csv, etc.)
-      if (CATASTRAL_CL_RE.test(entry.name)) {
-        const code = 'catastral_cl'
-        if (!filePorComuna[code]) filePorComuna[code] = {}
-        filePorComuna[code].catastralCl = entry.path
-        continue
+  // Streaming real: el body de la respuesta se va escribiendo a medida que
+  // avanza la subida y luego la ingesta, en vez de bufferizar todo y recién
+  // responder al final (lo que dejaba al cliente sin ninguna señal de avance
+  // durante los 30+ minutos que puede tardar una comuna grande o el CSV
+  // nacional de catastral.cl).
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      function send(obj: Record<string, unknown>) {
+        controller.enqueue(encode(obj))
       }
 
-      const base = entry.name.replace(/\.[^.]+$/, '')
-      const match = base.match(FILENAME_RE)
-      if (!match) {
-        skipped.push(entry.name)
-        continue
-      }
-      const kind = match[1].toUpperCase()
-      const fileComunaCode = match[4]
-
-      if (!filePorComuna[fileComunaCode]) {
-        filePorComuna[fileComunaCode] = {}
-      }
-
-      const role = FILE_KIND_TO_ROLE[kind]
-      filePorComuna[fileComunaCode][role] = entry.path
-    }
-
-    if (Object.keys(filePorComuna).length === 0) {
-      return NextResponse.json(
-        { success: false, error: 'Ningún archivo con formato reconocido', skipped },
-        { status: 400 }
-      )
-    }
-
-    // Procesar cada grupo (comunaCode o 'catastral_cl' para CSV nacional)
-    for (const [comunaCode, files] of Object.entries(filePorComuna)) {
+      let workDir: string | null = null
       try {
-        // catastral.cl tiene todas las comunas en un solo CSV — usamos '00000'
-        // como placeholder; el parser resuelve el cod_comuna por fila.
-        const resolvedCode = comunaCode === 'catastral_cl' ? '00000' : comunaCode
-        const result = await ingestSiiCatastroComuna({
-          comunaCode: resolvedCode,
-          files: files as SiiIngestFiles,
-          dbUrl: process.env.DATABASE_URL,
-        })
-        results.push({ comunaCode, ...result })
-      } catch (err) {
-        console.error(`Error procesando ${comunaCode}:`, err)
-        results.push({
-          comunaCode,
-          ok: false,
-          counts: {},
-          error: err instanceof Error ? err.message : 'Error al procesar',
-        })
-      }
-    }
+        workDir = await mkdtemp(join(tmpdir(), 'sii-upload-'))
 
-    return NextResponse.json({ success: true, data: { results, skipped } })
-  } catch (error) {
-    console.error('Error en sii-upload:', error)
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Error al procesar la subida' },
-      { status: 500 }
-    )
-  } finally {
-    if (workDir) await rm(workDir, { recursive: true, force: true })
-  }
+        const totalRequestBytes = Number(request.headers.get('content-length') ?? 0) || 0
+        let lastUploadReportTime = 0
+        const { files: uploaded } = await parseMultipart(request, workDir, (loadedBytes) => {
+          if (!totalRequestBytes) return
+          const now = Date.now()
+          if (now - lastUploadReportTime < 500) return
+          lastUploadReportTime = now
+          send({ phase: 'uploading', loadedBytes, totalBytes: totalRequestBytes })
+        })
+        if (totalRequestBytes) {
+          send({ phase: 'uploading', loadedBytes: totalRequestBytes, totalBytes: totalRequestBytes })
+        }
+
+        if (uploaded.length === 0) {
+          send({ done: true, success: false, error: 'No se recibió ningún archivo' })
+          return
+        }
+
+        const zipExtractDir = join(workDir, 'zip-extract')
+        const entries: UploadedFile[] = []
+        for (const file of uploaded) {
+          if (file.name.toLowerCase().endsWith('.zip')) {
+            entries.push(...(await extractZip(file.path, zipExtractDir)))
+          } else {
+            entries.push(file)
+          }
+        }
+
+        const { filePorComuna, skipped } = groupSiiFiles(entries)
+
+        if (Object.keys(filePorComuna).length === 0) {
+          send({ done: true, success: false, error: 'Ningún archivo con formato reconocido', data: { skipped } })
+          return
+        }
+
+        const { results } = await ingestGroupedFilesStreaming(filePorComuna, dbUrl, send)
+        send({ done: true, success: true, data: { results, skipped } })
+      } catch (error) {
+        console.error('Error en sii-upload:', error)
+        send({ done: true, success: false, error: error instanceof Error ? error.message : 'Error al procesar la subida' })
+      } finally {
+        if (workDir) await rm(workDir, { recursive: true, force: true })
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }
