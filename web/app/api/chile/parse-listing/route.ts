@@ -63,9 +63,16 @@ async function fetchListingPage(url: string): Promise<string> {
   const cleanUrl = url.split('#')[0].split('?')[0]
   const res = await fetch(cleanUrl, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; casafari-mio/1.0)',
-      'Accept': 'text/html,application/xhtml+xml',
-      'Accept-Language': 'es-CL,es;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'es-CL,es;q=0.9,en;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
     },
     signal: AbortSignal.timeout(10000),
   })
@@ -194,19 +201,22 @@ function extractFromHtml(html: string) {
     data.allows_pets      = (attrs['Admite mascotas'] ?? null)
     data.common_expenses  = (attrs['Gastos comunes'] ?? null)
 
-    // Amenities: check common amenity labels
-    const amenityLabels: Record<string, string> = {
-      'Parrilla': 'parrilla', 'Alarm': 'alarma', 'Conserjería': 'conserjeria',
-      'Calefacción': 'calefaccion', 'Aire acondicionado': 'aire_acondicionado',
-      'TV cable': 'tv_cable', 'Línea telefónica': 'linea_telefonica',
-      'Gas natural': 'gas_natural', 'Conexión para lavarropas': 'conexion_lavarropas',
-      'TV satelital': 'tv_satelital', 'Agua corriente': 'agua_corriente',
-      'Caldera': 'caldera', 'Piscina': 'piscina', 'Gimnasio': 'gimnasio',
-      'Ascensor': 'ascensor', 'Lavandería': 'lavanderia', 'Terraza': 'terraza',
-    }
+    // Amenities: capture anything that has Sí/No value (excluding core characteristics)
+    const coreFields = new Set([
+      'Superficie total', 'Superficie útil', 'Dormitorios', 'Baños', 'Estacionamientos',
+      'Cantidad de pisos', 'Bodegas', 'Antigüedad', 'Tipo de casa', 'Orientación',
+      'Amoblado', 'Admite mascotas', 'Gastos comunes'
+    ])
     const amenities: Record<string, string> = {}
-    for (const [label, key] of Object.entries(amenityLabels)) {
-      if (attrs[label]) amenities[key] = attrs[label]
+    for (const [id, text] of Object.entries(attrs)) {
+      // If it's not a core characteristic and has Sí/No value, it's an amenity
+      if (!coreFields.has(id) && (text.includes('Sí') || text.includes('No') || text.includes('si') || text.includes('no'))) {
+        // Convert label to snake_case key
+        const key = id.toLowerCase().replace(/[áéíóú]/g, c =>
+          ({á:'a', é:'e', í:'i', ó:'o', ú:'u'}[c] ?? c)
+        ).replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+        amenities[key] = text
+      }
     }
     if (Object.keys(amenities).length > 0) data.amenities = amenities
   } else {
