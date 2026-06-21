@@ -15,13 +15,15 @@ import {
   Moon,
   Globe,
   MapPinned,
+  Database,
+  Upload,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
 
 const COUNTRIES = [
-  { id: 'es', label: 'España', flag: '🇪🇸', homeHref: '/dashboard' },
-  { id: 'cl', label: 'Chile', flag: '🇨🇱', homeHref: '/chile' },
+  { id: 'es', label: 'España', flag: '🇪🇸', homeHref: '/dashboard', city: 'Madrid' },
+  { id: 'cl', label: 'Chile', flag: '🇨🇱', homeHref: '/chile', city: 'Santiago' },
 ] as const
 
 interface ModuleItem {
@@ -77,13 +79,40 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       href: '/chile',
       label: 'Chile',
       icon: Globe,
-      description: 'Mercado inmobiliario · Chile',
+      description: 'Resumen · comunas cubiertas',
     },
     {
       href: '/chile/catastro',
-      label: 'Catastro Chile',
+      label: 'Catastro',
       icon: MapPinned,
       description: 'Mapa catastral + Rol SII real',
+    },
+    {
+      href: '/chile/anuncios',
+      label: 'Anuncios',
+      icon: Building2,
+      description: 'Portalinmobiliario deduplicado',
+      badge: 'PRONTO',
+    },
+    {
+      href: '/chile/oportunidades',
+      label: 'Oportunidades',
+      icon: TrendingUp,
+      description: 'Precio bajo UF/m² por zona',
+      badge: 'PRONTO',
+    },
+    {
+      href: '/chile/captacion',
+      label: 'Captación',
+      icon: Users,
+      description: 'Particulares · exclusivas rotas',
+      badge: 'PRONTO',
+    },
+    {
+      href: '/settings',
+      label: 'Subir datos SII',
+      icon: Upload,
+      description: 'Catastro por comuna · archivos SII',
     },
   ],
 }
@@ -94,6 +123,7 @@ export default function Sidebar() {
 
   const country = pathname.startsWith('/chile') ? 'cl' : 'es'
   const modules = MODULES_BY_COUNTRY[country]
+  const countryMeta = COUNTRIES.find((c) => c.id === country)!
 
   const activeHref = modules
     .filter((m) => pathname === m.href || pathname.startsWith(m.href + '/'))
@@ -112,7 +142,7 @@ export default function Sidebar() {
           </div>
           <div>
             <div className="text-sm font-semibold text-slate-100 leading-none">casafari</div>
-            <div className="text-[10px] text-slate-500 leading-none mt-0.5">mio · Madrid</div>
+            <div className="text-[10px] text-slate-500 leading-none mt-0.5">mio · {countryMeta.city}</div>
           </div>
         </div>
       </div>
