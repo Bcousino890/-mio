@@ -240,7 +240,7 @@ export default function SiiUploadPanel() {
   }
 
   async function handleImportParquetFromUrl() {
-    if (!parquetUrl.trim()) return
+    if (!driveUrl.trim()) return
     setUploading(true)
     setUploadStats(null)
     setError(null)
@@ -251,12 +251,12 @@ export default function SiiUploadPanel() {
       const res = await fetch('/api/admin/catastral-cl-parquet/from-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parquetUrl: parquetUrl.trim() }),
+        body: JSON.stringify({ parquetUrl: driveUrl.trim() }),
       })
       const { results, skipped } = await consumeNdjsonResponse(res, startTime)
 
       setResponse({ success: true, data: { results, skipped } })
-      if (results.every((r) => r.ok)) setParquetUrl('')
+      if (results.every((r) => r.ok)) setDriveUrl('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al importar Parquet de catastral.cl')
     } finally {
@@ -529,8 +529,8 @@ export default function SiiUploadPanel() {
         <div className="flex gap-2">
           <input
             type="text"
-            value={parquetUrl}
-            onChange={(e) => setParquetUrl(e.target.value)}
+            value={driveUrl}
+            onChange={(e) => setDriveUrl(e.target.value)}
             disabled={uploading}
             placeholder="https://drive.google.com/file/d/.../view (Parquet o .zip de varios)"
             className="flex-1 px-3 py-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
@@ -538,7 +538,7 @@ export default function SiiUploadPanel() {
           <button
             type="button"
             onClick={handleImportParquetFromUrl}
-            disabled={uploading || !parquetUrl.trim()}
+            disabled={uploading || !driveUrl.trim()}
             className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors shrink-0"
           >
             {uploading ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}

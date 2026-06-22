@@ -73,21 +73,31 @@ export async function POST(request: NextRequest) {
         })
 
         await new Promise<void>((resolve, reject) => {
+          const pendingWrites: Promise<void>[] = []
+
           busboy.on('file', (_fieldname, fileStream, _info) => {
             fileReceived = true
-            fileStream.pipe(createWriteStream(uploadPath))
-            fileStream.on('end', resolve)
-            fileStream.on('error', reject)
+            const writeStream = createWriteStream(uploadPath)
+            const writePromise = pipeline(fileStream, writeStream).catch((err) =>
+              reject(err instanceof Error ? err : new Error(String(err)))
+            )
+            pendingWrites.push(writePromise)
           })
+
+          busboy.on('finish', () => {
+            if (!fileReceived) {
+              return reject(new Error('No se recibió ningún archivo'))
+            }
+            Promise.all(pendingWrites)
+              .then(() => resolve())
+              .catch(reject)
+          })
+
           busboy.on('error', reject)
           Readable.fromWeb(body as import('node:stream/web').ReadableStream<Uint8Array>).pipe(
             busboy
           )
         })
-
-        if (!fileReceived) {
-          throw new Error('No se recibió ningún archivo')
-        }
 
         send({ phase: 'downloaded' })
 
