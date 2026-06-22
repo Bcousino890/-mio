@@ -193,18 +193,33 @@ export default function SiiUploadPanel() {
     setUploadStats(null)
     setError(null)
     setResponse(null)
-    const startTime = Date.now()
 
     try {
       const formData = new FormData()
       for (const f of files) formData.append('files', f)
-      formData.append('comunaId', selectedComunaId)
 
-      const res = await fetch('/api/admin/sii-upload', { method: 'POST', body: formData })
-      const { results, skipped } = await consumeNdjsonResponse(res, startTime)
+      // Simple upload without immediate processing
+      const res = await fetch('/api/admin/upload-raw', { method: 'POST', body: formData })
+      const data = await res.json()
 
-      setResponse({ success: true, data: { results, skipped } })
-      if (results.every((r) => r.ok)) setFiles([])
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      setResponse({
+        success: true,
+        data: {
+          results: [
+            {
+              comunaCode: 'upload',
+              ok: true,
+              counts: { uploaded: data.files.length },
+            },
+          ],
+          skipped: [],
+        },
+      })
+      setFiles([])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al subir los archivos')
     } finally {
@@ -306,11 +321,11 @@ export default function SiiUploadPanel() {
     <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
       <div className="flex items-center gap-2 mb-1">
         <UploadCloud size={14} className="text-emerald-400" />
-        <p className="text-sm font-semibold text-slate-200">Subir archivos SII (Detalle Catastral / Rol de Cobro)</p>
+        <p className="text-sm font-semibold text-slate-200">Subir archivos (cualquier tipo)</p>
       </div>
       <p className="text-[11px] text-slate-600 mb-3">
-        Descarga desde sii.cl → &quot;Descarga de Información Vigente por Comuna&quot; o &quot;Información Histórica por Año&quot;.
-        Acepta el .zip tal cual lo entrega el SII, o los archivos sueltos. La comuna se identifica automáticamente del nombre del archivo.
+        Sube cualquier archivo: SII, CSV, Parquet, ZIP, etc. El sistema los guardará en el servidor y los procesará automáticamente.
+        Acepta archivos de hasta 50GB.
       </p>
 
       <div className="mb-4">
@@ -383,7 +398,7 @@ export default function SiiUploadPanel() {
         className="flex items-center justify-center gap-1.5 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
       >
         {uploading ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
-        {uploading ? 'Subiendo e ingiriendo (puede tardar varios minutos en comunas grandes)…' : 'Subir e ingerir'}
+        {uploading ? 'Subiendo archivos…' : 'Subir archivos'}
       </button>
 
       <div className="flex items-center gap-2 my-3">
