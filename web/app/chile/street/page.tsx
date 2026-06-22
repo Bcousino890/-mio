@@ -38,7 +38,7 @@ const DESTINO: Record<string, string> = {
   S: 'Salud', T: 'Transporte', V: 'Otros', W: 'Sitio Eriazo', Z: 'Estacionamiento',
 }
 
-const DESTINO_ICON: Record<string, JSX.Element> = {
+const DESTINO_ICON: Record<string, React.JSX.Element> = {
   H: <Home size={12} />,
   C: <Building2 size={12} />,
   O: <Building2 size={12} />,
