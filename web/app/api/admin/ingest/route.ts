@@ -138,7 +138,10 @@ try:
     # confiable como sii_comuna_code (ver 0022-0027), así que la comuna se
     # resuelve por nombre.
     stem = os.path.splitext(file_name)[0]
-    comuna_name = re.sub(r'_\\d+$', '', stem).replace('_', ' ').strip()
+    # quita el sufijo " (1)" que agregan navegadores/SO al re-descargar un
+    # archivo con el mismo nombre, antes de quitar el código numérico final
+    stem = re.sub(r'\\s*\\(\\d+\\)\\s*$', '', stem)
+    comuna_name = re.sub(r'[_\\s]*\\d+\\s*$', '', stem).replace('_', ' ').strip()
 
     engine = sa.create_engine(db_url)
     with engine.connect() as conn:

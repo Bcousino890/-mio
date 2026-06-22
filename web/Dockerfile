@@ -35,10 +35,13 @@ ENV PORT=3000
 # precompilados que funcionan en Debian sin compilar nada.
 # --break-system-packages: Debian 12 marca el Python del sistema como
 # "externally managed" (PEP 668) — ok en un contenedor de un solo propósito.
+# GeoAlchemy2 también vía pip: gdf.to_postgis() lo requiere para mapear la
+# columna geometry a un tipo PostGIS, y Debian bookworm no empaqueta
+# "python3-geoalchemy2" (solo está en sid/trixie, igual que pyarrow).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip python3 python3-geopandas python3-pandas python3-pip \
     python3-sqlalchemy libpq-dev \
-  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary \
+  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary GeoAlchemy2 \
   && rm -rf /var/lib/apt/lists/*
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
