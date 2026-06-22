@@ -76,6 +76,9 @@ from shapely.geometry import MultiPolygon
 
 path = ${JSON.stringify(filePath)}
 db_url = ${JSON.stringify(dbUrl)}
+# SQLAlchemy 1.4+ eliminó el alias "postgres" — exige "postgresql"
+if db_url.startswith('postgres://'):
+    db_url = 'postgresql://' + db_url[len('postgres://'):]
 
 try:
     ext = os.path.splitext(path)[1].lower()
@@ -200,7 +203,13 @@ export async function POST(request: NextRequest) {
           send({ progress: true, status: result.ok ? 'ok' : 'error', file: fileName, rows: result.rows, error: result.error, index: i + 1, total: toProcess.length })
         }
 
-        send({ done: true, success: true, data: { results, totalRows, filesProcessed: toProcess.length } })
+        const anyOk = results.some((r) => r.ok)
+        send({
+          done: true,
+          success: anyOk,
+          error: anyOk ? undefined : (results[0]?.error ?? 'Ningún archivo se procesó correctamente'),
+          data: { results, totalRows, filesProcessed: toProcess.length },
+        })
       } catch (err) {
         send({ done: true, success: false, error: err instanceof Error ? err.message : 'Error desconocido' })
       } finally {
