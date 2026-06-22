@@ -196,8 +196,9 @@ export async function POST(request: NextRequest) {
         const { results } = await ingestGroupedFilesStreaming(filePorComuna, dbUrl, send)
         send({ done: true, success: true, data: { results, skipped } })
       } catch (error) {
-        console.error('Error en sii-upload:', error)
-        send({ done: true, success: false, error: error instanceof Error ? error.message : 'Error al procesar la subida' })
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.error('Error en sii-upload:', errorMsg, error)
+        send({ done: true, success: false, error: errorMsg })
       } finally {
         if (workDir) await rm(workDir, { recursive: true, force: true })
         controller.close()

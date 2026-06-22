@@ -151,11 +151,12 @@ export async function POST(request: NextRequest) {
           data: { results, skipped: [] },
         })
       } catch (error) {
-        console.error('Error en catastral-cl-parquet/from-url:', error)
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.error('Error en catastral-cl-parquet/from-url:', errorMsg, error)
         send({
           done: true,
           success: false,
-          error: error instanceof Error ? error.message : 'Error al procesar',
+          error: errorMsg,
         })
       } finally {
         if (workDir) await rm(workDir, { recursive: true, force: true })
