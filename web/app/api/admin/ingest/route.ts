@@ -99,6 +99,8 @@ from shapely.geometry import MultiPolygon
 
 path = ${JSON.stringify(filePath)}
 db_url = ${JSON.stringify(dbUrl)}
+if db_url.startswith('postgres://'):
+    db_url = 'postgresql://' + db_url[len('postgres://'):]
 
 try:
     ext = os.path.splitext(path)[1].lower()
@@ -224,7 +226,13 @@ async function processFiles(
     }
   }
 
-  send({ done: true, success: true, data: { summary } })
+  const anyOk = summary.some((r) => (r as { ok?: boolean }).ok !== false)
+  send({
+    done: true,
+    success: anyOk,
+    error: anyOk ? undefined : 'Ningún archivo se procesó correctamente',
+    data: { summary },
+  })
 }
 
 // ── main handler ─────────────────────────────────────────────────────────────
