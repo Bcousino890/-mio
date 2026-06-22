@@ -96,6 +96,16 @@ export async function POST(request: NextRequest) {
         workDir = await mkdtemp(join(tmpdir(), 'catastral-parquet-'))
         const downloadPath = join(workDir, 'download.bin')
 
+        // Un link de carpeta ("/drive/folders/<id>") no tiene un ID de
+        // archivo extraíble — sin este chequeo, downloadDirect() bajaría la
+        // página HTML del listado de la carpeta y se intentaría parsear esa
+        // página como si fuera un Parquet, fallando con un error confuso.
+        if (/drive\.google\.com\/drive\/folders\//.test(parquetUrl)) {
+          throw new Error(
+            'Ese link es de una carpeta de Google Drive, no de un archivo. Selecciona los archivos dentro de la carpeta, comprímelos en un .zip y comparte el link de ese .zip — o usa el panel "Subir archivos" para subirlos directo sin pasar por Drive.'
+          )
+        }
+
         send({ phase: 'downloading' })
         const driveFileId = extractDriveFileId(parquetUrl)
         if (driveFileId) {
@@ -145,9 +155,11 @@ export async function POST(request: NextRequest) {
           send({ progress: true, comunaCode: label, status: result.ok ? 'ok' : 'error', counts: result.counts, error: result.error })
         }
 
+        const anyOk = results.some((r) => r.ok)
         send({
           done: true,
-          success: results.some((r) => r.ok),
+          success: anyOk,
+          error: anyOk ? undefined : (results[0]?.error as string | undefined) ?? 'Ningún archivo se procesó correctamente',
           data: { results, skipped: [] },
         })
       } catch (error) {

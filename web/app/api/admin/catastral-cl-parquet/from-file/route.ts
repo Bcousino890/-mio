@@ -135,9 +135,11 @@ export async function POST(request: NextRequest) {
           })
         }
 
+        const anyOk = results.some((r) => r.ok)
         send({
           done: true,
-          success: results.some((r) => r.ok),
+          success: anyOk,
+          error: anyOk ? undefined : (results[0]?.error as string | undefined) ?? 'Ningún archivo se procesó correctamente',
           data: { results, skipped: [] },
         })
       } catch (error) {
