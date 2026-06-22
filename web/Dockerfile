@@ -37,7 +37,8 @@ ENV PORT=3000
 # "externally managed" (PEP 668) — ok en un contenedor de un solo propósito.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip python3 python3-geopandas python3-pandas python3-pip \
-  && pip3 install --no-cache-dir --break-system-packages pyarrow \
+    python3-sqlalchemy libpq-dev \
+  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary \
   && rm -rf /var/lib/apt/lists/*
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
