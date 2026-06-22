@@ -30,7 +30,7 @@ export default function ParcelUploadPanel() {
 
   function addFiles(selected: FileList | null) {
     if (!selected) return
-    const valid = Array.from(selected).filter(f => f.name.endsWith('.parquet') || f.name.endsWith('.gpkg'))
+    const valid = Array.from(selected).filter(f => /\.(parquet|gpkg|zip)$/i.test(f.name))
     setFiles(prev => [...prev, ...valid])
     setResults([])
     setError(null)
@@ -121,7 +121,7 @@ export default function ParcelUploadPanel() {
         <code className="text-slate-400">cadastre_parcels_cl</code> y quedan disponibles en el visor catastral.
       </p>
 
-      <input ref={inputRef} type="file" multiple accept=".parquet,.gpkg" className="hidden"
+      <input ref={inputRef} type="file" multiple accept=".parquet,.gpkg,.zip" className="hidden"
         onChange={e => addFiles(e.target.files)} />
 
       <div
@@ -133,7 +133,7 @@ export default function ParcelUploadPanel() {
             : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-violet-500'
         }`}
       >
-        Arrastra archivos .parquet o .gpkg aquí, o click para elegir
+        Arrastra archivos .parquet, .gpkg o .zip (hasta 11 GB) aquí, o click para elegir
       </div>
 
       {files.length > 0 && (
