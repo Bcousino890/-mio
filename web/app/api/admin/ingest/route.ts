@@ -164,7 +164,68 @@ except Exception as e:
   })
 }
 
+// ── process files already on disk ────────────────────────────────────────────
+
+async function processFiles(
+  inputPaths: { name: string; path: string }[],
+  dbUrl: string,
+  send: (obj: Record<string, unknown>) => void,
+  workDir: string,
+) {
+  // expand ZIPs
+  const flat: UploadedFile[] = []
+  for (const f of inputPaths) {
+    if (f.name.toLowerCase().endsWith('.zip')) {
+      send({ phase: 'extracting', file: f.name })
+      const extractDir = join(workDir, `zip-${flat.length}`)
+      flat.push(...await extractZip(f.path, extractDir))
+    } else {
+      flat.push(f)
+    }
+  }
+
+  if (flat.length === 0) {
+    send({ done: true, success: false, error: 'El ZIP no contenía archivos reconocidos' })
+    return
+  }
+
+  const parcelFiles = flat.filter(f => /\.(parquet|gpkg)$/i.test(f.name))
+  const siiFiles    = flat.filter(f => !/\.(parquet|gpkg)$/i.test(f.name))
+  const summary: Record<string, unknown>[] = []
+
+  if (parcelFiles.length > 0) {
+    send({ phase: 'parcels', status: 'start', total: parcelFiles.length })
+    let parcelRows = 0
+    for (let i = 0; i < parcelFiles.length; i++) {
+      const { name, path } = parcelFiles[i]
+      send({ phase: 'parcels', status: 'processing', file: name, index: i + 1, total: parcelFiles.length })
+      const result = await loadParcelWithPython(path, dbUrl)
+      parcelRows += result.rows
+      summary.push({ type: 'parcel', file: name, ...result })
+      send({ phase: 'parcels', status: result.ok ? 'ok' : 'error', file: name, rows: result.rows, error: result.error, index: i + 1, total: parcelFiles.length })
+    }
+    send({ phase: 'parcels', status: 'done', totalRows: parcelRows, filesProcessed: parcelFiles.length })
+  }
+
+  if (siiFiles.length > 0) {
+    const { filePorComuna, skipped } = groupSiiFiles(siiFiles)
+    if (Object.keys(filePorComuna).length > 0) {
+      send({ phase: 'sii', status: 'start', total: Object.keys(filePorComuna).length })
+      const { results } = await ingestGroupedFilesStreaming(filePorComuna, dbUrl, send)
+      for (const r of results) summary.push({ type: 'sii', ...r })
+      send({ phase: 'sii', status: 'done', skipped })
+    } else {
+      send({ phase: 'sii', status: 'skipped', skipped, message: 'Sin archivos SII reconocidos' })
+    }
+  }
+
+  send({ done: true, success: true, data: { summary } })
+}
+
 // ── main handler ─────────────────────────────────────────────────────────────
+// Acepta dos modos:
+//   A) JSON body { paths: [{name, path},...] }  → procesa archivos ya en disco
+//   B) multipart/form-data                       → sube + procesa en un paso
 
 export async function POST(request: NextRequest) {
   if (!process.env.DATABASE_URL) {
@@ -179,80 +240,39 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       function send(obj: Record<string, unknown>) { controller.enqueue(encode(obj)) }
-
       let workDir: string | null = null
       try {
         workDir = await mkdtemp(join(tmpdir(), 'ingest-'))
+        const ct = request.headers.get('content-type') ?? ''
 
-        // ── 1. recibir archivos ──────────────────────────────────────────────
-        const totalReqBytes = Number(request.headers.get('content-length') ?? 0) || 0
-        let lastReport = 0
-        const uploaded = await parseMultipart(request, workDir, (loaded) => {
-          if (!totalReqBytes) return
-          const now = Date.now()
-          if (now - lastReport < 500) return
-          lastReport = now
-          send({ phase: 'uploading', loadedBytes: loaded, totalBytes: totalReqBytes })
-        })
-        if (totalReqBytes) send({ phase: 'uploading', loadedBytes: totalReqBytes, totalBytes: totalReqBytes })
+        let inputPaths: { name: string; path: string }[]
 
-        if (uploaded.length === 0) {
-          send({ done: true, success: false, error: 'No se recibió ningún archivo' })
-          return
-        }
-
-        // ── 2. expandir ZIPs ─────────────────────────────────────────────────
-        const flat: UploadedFile[] = []
-        for (const f of uploaded) {
-          if (f.name.toLowerCase().endsWith('.zip')) {
-            send({ phase: 'extracting', file: f.name })
-            const extractDir = join(workDir, `zip-${flat.length}`)
-            flat.push(...await extractZip(f.path, extractDir))
-          } else {
-            flat.push(f)
+        if (ct.includes('application/json')) {
+          // Modo A: archivos ya en disco (enviados por el panel después de upload-raw)
+          const body = await request.json() as { paths?: { name: string; path: string }[] }
+          inputPaths = body.paths ?? []
+          if (inputPaths.length === 0) {
+            send({ done: true, success: false, error: 'No se indicaron archivos' }); return
           }
-        }
-
-        if (flat.length === 0) {
-          send({ done: true, success: false, error: 'El ZIP no contenía archivos reconocidos' })
-          return
-        }
-
-        // ── 3. separar por tipo ───────────────────────────────────────────────
-        const parcelFiles  = flat.filter(f => /\.(parquet|gpkg)$/i.test(f.name))
-        const siiFiles     = flat.filter(f => !/\.(parquet|gpkg)$/i.test(f.name))
-
-        const summary: Record<string, unknown>[] = []
-
-        // ── 4a. GeoPackage / Parquet → cadastre_parcels_cl ───────────────────
-        if (parcelFiles.length > 0) {
-          send({ phase: 'parcels', status: 'start', total: parcelFiles.length })
-          let parcelRows = 0
-          for (let i = 0; i < parcelFiles.length; i++) {
-            const { name, path } = parcelFiles[i]
-            send({ phase: 'parcels', status: 'processing', file: name, index: i + 1, total: parcelFiles.length })
-            const result = await loadParcelWithPython(path, dbUrl)
-            parcelRows += result.rows
-            summary.push({ type: 'parcel', file: name, ...result })
-            send({ phase: 'parcels', status: result.ok ? 'ok' : 'error', file: name, rows: result.rows, error: result.error, index: i + 1, total: parcelFiles.length })
+        } else {
+          // Modo B: multipart — sube y procesa en un paso (archivos pequeños)
+          const totalReqBytes = Number(request.headers.get('content-length') ?? 0) || 0
+          let lastReport = 0
+          const uploaded = await parseMultipart(request, workDir, (loaded) => {
+            if (!totalReqBytes) return
+            const now = Date.now()
+            if (now - lastReport < 500) return
+            lastReport = now
+            send({ phase: 'uploading', loadedBytes: loaded, totalBytes: totalReqBytes })
+          })
+          if (totalReqBytes) send({ phase: 'uploading', loadedBytes: totalReqBytes, totalBytes: totalReqBytes })
+          if (uploaded.length === 0) {
+            send({ done: true, success: false, error: 'No se recibió ningún archivo' }); return
           }
-          send({ phase: 'parcels', status: 'done', totalRows: parcelRows, filesProcessed: parcelFiles.length })
+          inputPaths = uploaded
         }
 
-        // ── 4b. SII CSV → sii_roles_cl ───────────────────────────────────────
-        if (siiFiles.length > 0) {
-          const { filePorComuna, skipped } = groupSiiFiles(siiFiles)
-          if (Object.keys(filePorComuna).length > 0) {
-            send({ phase: 'sii', status: 'start', total: Object.keys(filePorComuna).length })
-            const { results } = await ingestGroupedFilesStreaming(filePorComuna, dbUrl, send)
-            for (const r of results) summary.push({ type: 'sii', ...r })
-            send({ phase: 'sii', status: 'done', skipped })
-          } else {
-            send({ phase: 'sii', status: 'skipped', skipped, message: 'No se encontraron archivos SII reconocidos' })
-          }
-        }
-
-        send({ done: true, success: true, data: { summary } })
+        await processFiles(inputPaths, dbUrl, send, workDir)
       } catch (err) {
         send({ done: true, success: false, error: err instanceof Error ? err.message : String(err) })
       } finally {
