@@ -189,8 +189,9 @@ async function processFiles(
     return
   }
 
-  const parcelFiles = flat.filter(f => /\.(parquet|gpkg)$/i.test(f.name))
-  const siiFiles    = flat.filter(f => !/\.(parquet|gpkg)$/i.test(f.name))
+  // archivos ._xxx son metadata macOS (AppleDouble), ignorar
+  const parcelFiles = flat.filter(f => /\.(parquet|gpkg)$/i.test(f.name) && !f.name.startsWith('._'))
+  const siiFiles    = flat.filter(f => !/\.(parquet|gpkg)$/i.test(f.name) && !f.name.startsWith('._'))
   const summary: Record<string, unknown>[] = []
 
   if (parcelFiles.length > 0) {

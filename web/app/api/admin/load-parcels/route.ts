@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
             const extractDir = join(workDir, 'zip-' + toProcess.length)
             const extracted = await extractZip(filePath, extractDir)
             // Solo .parquet y .gpkg
-            toProcess.push(...extracted.filter(p => /\.(parquet|gpkg)$/i.test(p)))
+            toProcess.push(...extracted.filter(p => /\.(parquet|gpkg)$/i.test(p) && !p.split('/').pop()!.startsWith('._')))
           } else if (/\.(parquet|gpkg)$/i.test(filePath)) {
             toProcess.push(filePath)
           }
