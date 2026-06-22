@@ -1,14 +1,12 @@
 import PageShell from '@/components/PageShell'
 import { Settings } from 'lucide-react'
-import SiiUploadPanel from '@/components/chile/SiiUploadPanel'
-import ParcelUploadPanel from '@/components/chile/ParcelUploadPanel'
+import IngestPanel from '@/components/admin/IngestPanel'
 
 export default function SettingsPage() {
   return (
-    <PageShell title="Configuración" subtitle="Proxies · API keys · zonas · cron">
+    <PageShell title="Configuración" subtitle="Importar datos · zonas · cron">
       <div className="space-y-4">
-        <SiiUploadPanel />
-        <ParcelUploadPanel />
+        <IngestPanel />
 
         <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">
           <Settings size={32} className="mx-auto text-slate-700 mb-3" />
