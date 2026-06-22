@@ -12,16 +12,28 @@ const execFileAsync = promisify(execFile)
 
 const BATCH_SIZE = 2000
 
-async function getComunaIdFromName(client: Client, nombreComuna?: string): Promise<string | null> {
+async function getComunaIdFromName(
+  client: Client,
+  nombreComuna: string | undefined,
+  cache: Map<string, string | null>
+): Promise<string | null> {
   if (!nombreComuna) return null
+  const key = nombreComuna.toLowerCase()
+  if (cache.has(key)) return cache.get(key)!
   const res = await client.query(
     `SELECT id FROM chile_comunas WHERE LOWER(nombre) = LOWER($1) LIMIT 1`,
     [nombreComuna]
   )
-  return res.rows.length > 0 ? res.rows[0].id : null
+  const id = res.rows.length > 0 ? res.rows[0].id : null
+  cache.set(key, id)
+  return id
 }
 
-async function insertBatch(client: Client, batch: Record<string, unknown>[]): Promise<number> {
+async function insertBatch(
+  client: Client,
+  batch: Record<string, unknown>[],
+  comunaIdCache: Map<string, string | null>
+): Promise<number> {
   if (batch.length === 0) return 0
 
   const columns = [
@@ -55,7 +67,7 @@ async function insertBatch(client: Client, batch: Record<string, unknown>[]): Pr
   const values: unknown[] = []
   for (const row of batch) {
     const nombreComuna = row.nombreComuna as string | undefined
-    const comunaId = await getComunaIdFromName(client, nombreComuna)
+    const comunaId = await getComunaIdFromName(client, nombreComuna, comunaIdCache)
 
     values.push(
       comunaId,
@@ -149,6 +161,9 @@ for _, row in gdf.iterrows():
     let rowsProcessed = 0
     let batch: Record<string, unknown>[] = []
     let batchesSinceProgress = 0
+    // Todas las filas de un archivo suelen ser de la misma comuna — cachear
+    // evita re-consultar chile_comunas por cada fila (era una query por fila).
+    const comunaIdCache = new Map<string, string | null>()
 
     for (const line of stdout.trim().split('\n')) {
       if (!line) continue
@@ -157,7 +172,7 @@ for _, row in gdf.iterrows():
       rowsProcessed++
 
       if (batch.length >= BATCH_SIZE) {
-        await insertBatch(client, batch)
+        await insertBatch(client, batch, comunaIdCache)
         batch = []
         batchesSinceProgress++
         if (batchesSinceProgress >= 10) {
@@ -168,7 +183,7 @@ for _, row in gdf.iterrows():
     }
 
     if (batch.length > 0) {
-      await insertBatch(client, batch)
+      await insertBatch(client, batch, comunaIdCache)
     }
 
     send({ progress: true, rowsProcessed, status: 'ok' })
