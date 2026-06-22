@@ -27,8 +27,17 @@ ENV PORT=3000
 # CLI en vez de cargarlos completos en memoria con una librería JS (soporta
 # archivos grandes). python3-geopandas/pandas: ingesta de GeoParquet con
 # geometría predial (catastral-parquet-ingest.ts).
+#
+# pyarrow vía pip, no apt: es el motor de lectura Parquet que usa geopandas
+# (sin él, gpd.read_parquet() falla con "Missing optional dependency
+# 'pyarrow.parquet'"), pero el paquete "python3-pyarrow" de Debian solo
+# existe en sid/trixie, no en bookworm. PyPI sí publica wheels manylinux
+# precompilados que funcionan en Debian sin compilar nada.
+# --break-system-packages: Debian 12 marca el Python del sistema como
+# "externally managed" (PEP 668) — ok en un contenedor de un solo propósito.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    unzip python3 python3-geopandas python3-pandas \
+    unzip python3 python3-geopandas python3-pandas python3-pip \
+  && pip3 install --no-cache-dir --break-system-packages pyarrow \
   && rm -rf /var/lib/apt/lists/*
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
