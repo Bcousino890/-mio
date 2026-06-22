@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { extname } from 'node:path'
+import { extname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
 export const runtime = 'nodejs'
 
-const UPLOAD_DIR = '/data/uploads'
+// Use /tmp for uploads (writable on all systems)
+const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/casafari-uploads'
 const MAX_FILE_BYTES = 50 * 1024 * 1024 * 1024 // 50GB
 
 export async function POST(request: NextRequest) {

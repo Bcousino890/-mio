@@ -7,9 +7,9 @@ import { ingestCatastralParquet } from '@/lib/catastral-parquet-ingest'
 
 export const runtime = 'nodejs'
 
-const UPLOAD_DIR = '/data/uploads'
-const PROCESSED_DIR = '/data/uploads/processed'
-const FAILED_DIR = '/data/uploads/failed'
+const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/casafari-uploads'
+const PROCESSED_DIR = join(UPLOAD_DIR, 'processed')
+const FAILED_DIR = join(UPLOAD_DIR, 'failed')
 
 interface ProcessedFile {
   filename: string
