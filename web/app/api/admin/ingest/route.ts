@@ -87,10 +87,11 @@ async function extractZip(zipPath: string, destDir: string): Promise<UploadedFil
 function loadParcelWithPython(
   filePath: string,
   dbUrl: string,
+  fileName: string,
 ): Promise<{ ok: boolean; rows: number; error?: string }> {
   return new Promise((resolve) => {
     const script = `
-import sys, os, warnings
+import sys, os, re, warnings
 warnings.filterwarnings('ignore')
 import geopandas as gpd
 import sqlalchemy as sa
@@ -98,6 +99,7 @@ from sqlalchemy import text
 from shapely.geometry import MultiPolygon
 
 path = ${JSON.stringify(filePath)}
+file_name = ${JSON.stringify(fileName)}
 db_url = ${JSON.stringify(dbUrl)}
 if db_url.startswith('postgres://'):
     db_url = 'postgresql://' + db_url[len('postgres://'):]
@@ -118,34 +120,40 @@ try:
     rename = {}
     for col in gdf.columns:
         cl = col.lower()
-        if cl in ('cod_comuna','comuna','cut','sii_comuna_code','codigo_comuna'): rename[col]='sii_comuna_code'
-        elif cl in ('rol','rol_avaluo','num_rol','folio'): rename[col]='rol'
+        if cl in ('rol','rol_avaluo','num_rol','folio'): rename[col]='rol'
     if rename: gdf = gdf.rename(columns=rename)
+    if 'rol' not in gdf.columns:
+        gdf['rol'] = None
 
-    keep = [c for c in ('sii_comuna_code','rol') if c in gdf.columns]
-    gdf = gdf[keep + [gdf.geometry.name]].copy()
+    gdf = gdf[['rol', gdf.geometry.name]].copy()
     gdf = gdf.rename_geometry('geom')
-    gdf['source'] = 'catastral_cl'
     gdf['geom'] = gdf['geom'].apply(
         lambda g: MultiPolygon([g]) if g is not None and g.geom_type == 'Polygon' else g
     )
     gdf = gdf[gdf['geom'].notna()]
 
+    # cadastre_parcels_cl (ver 0020_cadastre_chile.sql) usa comuna_id (FK a
+    # chile_comunas), no una columna sii_comuna_code directa. El código
+    # numérico del nombre de archivo (ej. "Lo_Barnechea_15161") no es
+    # confiable como sii_comuna_code (ver 0022-0027), así que la comuna se
+    # resuelve por nombre.
+    stem = os.path.splitext(file_name)[0]
+    comuna_name = re.sub(r'_\\d+$', '', stem).replace('_', ' ').strip()
+
     engine = sa.create_engine(db_url)
     with engine.connect() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS cadastre_parcels_cl (
-              id              bigserial PRIMARY KEY,
-              sii_comuna_code text,
-              rol             text,
-              geom            geometry(MultiPolygon,4326),
-              source          text DEFAULT 'catastral_cl',
-              created_at      timestamptz DEFAULT now()
-            )
-        """))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_cparcels_geom ON cadastre_parcels_cl USING gist(geom)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_cparcels_rol  ON cadastre_parcels_cl(sii_comuna_code,rol)"))
-        conn.commit()
+        row = conn.execute(
+            text("SELECT id FROM chile_comunas WHERE name ILIKE :n"),
+            {"n": comuna_name},
+        ).fetchone()
+        if row is None:
+            print(f"ERR:No se encontró la comuna '{comuna_name}' (de archivo {file_name}) en chile_comunas")
+            sys.exit(0)
+        comuna_id = str(row[0])
+
+    gdf['comuna_id'] = comuna_id
+    gdf['source'] = 'catastral_cl'
+    gdf = gdf[['comuna_id', 'rol', 'geom', 'source']]
 
     gdf.to_postgis('cadastre_parcels_cl', engine, if_exists='append', index=False)
     print(f"OK:{len(gdf)}")
@@ -206,7 +214,7 @@ async function processFiles(
     for (let i = 0; i < parcelFiles.length; i++) {
       const { name, path } = parcelFiles[i]
       send({ phase: 'parcels', status: 'processing', file: name, index: i + 1, total: parcelFiles.length })
-      const result = await loadParcelWithPython(path, dbUrl)
+      const result = await loadParcelWithPython(path, dbUrl, name)
       parcelRows += result.rows
       summary.push({ type: 'parcel', file: name, ...result })
       send({ phase: 'parcels', status: result.ok ? 'ok' : 'error', file: name, rows: result.rows, error: result.error, index: i + 1, total: parcelFiles.length })
