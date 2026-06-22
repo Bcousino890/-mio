@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readdir, stat, rename, rm } from 'node:fs/promises'
+import { readdir, stat, rename, rm, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createNdjsonEncoder, groupSiiFiles } from '@/lib/sii-upload-stream'
 import { ingestGroupedFilesStreaming } from '@/lib/sii-upload-stream'
@@ -92,6 +92,8 @@ export async function POST(request: NextRequest) {
   try {
     const dbUrl = process.env.DATABASE_URL
     const uploadDir = UPLOAD_DIR
+    await mkdir(PROCESSED_DIR, { recursive: true })
+    await mkdir(FAILED_DIR, { recursive: true })
 
     // List all files in upload directory
     let files: string[] = []
