@@ -50,7 +50,9 @@ const PHASE_LABEL: Record<UploadPhase, string> = {
 
 export default function SiiUploadPanel() {
   const inputRef = useRef<HTMLInputElement>(null)
+  const parquetInputRef = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
+  const [parquetFiles, setParquetFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const [uploadStats, setUploadStats] = useState<UploadStats | null>(null)
   const [response, setResponse] = useState<UploadResponse | null>(null)
@@ -59,8 +61,8 @@ export default function SiiUploadPanel() {
   const [selectedComunaId, setSelectedComunaId] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [dragActive, setDragActive] = useState(false)
+  const [dragParquetActive, setDragParquetActive] = useState(false)
   const [driveUrl, setDriveUrl] = useState('')
-  const [parquetUrl, setParquetUrl] = useState('')
 
   useEffect(() => {
     fetch('/api/admin/chile-comunas')
@@ -237,7 +239,7 @@ export default function SiiUploadPanel() {
     }
   }
 
-  async function handleImportParquet() {
+  async function handleImportParquetFromUrl() {
     if (!parquetUrl.trim()) return
     setUploading(true)
     setUploadStats(null)
@@ -255,6 +257,34 @@ export default function SiiUploadPanel() {
 
       setResponse({ success: true, data: { results, skipped } })
       if (results.every((r) => r.ok)) setParquetUrl('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al importar Parquet de catastral.cl')
+    } finally {
+      setUploading(false)
+      setUploadStats(null)
+    }
+  }
+
+  async function handleImportParquetFromFile() {
+    if (parquetFiles.length === 0) return
+    setUploading(true)
+    setUploadStats(null)
+    setError(null)
+    setResponse(null)
+    const startTime = Date.now()
+
+    try {
+      const formData = new FormData()
+      for (const f of parquetFiles) formData.append('file', f)
+
+      const res = await fetch('/api/admin/catastral-cl-parquet/from-file', {
+        method: 'POST',
+        body: formData,
+      })
+      const { results, skipped } = await consumeNdjsonResponse(res, startTime)
+
+      setResponse({ success: true, data: { results, skipped } })
+      if (results.every((r) => r.ok)) setParquetFiles([])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al importar Parquet de catastral.cl')
     } finally {
@@ -397,14 +427,104 @@ export default function SiiUploadPanel() {
         <div className="h-px flex-1 bg-[var(--c-border)]" />
       </div>
 
-      <div className="mb-1">
+      <div className="mb-4">
         <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-1.5">
-          <Link2 size={12} className="text-slate-500" />
+          <UploadCloud size={12} className="text-slate-500" />
           Importar Parquet enriquecido de catastral.cl (geometría + valuación)
         </label>
         <p className="text-[11px] text-slate-600 mb-2">
-          Descarga el Parquet desde catastral.cl → Tienda → &quot;Datos Catastrales por Comuna&quot; (disponible para todas las comunas con cobertura &gt;95%) y súbelos a una carpeta de Google Drive. Los links de catastral.cl expiran en 15 minutos, así que conviene subir cada archivo a Drive apenas se descarga.
-          Para importar varias comunas de una vez: selecciona todos los archivos en Drive → botón &quot;Descargar&quot; (Drive los comprime en un .zip) y pega aquí el link de ese .zip — <strong>no</strong> el link de la carpeta, que no se puede leer directamente.
+          Descarga desde catastral.cl → Tienda → &quot;Datos Catastrales por Comuna&quot; y súbelo directamente. Para varias comunas: descárgalas y comprime en un .zip.
+        </p>
+
+        <input
+          ref={parquetInputRef}
+          type="file"
+          multiple
+          accept=".parquet,.zip"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) {
+              setParquetFiles((prev) => [...prev, ...Array.from(e.target.files!)])
+              setResponse(null)
+              setError(null)
+            }
+          }}
+        />
+
+        <div
+          onDragEnter={(e) => {
+            e.preventDefault()
+            setDragParquetActive(true)
+          }}
+          onDragLeave={() => setDragParquetActive(false)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragParquetActive(false)
+            if (e.dataTransfer.files) {
+              setParquetFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)])
+              setResponse(null)
+              setError(null)
+            }
+          }}
+          onClick={() => parquetInputRef.current?.click()}
+          className={`w-full border border-dashed rounded-lg py-4 text-xs text-center transition-colors mb-3 cursor-pointer ${
+            dragParquetActive
+              ? 'border-blue-400 bg-blue-500 bg-opacity-10 text-blue-300'
+              : 'border-[var(--c-border-strong)] text-slate-500 hover:text-slate-300 hover:border-blue-500'
+          }`}
+        >
+          Arrastra Parquets aquí o click para elegir (.parquet o .zip)
+        </div>
+
+        {parquetFiles.length > 0 && (
+          <div className="space-y-2 mb-3">
+            <p className="text-xs font-medium text-slate-400">
+              {parquetFiles.length} archivo{parquetFiles.length !== 1 ? 's' : ''} seleccionado{parquetFiles.length !== 1 ? 's' : ''}
+            </p>
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {parquetFiles.map((f, i) => (
+                <div key={`${f.name}-${i}`} className="flex items-center justify-between bg-[var(--c-hover)] rounded-md px-2 py-1">
+                  <span className="text-[11px] text-slate-300 truncate">{f.name}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] text-slate-600">{formatBytes(f.size)}</span>
+                    <button
+                      onClick={() => setParquetFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="text-slate-600 hover:text-red-400 text-[11px]"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleImportParquetFromFile}
+          disabled={uploading || parquetFiles.length === 0}
+          className="flex items-center justify-center gap-1.5 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+        >
+          {uploading ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
+          {uploading ? 'Subiendo e ingiriendo...' : 'Subir e ingerir'}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 my-3">
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+        <span className="text-[10px] text-slate-600">o</span>
+        <div className="h-px flex-1 bg-[var(--c-border)]" />
+      </div>
+
+      <div className="mb-1">
+        <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center gap-1.5">
+          <Link2 size={12} className="text-slate-500" />
+          Importar desde Google Drive (link compartido)
+        </label>
+        <p className="text-[11px] text-slate-600 mb-2">
+          Si prefieres, pega el link de Google Drive y se descarga directo en el servidor sin pasar por tu navegador.
         </p>
         <div className="flex gap-2">
           <input
@@ -417,7 +537,7 @@ export default function SiiUploadPanel() {
           />
           <button
             type="button"
-            onClick={handleImportParquet}
+            onClick={handleImportParquetFromUrl}
             disabled={uploading || !parquetUrl.trim()}
             className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors shrink-0"
           >
