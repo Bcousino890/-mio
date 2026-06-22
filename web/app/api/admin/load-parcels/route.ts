@@ -128,14 +128,18 @@ except Exception as e:
     print(f"ERR:{e}")
 `
     let out = ''
+    let err = ''
     const proc = spawn('python3', ['-c', script])
     proc.stdout.on('data', (d: Buffer) => { out += d.toString() })
-    proc.stderr.on('data', () => {})
+    proc.stderr.on('data', (d: Buffer) => { err += d.toString() })
     proc.on('close', (code) => {
       const line = out.trim().split('\n').pop() ?? ''
-      if (line.startsWith('OK:'))   resolve({ ok: true,  rows: parseInt(line.slice(3)) || 0 })
+      if (line.startsWith('OK:'))        resolve({ ok: true, rows: parseInt(line.slice(3)) || 0 })
       else if (line.startsWith('SKIP:')) resolve({ ok: true, rows: 0 })
-      else resolve({ ok: false, rows: 0, error: line.replace('ERR:', '') || `exit ${code}` })
+      else {
+        const errMsg = line.replace('ERR:', '') || err.trim().split('\n').pop() || `exit ${code}`
+        resolve({ ok: false, rows: 0, error: errMsg })
+      }
     })
     proc.on('error', (e) => resolve({ ok: false, rows: 0, error: e.message }))
   })
