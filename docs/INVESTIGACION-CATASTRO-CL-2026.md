@@ -90,31 +90,90 @@ node scraper/fetch-uf-mindicador.mjs --year 2025 --save
 
 ## Roadmap de enriquecimiento SII
 
-### Fase 1 — CSV nacional catastral.cl (completada)
+---
+
+## Visor Catastral — `/chile/street`
+
+Visor propio tipo [street.catastral.cl](https://street.catastral.cl) construido sobre los 9.4M roles en BD.
+
+**URL:** https://crm.cremme.es/chile/street
+
+### Arquitectura
+
+```
+Usuario escribe dirección/rol
+  → GET /api/chile/sii-search?q=...
+  → sii_roles_cl (trigram index en direccion)
+  → Lista de resultados
+
+Usuario selecciona un predio:
+  1. GET /api/chile/parcel-geojson?rol=...&comuna=...
+     → cadastre_parcels_cl (polígono del GeoPackage si está disponible)
+  2. Si no hay polígono: lat/lng de sii_roles_cl (del CSV con coords)
+  3. Si no hay coords: Nominatim geocoding (OpenStreetMap, sin API key)
+  4. Fallback: centro aproximado de la comuna
+```
+
+### Búsqueda soportada
+
+| Tipo | Ejemplo | Resultado |
+|---|---|---|
+| Dirección (texto libre) | `Apoquindo 3600` | Trigram similarity en `direccion` |
+| Rol | `795-198` | Búsqueda exacta en `rol` |
+| Rol con código SII | `15108 795-198` | Filtro por comuna + rol |
+
+### Archivos clave
+
+| Archivo | Descripción |
+|---|---|
+| `web/app/chile/street/page.tsx` | Página principal del visor (full-screen) |
+| `web/app/chile/street/layout.tsx` | Layout sin sidebar para el visor |
+| `web/components/map/StreetViewMap.tsx` | Mapa Leaflet con satélite ESRI + polígonos |
+| `web/app/api/chile/sii-search/route.ts` | API de búsqueda por dirección/rol |
+| `web/app/api/chile/parcel-geojson/route.ts` | API de polígonos desde GeoPackages |
+| `scraper/load-gpkg-to-db.sh` | Script para cargar GeoPackages en BD |
+
+---
+
+## Roadmap de enriquecimiento SII
+
+### Fase 1 — CSV nacional catastral.cl ✅ COMPLETADA
 - [x] Subida del CSV `catastro_2025_2.csv` (9.4M filas) desde Settings UI
 - [x] Parser con mapeo exacto de columnas `dc_*` del formato catastral.cl
 - [x] Migración 0029: lat/lng/geom/dfl2_flag/nombre_propietario en `sii_roles_cl`
 - [x] Streaming NDJSON para evitar timeout HTTP en procesamiento largo
 - [x] Batch upsert con unnest() arrays (BATCH_SIZE=2000)
+- [x] Visor `/chile/street` — búsqueda por dirección/rol sobre 9.4M roles
+- [x] Geocodificación fallback con Nominatim (sin API key)
 
-### Fase 2 — Coordenadas
-- [ ] Cruzar con catastral.cl GeoPackages para obtener centroides de polígonos
-- [ ] O usar IDE Chile WFS para obtener geometrías prediales oficiales
-- [ ] Poblar columnas `lat`, `lng`, `geom` en `sii_roles_cl`
+### Fase 2 — Polígonos prediales (GeoPackages catastral.cl) 🔄 EN PROGRESO
+- [x] Tabla `cadastre_parcels_cl` con PostGIS
+- [x] Script `scraper/load-gpkg-to-db.sh` para cargar .gpkg y .parquet
+- [x] API `/api/chile/parcel-geojson` para servir polígonos al visor
+- [ ] Cargar los 121 GeoPackages (~5 GB) en el VPS
+  - En el VPS: `bash /opt/casafari/scraper/load-gpkg-to-db.sh /ruta/gpkg/`
+  - Prerequisito: `apt-get install -y gdal-bin` (para ogr2ogr)
+  - O formato Parquet: `pip install geopandas pyarrow psycopg2-binary`
 
-### Fase 3 — Polígonos prediales
-- [ ] Cargar GeoPackages de catastral.cl en `cadastre_parcels_cl`
-- [ ] ogr2ogr con `--append` para comunas prioritarias (Las Condes, Vitacura, Providencia)
-- [ ] Vista `sii_roles_con_poligono` que une roles con polígono predial
+### Fase 3 — Coordenadas en sii_roles_cl
+- [ ] Poblar `lat`, `lng`, `geom` en `sii_roles_cl` desde centroides de polígonos
+  ```sql
+  UPDATE sii_roles_cl r
+  SET lat = ST_Y(ST_Centroid(p.geom)),
+      lng = ST_X(ST_Centroid(p.geom))
+  FROM cadastre_parcels_cl p
+  WHERE p.sii_comuna_code = r.sii_comuna_code AND p.rol = r.rol;
+  ```
 
 ### Fase 4 — Transacciones CBR
 - [ ] Tabla `sii_transacciones_cl` (migración 0030 ya aplicada)
 - [ ] Ingesta histórica de escrituras del Conservador de Bienes Raíces
 - [ ] Vista `sii_comparables_h3_cl`: mediana UF/m² por hexágono H3
 
-### Fase 5 — street.catastral.cl
-- [ ] Investigar API de street.catastral.cl para consulta de predio por dirección
-- [ ] Posible integración para enriquecer propiedades captadas en Chile
+### Fase 5 — IDE Chile WFS (polígonos oficiales MINVU)
+- [ ] WFS OGC público: `https://ide.minvu.cl/...`
+- [ ] Sin autenticación, paginado por bbox
+- [ ] Alternativa oficial a catastral.cl para polígonos
 
 ---
 

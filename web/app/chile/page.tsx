@@ -69,11 +69,11 @@ export default async function ChilePage() {
             Subir SII
           </Link>
           <Link
-            href="/chile/catastro"
+            href="/chile/street"
             className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
           >
             <MapPinned size={12} />
-            Ver catastro
+            Visor catastral
           </Link>
         </div>
       }
