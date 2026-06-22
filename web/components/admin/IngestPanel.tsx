@@ -54,6 +54,36 @@ export default function IngestPanel() {
     setDragActive(false); addFiles(e.dataTransfer.files)
   }
 
+  function processNdjsonChunk(chunk: string, buf: { v: string }) {
+    buf.v += chunk
+    const lines = buf.v.split('\n')
+    buf.v = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const msg = JSON.parse(line)
+        if (msg.phase === 'extracting') addLog({ type: 'info', text: `Extrayendo ${msg.file}…` })
+        if (msg.phase === 'parcels') {
+          if (msg.status === 'start')          addLog({ type: 'info', text: `Procesando ${msg.total} archivos de predios…` })
+          else if (msg.status === 'processing') addLog({ type: 'info', text: `[${msg.index}/${msg.total}] ${msg.file}` })
+          else if (msg.status === 'ok')         addLog({ type: 'ok', text: msg.file, rows: msg.rows })
+          else if (msg.status === 'error')      addLog({ type: 'error', text: `${msg.file}: ${msg.error}` })
+          else if (msg.status === 'done')       addLog({ type: 'ok', text: `Predios: ${fmtNum(msg.totalRows)} filas en ${msg.filesProcessed} archivos` })
+        }
+        if (msg.phase === 'sii') {
+          if (msg.status === 'start')    addLog({ type: 'info', text: `Procesando ${msg.total} comunas SII…` })
+          else if (msg.progress)         addLog({ type: 'info', text: msg.status ?? JSON.stringify(msg) })
+          else if (msg.status === 'done') addLog({ type: 'ok', text: 'SII: ingesta completada' })
+          else if (msg.status === 'skipped') addLog({ type: 'info', text: msg.message ?? 'Sin archivos SII' })
+        }
+        if (msg.done) {
+          if (!msg.success) addLog({ type: 'error', text: msg.error ?? 'Error desconocido' })
+          else addLog({ type: 'ok', text: '✓ Todo listo' })
+        }
+      } catch { /* línea incompleta */ }
+    }
+  }
+
   async function handleStart() {
     if (!files.length || running) return
     setRunning(true); setLog([]); setDone(false); setUploadPct(null)
@@ -64,60 +94,44 @@ export default function IngestPanel() {
       const form = new FormData()
       for (const f of batch) form.append('files', f)
 
-      addLog({ type: 'upload', text: `Subiendo ${batch.map(f => f.name).join(', ')}…` })
+      const batchNames = batch.map(f => f.name).join(', ')
+      const batchBytes = batch.reduce((s, f) => s + f.size, 0)
+      addLog({ type: 'upload', text: `Subiendo ${batchNames} (${formatBytes(batchBytes)})…` })
 
-      try {
-        const res = await fetch('/api/admin/ingest', { method: 'POST', body: form })
-        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      await new Promise<void>((resolve) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', '/api/admin/ingest')
+        xhr.responseType = 'text'
 
-        const reader = res.body.getReader()
-        const dec = new TextDecoder()
-        let buf = ''
+        // progreso de subida (upload.onprogress da bytes enviados al servidor)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.upload.onload = () => setUploadPct(100)
 
-        while (true) {
-          const { done: rdone, value } = await reader.read()
-          if (rdone) break
-          buf += dec.decode(value, { stream: true })
-          const lines = buf.split('\n'); buf = lines.pop() ?? ''
-          for (const line of lines) {
-            if (!line.trim()) continue
-            try {
-              const msg = JSON.parse(line)
-
-              if (msg.phase === 'uploading' && msg.totalBytes) {
-                setUploadPct(Math.round((msg.loadedBytes / msg.totalBytes) * 100))
-              }
-
-              if (msg.phase === 'extracting') {
-                addLog({ type: 'info', text: `Extrayendo ${msg.file}…` })
-              }
-
-              if (msg.phase === 'parcels') {
-                if (msg.status === 'start')      addLog({ type: 'info', text: `Procesando ${msg.total} archivos de predios…` })
-                else if (msg.status === 'processing') addLog({ type: 'info', text: `[${msg.index}/${msg.total}] ${msg.file}` })
-                else if (msg.status === 'ok')    addLog({ type: 'ok', text: msg.file, rows: msg.rows })
-                else if (msg.status === 'error') addLog({ type: 'error', text: `${msg.file}: ${msg.error}` })
-                else if (msg.status === 'done')  addLog({ type: 'ok', text: `Predios: ${fmtNum(msg.totalRows)} filas en ${msg.filesProcessed} archivos` })
-              }
-
-              if (msg.phase === 'sii') {
-                if (msg.status === 'start')    addLog({ type: 'info', text: `Procesando ${msg.total} comunas SII…` })
-                else if (msg.progress)         addLog({ type: 'info', text: msg.status ?? JSON.stringify(msg) })
-                else if (msg.status === 'done')addLog({ type: 'ok', text: 'SII: ingesta completada' })
-                else if (msg.status === 'skipped') addLog({ type: 'info', text: msg.message ?? 'Sin archivos SII' })
-              }
-
-              if (msg.done) {
-                if (!msg.success) addLog({ type: 'error', text: msg.error ?? 'Error desconocido' })
-                else addLog({ type: 'ok', text: '✓ Todo listo' })
-              }
-            } catch { /* línea incompleta */ }
+        // streaming de la respuesta NDJSON mientras llega
+        const buf = { v: '' }
+        let lastLen = 0
+        xhr.onreadystatechange = () => {
+          if (xhr.readyState >= 3 && xhr.responseText.length > lastLen) {
+            const newChunk = xhr.responseText.slice(lastLen)
+            lastLen = xhr.responseText.length
+            processNdjsonChunk(newChunk, buf)
+          }
+          if (xhr.readyState === 4) {
+            // procesar cualquier resto
+            if (xhr.responseText.length > lastLen) {
+              processNdjsonChunk(xhr.responseText.slice(lastLen), buf)
+            }
+            if (xhr.status === 0 || xhr.status >= 400) {
+              addLog({ type: 'error', text: `Error HTTP ${xhr.status || 'red caída'}` })
+            }
+            resolve()
           }
         }
-      } catch (err) {
-        addLog({ type: 'error', text: err instanceof Error ? err.message : 'Error de red' })
-        break
-      }
+        xhr.onerror = () => { addLog({ type: 'error', text: 'Error de red' }); resolve() }
+        xhr.send(form)
+      })
     }
 
     setRunning(false); setUploadPct(null); setDone(true)
@@ -180,9 +194,26 @@ export default function IngestPanel() {
       >
         {running ? <Loader2 size={12} className="animate-spin" /> : <UploadCloud size={12} />}
         {running
-          ? uploadPct != null ? `Subiendo… ${uploadPct}%` : 'Procesando…'
+          ? uploadPct != null && uploadPct < 100
+            ? `Subiendo… ${uploadPct}%`
+            : 'Procesando…'
           : 'Importar a base de datos'}
       </button>
+
+      {running && uploadPct != null && uploadPct < 100 && (
+        <div className="mb-3">
+          <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+            <span>Subiendo al servidor…</span>
+            <span className="font-mono text-blue-400">{uploadPct}%</span>
+          </div>
+          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-all duration-300 rounded-full"
+              style={{ width: `${uploadPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {log.length > 0 && (
         <div className="bg-black/30 rounded-lg p-2 max-h-48 overflow-y-auto font-mono text-[10px] space-y-0.5">
