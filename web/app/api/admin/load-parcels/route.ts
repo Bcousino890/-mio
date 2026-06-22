@@ -128,7 +128,7 @@ try:
     gdf.to_postgis('cadastre_parcels_cl', engine, if_exists='append', index=False)
     print(f"OK:{len(gdf)}")
 except Exception as e:
-    print(f"ERR:{e}")
+    print("ERR:" + str(e).replace(chr(10), ' | '))
 `
     let out = ''
     let err = ''
