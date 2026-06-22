@@ -12,15 +12,24 @@ COPY . .
 RUN npm run build
 
 # ── Stage 3: runner (Next.js standalone) ─────────────────────────────────────
-FROM node:20-alpine AS runner
+# Debian (no Alpine) en este stage: la ingesta de GeoParquet de catastral.cl
+# usa geopandas, que depende de GDAL/GEOS/PROJ — Alpine (musl) no tiene
+# wheels precompilados en PyPI para esas libs y compilarlas desde fuente es
+# pesado y frágil. Debian sí trae python3-geopandas empaquetado con bindings
+# de GDAL funcionando vía apt, sin compilar nada.
+FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
-# unzip del sistema: la subida SII extrae .zip a disco vía CLI en vez de
-# cargarlo completo en memoria con una librería JS (soporta archivos grandes).
-RUN apk add --no-cache unzip
+# unzip: la subida SII y la ingesta de catastral.cl extraen .zip a disco vía
+# CLI en vez de cargarlos completos en memoria con una librería JS (soporta
+# archivos grandes). python3-geopandas/pandas: ingesta de GeoParquet con
+# geometría predial (catastral-parquet-ingest.ts).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    unzip python3 python3-geopandas python3-pandas \
+  && rm -rf /var/lib/apt/lists/*
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
 COPY --from=builder /app/.next/standalone ./
