@@ -53,7 +53,13 @@ async function isZip(path: string): Promise<boolean> {
 async function extractZip(zipPath: string, destDir: string): Promise<string[]> {
   await execFileAsync('unzip', ['-o', '-q', '-j', zipPath, '-d', destDir])
   const names = await readdir(destDir)
-  return names.filter((name) => name.toLowerCase().endsWith('.parquet')).sort()
+  // Zips creados desde macOS (Finder "Comprimir" o `zip` sin -X) incluyen un
+  // "._NombreArchivo.parquet" por cada archivo real — metadata AppleDouble
+  // (resource fork), no datos. No son Parquet válido: hay que descartarlos o
+  // duplican el conteo de comunas y fallan al parsear.
+  return names
+    .filter((name) => name.toLowerCase().endsWith('.parquet') && !name.startsWith('._'))
+    .sort()
 }
 
 export async function POST(request: NextRequest) {
