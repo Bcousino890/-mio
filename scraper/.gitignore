@@ -1,0 +1,4 @@
+spike-results*/
+spike-results/
+.env.local
+*.log
