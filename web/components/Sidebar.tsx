@@ -18,6 +18,7 @@ import {
   Database,
   Upload,
   Link2,
+  Eye,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -117,6 +118,12 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       badge: 'NEW',
     },
     {
+      href: '/chile/street',
+      label: 'Visor catastral',
+      icon: Eye,
+      description: 'Mapa predial · roles · polígonos',
+    },
+    {
       href: '/settings',
       label: 'Subir datos SII',
       icon: Upload,
@@ -128,6 +135,9 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
+
+  // El visor catastral ocupa toda la pantalla — ocultar sidebar completamente
+  if (pathname.startsWith('/chile/street')) return null
 
   const country = pathname.startsWith('/chile') ? 'cl' : 'es'
   const modules = MODULES_BY_COUNTRY[country]
