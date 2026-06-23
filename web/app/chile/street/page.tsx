@@ -400,6 +400,15 @@ export default function StreetPage() {
         <StreetViewMap
           center={mapCenter}
           zoom={mapZoom}
+          comunaCode={selected?.sii_comuna_code ?? null}
+          onParcelClick={async ({ rol, sii_comuna_code }) => {
+            // Buscar el rol clicado en el panel
+            try {
+              const res = await fetch(`/api/chile/sii-search?q=${encodeURIComponent(rol)}&comuna=${sii_comuna_code}&limit=1`)
+              const data = await res.json()
+              if (data.success && data.results?.[0]) selectResult(data.results[0])
+            } catch { /* ignore */ }
+          }}
           pin={pinCoords ? {
             lat: pinCoords.lat,
             lng: pinCoords.lng,
