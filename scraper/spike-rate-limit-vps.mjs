@@ -42,6 +42,12 @@ const IDS = arg('ids') || [
 const OUT_DIR = './spike-results'
 mkdirSync(OUT_DIR, { recursive: true })
 
+// Support para proxy: --proxy-url <smartproxy-api-url> o env var SMARTPROXY_URL
+const PROXY_URL = arg('proxy-url') || process.env.SMARTPROXY_URL || null
+const WITH_PROXY = PROXY_URL != null
+const USE_PROXY_FLAG = WITH_PROXY ? '--no-proxy' === '' : '--no-proxy' // siempre false si proxy activo
+const PROXY_LABEL = WITH_PROXY ? ` + Smartproxy` : ` (sin proxy)`
+
 const SPIKES = [
   { concurrency: 1, delay: 1500, label: 'baseline (conc 1, delay 1500)' },
   { concurrency: 2, delay: 1000, label: 'moderate (conc 2, delay 1000)' },
@@ -59,16 +65,25 @@ async function runSpike(spike, index) {
       `--count`, '20',
       `--concurrency`, String(spike.concurrency),
       `--delay`, String(spike.delay),
-      `--no-proxy`,
       `--out`, outDir,
     ]
 
+    // Si NO hay proxy, agregamos --no-proxy
+    if (!WITH_PROXY) {
+      args.push('--no-proxy')
+    }
+
     console.log(`\n${'='.repeat(80)}`)
-    console.log(`SPIKE ${index}/4: ${spike.label}`)
+    console.log(`SPIKE ${index}/4: ${spike.label}${PROXY_LABEL}`)
     console.log(`${cmd} ${args.join(' ')}`)
     console.log(`${'='.repeat(80)}\n`)
 
-    const proc = spawn(cmd, args, { stdio: 'inherit' })
+    const env = { ...process.env }
+    if (WITH_PROXY) {
+      env.SMARTPROXY_URL = PROXY_URL
+    }
+
+    const proc = spawn(cmd, args, { stdio: 'inherit', env })
     proc.on('close', (code) => {
       if (code !== 0) {
         console.error(`\n⚠️  Spike ${index} salió con código ${code} — continuando de todas formas\n`)
@@ -86,12 +101,12 @@ async function main() {
 ╚════════════════════════════════════════════════════════════════════════════╝
 
 IDs a probar: ${IDS.split(',').length} fichas
-Sin proxy: --no-proxy activo (validar sin dependencias de proxy)
-Output: ${OUT_DIR}/spike-N-concX/_summary.json (métricas por spike)
+Modo: ${WITH_PROXY ? '✓ CON PROXY (Smartproxy)' : '✓ SIN PROXY (baseline)'}
+${WITH_PROXY ? `Smartproxy URL: ${PROXY_URL}\n` : ''}Output: ${OUT_DIR}/spike-N-concX/_summary.json (métricas por spike)
 
 La métrica clave es % de respuestas 429 (rate-limit) por concurrencia:
-- 0% en conc 5 → proxy NO necesario (costo $0)
-- >20% en conc 5 → proxy NECESARIO (Geonode ~$13-47/mes)
+${!WITH_PROXY ? `- 0% en conc 5 → proxy NO necesario (costo $0)
+- >20% en conc 5 → proxy NECESARIO (Geonode ~$13-47/mes)` : `- Comparar sin proxy vs con proxy para validar si Smartproxy mejora`}
 
 Ejecutando spikes secuencialmente...
 `)

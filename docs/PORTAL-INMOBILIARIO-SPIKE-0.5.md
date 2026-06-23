@@ -18,7 +18,7 @@ Requiere:
 
 ## Ejecución
 
-### Opción A: Script de orquestación (recomendado)
+### Opción A: Script de orquestación SIN PROXY (recomendado para baseline)
 
 ```bash
 ssh vps
@@ -26,27 +26,39 @@ cd /app/casafari-mio
 git checkout claude/laughing-tesla-8nqqc9
 git pull
 
-# Ejecuta los 4 spikes automáticamente con IDs default
+# Ejecuta los 4 spikes automáticamente SIN PROXY
 node scraper/spike-rate-limit-vps.mjs
 ```
 
-Esto ejecuta 4 spikes secuenciales:
+Esto ejecuta 4 spikes secuenciales con IDs default de Vitacura:
 1. **Concurrencia 1** + delay 1500ms (baseline sin proxy)
 2. **Concurrencia 2** + delay 1000ms
 3. **Concurrencia 3** + delay 500ms
 4. **Concurrencia 5** + delay 0ms (stress test)
 
-Cada spike usa 20 fichas reales (IDs default de Vitacura).
-
 **Output:** `./spike-results/spike-N-concX/_summary.json` (métricas por spike)
 
-### Opción B: IDs personalizados
+### Opción B: CON SMARTPROXY (para validar si proxy mejora)
 
-Si quieres probar contra fichas específicas (ej. otra comuna o mix de tipos):
+Si quieres comparar sin proxy vs con proxy, usa Smartproxy (ya tienes 46.24 GB):
 
 ```bash
-node scraper/spike-rate-limit-vps.mjs --ids MLC-1847000513,MLC-1847000514,MLC-1847000515,...
+ssh vps
+cd /app/casafari-mio
+
+# Copia la URL de API de Smartproxy desde el dashboard
+# (Configuración de proxy → Enlace API generado)
+# Ej: https://api.smartproxy.com/web_v1/get-v3?app_key=9cf847... (completar con tu key)
+
+export SMARTPROXY_URL="https://tu-smartproxy-api-url-aqui"
+
+# Ejecuta los 4 spikes CON PROXY
+node scraper/spike-rate-limit-vps.mjs
 ```
+
+El script detectará automáticamente que hay `SMARTPROXY_URL` y usará proxy en todos los spikes.
+
+**Output:** `./spike-results/spike-N-concX/_summary.json` (ahora con proxy)
 
 ---
 
@@ -94,6 +106,39 @@ Status codes de fallos: 429, 429, 429, 429
 (20% × 429: posible rate-limit incipiente, pero manejable)
 
 → CONCLUSIÓN: Sin proxy, conc ≤3–4 es seguro. Considerar proxy solo si necesitas >5.
+```
+
+---
+
+## Cómo obtener tu URL de API de Smartproxy
+
+**Tienes 46.24 GB disponibles en Smartproxy.** Para usarla en el spike:
+
+1. Entra al dashboard: https://www.smartproxy.com/ (login)
+2. Selecciona **Proxies** → **Residential Proxy** (panel izquierdo)
+3. Ve a **Configuración de proxy** → **Extracción API**
+4. Verás el **Enlace API generado** (copy the entire URL)
+5. Ejemplo:
+   ```
+   https://api.smartproxy.com/web_v1/get-v3?app_key=9cf8476185ea51d90a811dfed197546pi&cc=CL&city=Santiago
+   ```
+6. Úsalo en el VPS:
+   ```bash
+   export SMARTPROXY_URL="https://api.smartproxy.com/web_v1/get-v3?app_key=9cf8476185ea51d90a811dfed197546pi&cc=CL"
+   node scraper/spike-rate-limit-vps.mjs
+   ```
+
+**Efecto:** Smartproxy te dará una **IP diferente en cada request** (rotación residencial), lo que distribuye la carga y evita rate-limit por concentración en una sola IP.
+
+**Para comparación lado-a-lado:**
+```bash
+# Spike 1: sin proxy (baseline)
+node scraper/spike-rate-limit-vps.mjs --ids MLC-1847000513,...
+
+# Spike 2: con proxy (comparación)
+export SMARTPROXY_URL="..."
+node scraper/spike-rate-limit-vps.mjs --ids MLC-1847000513,...
+# Luego compara el % de 429 en ambos spikes
 ```
 
 ---

@@ -38,6 +38,13 @@ const DEFAULT_PROFILE = 'idealista'
 const TIMEOUT_S = 25
 
 function proxyUrl() {
+  // SMARTPROXY_URL: URL completa de API Smartproxy (Extracción API)
+  // Ej: https://api.smartproxy.com/v2/proxy?cc=CL&city=Santiago&...
+  if (process.env.SMARTPROXY_URL) {
+    // Las URLs de Smartproxy API tienen formato de extracción, no proxy directo
+    // Se usa para generar IPs dinámicamente, pero en curl se pasa como proxy URL
+    return process.env.SMARTPROXY_URL
+  }
   if (process.env.PROXY_URL) return process.env.PROXY_URL
   const { PROXY_PROVIDER, SMARTPROXY_PROXY_HOST, SMARTPROXY_PROXY_PORT,
           SMARTPROXY_PROXY_USER, SMARTPROXY_PROXY_PASS,
