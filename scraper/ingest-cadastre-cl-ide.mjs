@@ -4,6 +4,13 @@
 // "Predios" de MINVU, vía IDE Chile / Geoportal.cl / SNIT) para comunas con
 // roles SII ya confirmados en `sii_roles_cl`.
 //
+// DEPRIORIZADO: el endpoint WFS nunca se confirmó (ver estado más abajo) y
+// dejó de ser la vía activa para poblar `cadastre_parcels_cl`. La vía actual
+// es ingest-cadastre-cl-geocode.mjs (geocodifica la dirección del rol vía
+// Nominatim, sin depender de IDE Chile). Este script se deja tal cual por si
+// el endpoint WFS llega a confirmarse más adelante — no se ejecuta de forma
+// rutinaria.
+//
 // CONSTRAINT LEGAL NO NEGOCIABLE (ver banner de scraper/lib/cadastre-cl.mjs y
 // db/migrations/0020_cadastre_chile.sql líneas 1-26): este script NUNCA debe
 // hacer requests contra sii.cl, mapasui.cl, zeus.sii.cl, ni ningún (sub)dominio

@@ -12,15 +12,37 @@ COPY . .
 RUN npm run build
 
 # ── Stage 3: runner (Next.js standalone) ─────────────────────────────────────
-FROM node:20-alpine AS runner
+# Debian (no Alpine) en este stage: la ingesta de GeoParquet de catastral.cl
+# usa geopandas, que depende de GDAL/GEOS/PROJ — Alpine (musl) no tiene
+# wheels precompilados en PyPI para esas libs y compilarlas desde fuente es
+# pesado y frágil. Debian sí trae python3-geopandas empaquetado con bindings
+# de GDAL funcionando vía apt, sin compilar nada.
+FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
-# unzip del sistema: la subida SII extrae .zip a disco vía CLI en vez de
-# cargarlo completo en memoria con una librería JS (soporta archivos grandes).
-RUN apk add --no-cache unzip
+# unzip: la subida SII y la ingesta de catastral.cl extraen .zip a disco vía
+# CLI en vez de cargarlos completos en memoria con una librería JS (soporta
+# archivos grandes). python3-geopandas/pandas: ingesta de GeoParquet con
+# geometría predial (catastral-parquet-ingest.ts).
+#
+# pyarrow vía pip, no apt: es el motor de lectura Parquet que usa geopandas
+# (sin él, gpd.read_parquet() falla con "Missing optional dependency
+# 'pyarrow.parquet'"), pero el paquete "python3-pyarrow" de Debian solo
+# existe en sid/trixie, no en bookworm. PyPI sí publica wheels manylinux
+# precompilados que funcionan en Debian sin compilar nada.
+# --break-system-packages: Debian 12 marca el Python del sistema como
+# "externally managed" (PEP 668) — ok en un contenedor de un solo propósito.
+# GeoAlchemy2 también vía pip: gdf.to_postgis() lo requiere para mapear la
+# columna geometry a un tipo PostGIS, y Debian bookworm no empaqueta
+# "python3-geoalchemy2" (solo está en sid/trixie, igual que pyarrow).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    unzip python3 python3-geopandas python3-pandas python3-pip \
+    python3-sqlalchemy libpq-dev \
+  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary GeoAlchemy2 \
+  && rm -rf /var/lib/apt/lists/*
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
 COPY --from=builder /app/.next/standalone ./

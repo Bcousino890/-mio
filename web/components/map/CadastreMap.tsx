@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
+import { formatCLP } from '@/lib/currency-formatter'
 
 interface Props {
   parcels: CadastreParcel[]
@@ -13,6 +14,7 @@ interface Props {
   onShapeDrawn?: (shape: DrawnShape | null) => void
   highlightedParcelId?: string | null
   onMapClick?: () => void
+  onParcelClick?: (parcel: CadastreParcel) => void
   zoneRecordCount?: number | null
   zoneRecordLoading?: boolean
 }
@@ -84,6 +86,22 @@ function pinRowHtml(pin: CadastreListingPin) {
   `
 }
 
+function parcelPopupHtml(parcel: CadastreParcel) {
+  const rows = [
+    parcel.direccion ? `<div style="color:#334155;margin-top:3px">${parcel.direccion}</div>` : '',
+    `<div style="color:#64748b;margin-top:3px">Rol: ${parcel.rol ?? 'sin rol'}</div>`,
+    parcel.avaluo_fiscal_total ? `<div style="color:#475569;margin-top:3px">Avalúo: ${formatCLP(parcel.avaluo_fiscal_total)}</div>` : '',
+    parcel.superficie_terreno_m2 ? `<div style="color:#475569;margin-top:3px">Superficie: ${parcel.superficie_terreno_m2} m²</div>` : '',
+    `<div style="color:#94a3b8;font-size:11px;margin-top:4px">Fuente: ${parcel.source}</div>`,
+  ].filter(Boolean).join('')
+  return `
+    <div style="font-family:system-ui;font-size:12px;line-height:1.5;min-width:160px">
+      <div style="font-weight:700;color:#0f172a">${parcel.comuna}</div>
+      ${rows}
+    </div>
+  `
+}
+
 function groupPopupHtml(comuna: string, pins: CadastreListingPin[]) {
   const rows = pins.map((p, i) => `${i > 0 ? '<div style="border-top:1px solid #e2e8f0"></div>' : ''}${pinRowHtml(p)}`).join('')
   return `
@@ -124,7 +142,7 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, zoneRecordCount, zoneRecordLoading }: Props) {
+export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, onParcelClick, zoneRecordCount, zoneRecordLoading }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -231,15 +249,10 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
           layer.setStyle(getParcelStyle(parcel.source, true, false))
           layer.bringToFront()
           onMapClick?.()
+          onParcelClick?.(parcel)
         })
 
-        layer.bindPopup(`
-          <div style="font-family:system-ui;font-size:12px;line-height:1.5">
-            <div style="font-weight:700;color:#0f172a">${parcel.comuna}</div>
-            <div style="color:#64748b;margin-top:2px">Rol: ${parcel.rol ?? 'sin rol'}</div>
-            <div style="color:#94a3b8;font-size:11px;margin-top:2px">Fuente: ${parcel.source}</div>
-          </div>
-        `)
+        layer.bindPopup(parcelPopupHtml(parcel))
 
         // Etiqueta de Rol siempre visible sobre la parcela — antes el Rol solo
         // se veía dentro del popup, que requería click; con muchas parcelas en

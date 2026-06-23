@@ -20,6 +20,9 @@ export type CadastreParcel = {
   /** Polígono en GeoJSON, lng/lat (orden estándar GeoJSON). */
   geojson: GeoJSON.Polygon
   centroid: { lat: number; lng: number }
+  direccion?: string | null
+  avaluo_fiscal_total?: number | null
+  superficie_terreno_m2?: number | null
 }
 
 export type CadastreListingPin = {

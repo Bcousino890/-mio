@@ -759,6 +759,7 @@ export default function CatastroPage() {
             zoom={15}
             highlightedParcelId={selectedRol?.matched_parcel_id || null}
             onMapClick={() => setSelectedRol(null)}
+            onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
             onShapeDrawn={setDrawnShape}
             zoneRecordCount={zoneCount}
             zoneRecordLoading={zoneCountLoading}
