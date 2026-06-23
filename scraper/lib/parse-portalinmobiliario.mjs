@@ -222,10 +222,60 @@ export function parseDetailPage(html, external_id) {
     }
 
     const advertiser_name = blobItem?.seller?.nickname ?? null
+    const advertiser_id = blobItem?.seller?.id ?? null
     const advertiser_type = blobItem?.seller?.user_type === 'normal' ? 'particular' : (advertiser_name ? 'professional' : 'unknown')
+
+    // Extracción de video: preferir blob, fallback a regex como en Idealista
+    const videos = []
+    const videoSet = new Set()
+
+    // Buscar en arrays conocidos del blob
+    if (blobItem) {
+      for (const key of ['videos', 'video', 'videoList', 'media']) {
+        const videosArr = blobItem[key]
+        if (Array.isArray(videosArr)) {
+          for (const v of videosArr) {
+            const url = v?.url ?? v?.src ?? v?.videoUrl ?? v?.videoLocation ?? v
+            if (typeof url === 'string' && /\.(?:mp4|webm|mov)|youtube|vimeo|mlstatic/i.test(url) && !videoSet.has(url)) {
+              videoSet.add(url)
+              videos.push(url)
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback a regex: buscar URLs de video en el HTML/JSON
+    if (videos.length === 0) {
+      for (const m of html.matchAll(/"(?:videoUrl|video_url|url)":\s*"(https?:\/\/[^"]+\.(?:mp4|webm|mov)|(?:youtube|vimeo)[^"]*)"[\s\S]{0,200}?(?="video|")|(?=,)/g)) {
+        const url = m[1]
+        if (!videoSet.has(url)) { videoSet.add(url); videos.push(url) }
+      }
+      // Último intento: URLs mlstatic de video
+      if (videos.length === 0) {
+        for (const m of html.matchAll(/(https?:\/\/[^"']+mlstatic\.com\/[^\s"']*\.(?:mp4|webm|mov))/gi)) {
+          const url = m[1]
+          if (!videoSet.has(url)) { videoSet.add(url); videos.push(url) }
+        }
+      }
+    }
+
+    // Property code (referencia canónica que persiste en republicas): buscar en blob o HTML
+    let property_code = blobItem?.id ?? blobItem?.property_id ?? blobItem?.propertyCode ?? null
+    if (!property_code) {
+      // Intento en HTML: puede estar en data-* o en JSON
+      const propCodeM = html.match(/"(?:property[_-]?)?[iI]d"\s*:\s*(\d+)/) ||
+                        html.match(/data-property-code="([^"]+)"/) ||
+                        html.match(/"propertyCode"\s*:\s*"?(\d+)"?/)
+      property_code = propCodeM ? propCodeM[1] : null
+    }
+
+    // Seller reference (referencia interna de la corredora)
+    const seller_reference = blobItem?.seller?.reference ?? blobItem?.seller?.reference_id ?? null
 
     return {
       external_id,
+      property_code,  // ID canónico de la propiedad (persiste en republicas)
       portal: 'portalinmobiliario',
       source_type: 'portal',
       source_url: `https://www.portalinmobiliario.com/${external_id}`,
@@ -238,7 +288,10 @@ export function parseDetailPage(html, external_id) {
       latitude, longitude,
       address, comuna,
       advertiser_name, advertiser_type,
-      photos: photos.slice(0, 40),
+      advertiser_id,
+      seller_reference,
+      photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
+      videos: videos.length > 0 ? videos[0] : null,  // Primer video si existe
       description: blobItem?.description?.plain_text ?? null,
     }
   } catch {

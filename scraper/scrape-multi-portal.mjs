@@ -219,21 +219,23 @@ async function upsertListingCl(client, listing) {
   const q = `
     INSERT INTO listings_cl (
       portal, source_type, external_id, source_url, operation,
-      advertiser_type, advertiser_name,
+      advertiser_type, advertiser_name, advertiser_id, seller_reference,
       price, price_uf, uf_rate, uf_rate_date, currency,
       bedrooms, bathrooms, square_meters, property_type,
+      property_code,
       comuna_id, comuna_raw, localidad, address, exact_address,
       latitude, longitude,
       description, features, photos,
       status, is_active, last_seen_at, updated_at
     ) VALUES (
       $1,$2,$3,$4,$5,
-      $6,$7,
-      $8,$9,$10,$11,$12,
-      $13,$14,$15,$16,
-      $17,$18,$19,$20,$21,
-      $22,$23,
-      $24,$25::jsonb,$26::jsonb,
+      $6,$7,$8,$9,
+      $10,$11,$12,$13,$14,
+      $15,$16,$17,$18,
+      $19,
+      $20,$21,$22,$23,$24,
+      $25,$26,
+      $27,$28::jsonb,$29::jsonb,
       'active', true, now(), now()
     )
     ON CONFLICT (portal, external_id) DO UPDATE SET
@@ -244,10 +246,13 @@ async function upsertListingCl(client, listing) {
       currency = EXCLUDED.currency,
       advertiser_type = EXCLUDED.advertiser_type,
       advertiser_name = EXCLUDED.advertiser_name,
+      advertiser_id = EXCLUDED.advertiser_id,
+      seller_reference = EXCLUDED.seller_reference,
       bedrooms = EXCLUDED.bedrooms,
       bathrooms = EXCLUDED.bathrooms,
       square_meters = EXCLUDED.square_meters,
       property_type = EXCLUDED.property_type,
+      property_code = EXCLUDED.property_code,
       comuna_id = EXCLUDED.comuna_id,
       comuna_raw = EXCLUDED.comuna_raw,
       localidad = EXCLUDED.localidad,
@@ -264,9 +269,10 @@ async function upsertListingCl(client, listing) {
 
   const vals = [
     listing.portal, listing.source_type, listing.id, listing.source_url, listing.operation,
-    listing.advertiser_type, listing.advertiser_name,
+    listing.advertiser_type, listing.advertiser_name, listing.advertiser_id ?? null, listing.seller_reference ?? null,
     listing.price, listing.price_uf, listing.uf_rate, listing.uf_rate_date, listing.currency,
     listing.bedrooms, listing.bathrooms, listing.square_meters, listing.property_type ?? null,
+    listing.property_code ?? null,
     comunaId, listing.comuna ?? null, listing.localidad ?? null, listing.address ?? null, listing.exact_address ?? null,
     listing.latitude, listing.longitude,
     listing.description ?? null, JSON.stringify(listing.features ?? []), JSON.stringify(listing.photos ?? []),
