@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { mkdtemp, rm, mkdir, readdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -313,4 +313,26 @@ export async function POST(request: NextRequest) {
       'X-Accel-Buffering': 'no',
     },
   })
+}
+
+// GET /api/admin/ingest — lista archivos ya en disco (subidos via upload-raw)
+export async function GET() {
+  const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/casafari-uploads'
+  try {
+    let entries: string[]
+    try { entries = await readdir(UPLOAD_DIR) }
+    catch { entries = [] }
+
+    const files: { name: string; path: string; size: number; mtime: string }[] = []
+    for (const name of entries.sort()) {
+      const p = join(UPLOAD_DIR, name)
+      try {
+        const s = await stat(p)
+        if (s.isFile()) files.push({ name, path: p, size: s.size, mtime: s.mtime.toISOString() })
+      } catch { /* ignorar */ }
+    }
+    return NextResponse.json({ success: true, files, uploadDir: UPLOAD_DIR })
+  } catch (err) {
+    return NextResponse.json({ success: false, error: String(err) }, { status: 500 })
+  }
 }
