@@ -58,7 +58,14 @@ if (!IDS && !LIST_URL) {
 
 mkdirSync(OUT_DIR, { recursive: true })
 
+// CONFIRMADO (Fase 0, 11 fichas reales): __NEXT_DATA__/__PRELOADED_STATE__/
+// __INITIAL_STATE__ NUNCA aparecen en este portal — esa hipótesis original
+// era incorrecta. El blob real es __NORDIC_RENDERING_CTX__ (ver
+// lib/parse-portalinmobiliario.mjs::extractNordicBlob). Se mantienen los
+// otros tres por si el portal cambia de framework, pero no se espera que
+// calcen nunca.
 const BLOB_CHECKS = [
+  ['__NORDIC_RENDERING_CTX__', /<script[^>]*id=["']__NORDIC_RENDERING_CTX__["']/i],
   ['__NEXT_DATA__', /<script[^>]*id=["']__NEXT_DATA__["']/i],
   ['__PRELOADED_STATE__', /window\.__PRELOADED_STATE__\s*=/i],
   ['__INITIAL_STATE__', /window\.__INITIAL_STATE__\s*=/i],
@@ -68,9 +75,12 @@ function diagnose(html) {
   const blobsFound = BLOB_CHECKS.filter(([, re]) => re.test(html)).map(([name]) => name)
   return {
     blobsFound,
-    hasPropertyIdHint: /"propertyCode"|"property_id"|data-property-code=/i.test(html),
-    hasVideoHint: /videoUrl|video_url|\.mp4|\.webm|youtube\.com\/embed|player\.vimeo\.com/i.test(html),
-    hasSellerHint: /"seller"\s*:\s*\{|advertiser_id|"nickname"/i.test(html),
+    // Confirmado: property_code vive en seller_profile(.rex)?.bottom_extra_info,
+    // y el video real solo aparece como `has_video`+URL de modal, nunca como
+    // archivo embebido — estas pistas son solo un check rápido de presencia.
+    hasPropertyIdHint: /C[oó]digo de la propiedad|"propertyCode"|"property_id"|data-property-code=/i.test(html),
+    hasVideoHint: /"has_video"\s*:\s*true|videoUrl|video_url|\.mp4|\.webm|youtube\.com\/embed|player\.vimeo\.com/i.test(html),
+    hasSellerHint: /"seller_profile"|"seller"\s*:\s*\{|advertiser_id|"nickname"/i.test(html),
     lengthKb: Math.round(html.length / 1024),
   }
 }

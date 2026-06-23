@@ -1,22 +1,39 @@
 # Investigación: scraper de Portalinmobiliario.com (Chile) y resolución de identidad de propiedad
 
-> Fase de research/diseño. No incluye código de implementación.
-> Limitación de esta sesión: el sandbox bloqueó por allowlist las peticiones directas a
-> `portalinmobiliario.com`, `api.mercadolibre.com` y `developers.mercadolibre.com.ar` (403
-> vía fetch y vía `curl`). La evidencia viene de documentación oficial indexada, de dos
-> scrapers open-source funcionales y de un proveedor comercial (Apify) que vende este
-> scraping activamente. El primer paso de implementación debe ser un spike de fetch real
-> (fuera del sandbox) contra un anuncio concreto para confirmar lo que aquí se infiere.
+> Fase de research/diseño, con Fase 0 (spike de validación) ya confirmada contra 11 fichas
+> reales subidas por el usuario (no vía fetch en sandbox/entorno remoto, que sigue
+> bloqueando el dominio con 403 — ver "Confirmado en Fase 0" más abajo para lo verificado
+> y la sección de anti-bot para lo que aún no se ha medido en producción real).
 
 ## Estructura de datos y anti-bot
 
 Portalinmobiliario comparte el frontend "Andes" de Mercado Libre: clases `ui-search-layout__item`
-y `poly-component__title` en el listado, URLs de ficha con patrón `MLC-\d+`. Es una
-generación más moderna que los scrapers de hace una década (`media-block-title`,
-`data-sheet-column-address`), lo que sugiere un SPA tipo React/Next.js — razonable esperar
-un blob JSON embebido (`__NEXT_DATA__` o similar) en la ficha, a confirmar con un fetch
-real; de existir, sería preferible parsearlo en vez del DOM renderizado, igual que ya
-preferimos JSON-LD sobre HTML cuando Idealista lo expone.
+y `poly-component__title` en el listado, URLs de ficha con patrón `MLC-\d+`.
+
+**Confirmado en Fase 0 (11 fichas reales, ficha/detalle, comuna Vitacura):** la ficha NO
+usa `__NEXT_DATA__`/`__PRELOADED_STATE__`/`__INITIAL_STATE__` (cero matches en las 11
+muestras) — esa hipótesis original era incorrecta. El framework real es el "Nordic"
+interno de Mercado Libre: el estado completo de la página viene embebido como
+`<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={...}</script>`, un único blob JSON que
+requiere extracción brace-balanced (no regex `\{[\s\S]*?\}`, porque el blob contiene
+strings con `{`/`}` literales — descripciones, JSON escapado — que rompen los límites de
+un regex naive). Implementado en `scraper/lib/parse-portalinmobiliario.mjs::extractNordicBlob`.
+Dentro de ese blob, el dato vivo está en `blob.appProps.pageProps.initialState`, con dos
+sub-árboles centrales:
+- `state.track.melidata_event.event_data` — la fuente más rica: `domain_id` (codifica
+  operación+tipo, ej. `MLC-INDIVIDUAL_HOUSES_FOR_SALE`), `price`, `currency_id` (`CLF` =
+  UF), `city`, `seller_id`, `seller_type`.
+- `state.components.*` — árbol de componentes UI: `header` (título/dirección),
+  `location_and_points.map_info.location` (lat/lng reales, distintos por ficha),
+  `highlighted_specs_res.attributes[]` (dorm/baños/m², keyed por `icon.id`),
+  `seller_profile`/`seller_profile_rex` (agencia + `bottom_extra_info` con
+  "Código de la propiedad"), `code_internal` (referencia interna de la corredora,
+  mutuamente excluyente con `property_code` en las 11 muestras), `gallery_mosaic`
+  (fotos+video), `description`/`description_rex`.
+
+Esta es una generación más moderna que los scrapers de hace una década
+(`media-block-title`, `data-sheet-column-address`). El blob Nordic es preferible al DOM
+renderizado, igual que ya preferimos JSON-LD sobre HTML cuando Idealista lo expone.
 
 No hay evidencia de un DataDome-equivalente: un scraper open-source de 2023 usa simple
 `requests` + `BeautifulSoup4` sin proxies ni rotación de UA, sin mencionar bloqueos, y
@@ -107,18 +124,56 @@ con nivel de confianza, no una resolución determinista de una sola pasada.
 
 ## Apéndice — puntos abiertos para el spike de implementación
 
-- Confirmar si la ficha expone `__NEXT_DATA__` o similar (preferible a CSS selectors).
-- Confirmar si `/items/{id}` y `/sites/MLC/search` exigen `access_token` hoy; si sí,
-  evaluar si vale el registro OAuth dado que no resuelve el problema de ubicación.
-- Medir en vivo agresividad real del rate-limit (429 vs 403) y si hay WAF perimetral antes
-  de asumir que un UA de navegador normal basta indefinidamente.
+### Confirmado en Fase 0 (11 fichas reales)
+
+- ✅ La ficha expone un blob JSON embebido — `__NORDIC_RENDERING_CTX__`, no `__NEXT_DATA__`
+  (ver sección de anti-bot arriba para la ruta completa y los campos confirmados).
+- ✅ `property_code` ("Código de la propiedad") vive en
+  `seller_profile(.rex)?.bottom_extra_info[]`, formato variable (numérico o hash
+  alfanumérico según el sistema interno de cada corredora — confirmado, no es un bug).
+- ✅ El video **nunca** viaja embebido como archivo en el HTML estático de la ficha: solo
+  existe `gallery_mosaic.has_video` (booleano) y una URL de modal
+  (`gallery_mosaic.media_counters[type=video].url`,
+  `.../vis-modals/gallery/{item_id}?selected_tab=media_player`). Obtener el archivo real
+  requiere un fetch adicional a ese endpoint — pendiente para la Fase 2 (pipeline de
+  media), no resuelto por el parser de Fase 1.
+- ✅ Mismo patrón para fotos: el HTML estático embebe **siempre exactamente 5 fotos**
+  (`gallery_mosaic.primary` + 4 `secondary`) sin importar el total real del anuncio
+  (`gallery_mosaic.total_count`, observado entre 11 y 30 en las 11 muestras). Las fotos
+  restantes están detrás del mismo patrón de endpoint de modal
+  (`media_counters[type=photos].url`) — el parser ya expone `photos_total_count` y
+  `gallery_url` para que la Fase 2 sepa cuántas fotos le faltan ir a buscar por anuncio.
+- ✅ Lat/lng reales y distintos por ficha en
+  `components.location_and_points.map_info.location.{latitude,longitude}` — el fallback
+  regex previo (que devolvía la misma coordenada para todas las fichas) fue eliminado, no
+  reparado: no existe un fallback regex seguro y es preferible `null` a un valor
+  confiadamente incorrecto.
+- ✅ Dorm/baños/m² vía `components.highlighted_specs_res.attributes[]`, keyed por
+  `icon.id` ∈ {`BED`, `BATHROOM`, `SCALE_UP`} — el regex anterior basado en la clase CSS
+  `poly-component__attributes-item` nunca calza en la ficha de detalle (esa clase solo
+  existe en el listado).
+- ✅ `event_data.domain_id` resuelve operación+tipo de forma limpia (ej.
+  `MLC-APARTMENTS_FOR_RENT`) — mejor que inferir por slug de breadcrumb.
+
+### Aún abierto (no validado en esta Fase 0, ficha estática solamente)
+
+- No confirmado: si `/items/{id}` y `/sites/MLC/search` exigen `access_token` hoy. Sigue
+  sin ser prioritario porque la API tampoco resolvería el problema de ubicación no
+  confiable.
+- No confirmado: agresividad real de rate-limit (429 vs 403) o WAF perimetral con
+  concurrencia 3-5 — las 11 muestras fueron HTML ya descargado por el usuario, no un
+  barrido en vivo. Sigue siendo el bloqueante real antes de la Fase 2 a escala.
+- No confirmado: filtro de URL de listado para traer solo Departamento+Casa de RM (no se
+  subió HTML de listado en esta Fase 0, solo fichas de detalle — `parseListPage()` sigue
+  sin verificar contra HTML real).
 - Definir el umbral pin-vs-geocoder (propuesta inicial: 150 m) con una muestra real de
   decenas de anuncios, no solo el caso de ejemplo.
 - Decidir fuente de tipo de cambio UF→CLP diario y si se persiste también el valor UF
-  crudo.
+  crudo (ya implementado en `scraper/lib/uf-rate-cl.mjs`, pendiente de validar a escala).
 - Diseñar el esquema de `location_confidence` y cómo se propaga a `rc_status` (hoy binario
   `'none'` en España) — Chile probablemente necesita valores intermedios (`'candidate'`,
   `'pin_suspect'`, `'confirmed'`).
 - Validar si las republicaciones tras expirar (45 días en arriendo) cambian el ID MLC — de
   ser así, el job de triangulación debe agrupar por teléfono/RUT/pHash, nunca por ID de
-  anuncio.
+  anuncio. (`property_code`+`advertiser_id`, ya extraídos por el parser, son la base para
+  esto, pero la deduplicación a escala real sigue pendiente de la Fase 2/3.)

@@ -6,19 +6,45 @@
 // Portalinmobiliario comparte el frontend "Andes" de Mercado Libre: en el
 // listado, cada anuncio es un <li class="ui-search-layout__item"> con un
 // título en <h2 class="poly-component__title">; la ficha de detalle usa URLs
-// con patrón `MLC-\d+`. Fuente: docs/research-portalinmobiliario-chile.md.
+// con patrón `MLC-\d+`.
 //
-// HIPÓTESIS NO VERIFICADA (a confirmar con un spike real de red, el sandbox
-// de investigación bloqueó el fetch directo a portalinmobiliario.com): al ser
-// presumiblemente una SPA tipo React/Next.js, es probable que la ficha (y/o
-// el listado) incruste un blob JSON con el estado inicial — del tipo
-// `__NEXT_DATA__`, `__PRELOADED_STATE__`, o el equivalente propio de ML
-// ("ANDES" usa a veces `window.__PRELOADED_STATE__` en otras propiedades del
-// grupo). Si existe, es preferible parsear ese JSON en vez del DOM renderizado
-// (igual que con Idealista preferimos los objetos JS embebidos `config` /
-// `adMultimediasInfo` sobre regex de HTML puro). Por eso intentamos extraerlo
-// primero; si no aparece o no tiene la forma esperada, caemos a selectores
-// DOM con regex, igual que el resto del scraper.
+// CONFIRMADO (Fase 0, spike con 11 fichas reales descargadas manualmente —
+// __NEXT_DATA__/__PRELOADED_STATE__/__INITIAL_STATE__ NO existen en este
+// portal, esa hipótesis original era incorrecta): la ficha de detalle
+// incrusta el estado inicial de Mercado Libre ("Nordic", el framework interno
+// de ML) en `<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={...}</script>`.
+// El JSON real cuelga de `blob.appProps.pageProps.initialState`. Dentro de
+// `initialState`:
+//   - `track.melidata_event.event_data`: price, currency_id ("CLF" = UF),
+//     seller_id, seller_type, domain_id (ej. "MLC-HOUSES_FOR_RENT" → permite
+//     derivar operación + tipo de propiedad), city (comuna), neighborhood.
+//   - `components.header`: title, link_label.label.text (dirección visible).
+//   - `components.location_and_points.map_info`: location.{latitude,longitude}
+//     (las reales, no las del fallback regex anterior que devolvía siempre el
+//     mismo valor), item_address, item_location ("Comuna, Región").
+//   - `components.highlighted_specs_res.attributes[]`: dormitorios/baños/m²,
+//     identificados por `icon.id` ∈ {BED, BATHROOM, SCALE_UP} + `label.text`
+//     (la clase CSS `poly-component__attributes-item` que usábamos antes NO
+//     existe en la ficha de detalle, solo en el listado).
+//   - `components.seller_profile` (o `seller_profile_rex` en tiendas
+//     oficiales): seller_name.title.text (nombre agencia),
+//     bottom_extra_info[] con title.text "Código de la propiedad" →
+//     subtitles[0].text = property_code (referencia canónica de ML, persiste
+//     entre re-publicaciones).
+//   - `components.code_internal` (cuando existe, mutuamente excluyente con
+//     bottom_extra_info en las 11 fichas de muestra): label.text "Código
+//     interno <ref>" = referencia interna de la corredora (seller_reference).
+//   - `components.gallery_mosaic`: primary + secondary (siempre 5 fotos
+//     embebidas en el HTML estático, sin importar `total_count` real, que va
+//     de 11 a 30 en la muestra) + `has_video` + `media_counters[]` con la URL
+//     del modal `vis-modals/gallery/{item_id}` que trae el resto de fotos y,
+//     si existe, el reproductor de video. El video NUNCA aparece como URL de
+//     archivo directa en el HTML estático de la ficha — solo el booleano
+//     `has_video` y esa URL de modal; obtener el archivo real requiere un
+//     fetch adicional a ese endpoint (pendiente para Fase 2).
+//
+// Si el blob no aparece o no parsea, las funciones degradan a selectores DOM
+// con regex (best-effort) en vez de lanzar.
 //
 // Todas las funciones deben tolerar HTML inesperado: nunca lanzan, devuelven
 // `[]`/`null` cuando no pueden extraer nada coherente.
@@ -47,31 +73,52 @@ const toInt = (s) => {
   return Number.isFinite(n) ? n : null
 }
 
-// ─── Helper: extracción de blobs JSON embebidos tipo SPA ────────────────────
-// Busca `<script>` con alguno de los nombres de variable global habituales en
-// SPAs server-rendered. HIPÓTESIS NO VERIFICADA para este portal en concreto
-// (ver cabecera del archivo) — implementado de forma defensiva: si no
-// encuentra nada o el JSON no parsea, devuelve null sin lanzar.
-const EMBEDDED_BLOB_PATTERNS = [
-  /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i,
-  /window\.__PRELOADED_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i,
-  /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i,
-]
-
-function extractEmbeddedJson(html) {
+// ─── Helper: extracción del blob "Nordic" de Mercado Libre ──────────────────
+// `<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={...};self.__LOADABLE...`
+// El objeto puede contener strings con `{`/`}` (descripciones, JSON anidado
+// escapado), así que un regex no-greedy (`\{[\s\S]*?\}`) puede truncar antes
+// del cierre real o capturar de más. Se balancea por profundidad de llaves,
+// ignorando contenido dentro de strings (y comillas escapadas).
+function extractNordicBlob(html) {
   if (!html) return null
-  for (const re of EMBEDDED_BLOB_PATTERNS) {
-    const m = html.match(re)
-    if (!m) continue
-    try {
-      return JSON.parse(m[1])
-    } catch {
-      // Blob encontrado pero no parseable (truncado, JS no-JSON estricto…) —
-      // seguimos probando otros patrones / caemos a DOM.
+  const marker = html.match(/<script[^>]*id=["']__NORDIC_RENDERING_CTX__["'][^>]*>_n\.ctx\.r=/)
+  if (!marker) return null
+
+  const start = marker.index + marker[0].length
+  let depth = 0, inStr = false, esc = false, begin = -1
+  for (let i = start; i < html.length; i++) {
+    const c = html[i]
+    if (begin === -1) {
+      if (c === '{') { begin = i; depth = 1 }
       continue
+    }
+    if (inStr) {
+      if (esc) esc = false
+      else if (c === '\\') esc = true
+      else if (c === '"') inStr = false
+      continue
+    }
+    if (c === '"') inStr = true
+    else if (c === '{') depth++
+    else if (c === '}') {
+      depth--
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(begin, i + 1))
+        } catch {
+          return null
+        }
+      }
     }
   }
   return null
+}
+
+// `initialState` es donde vive todo lo útil; devolver directamente eso (o
+// null) para que el resto del parser no tenga que repetir la ruta completa.
+function extractInitialState(html) {
+  const blob = extractNordicBlob(html)
+  return blob?.appProps?.pageProps?.initialState ?? null
 }
 
 /**
@@ -144,29 +191,37 @@ export function parseListPage(html) {
  * los mismos campos "core" que produce parseDetailPage de Idealista (en lo
  * que aplique a Chile) o `null` si no se pudo extraer nada coherente.
  *
- * Prioriza el blob JSON embebido (ver extractEmbeddedJson) si existe;
- * de lo contrario cae a selectores DOM con regex.
+ * Prioriza el blob "Nordic" embebido (ver extractNordicBlob/extractInitialState)
+ * si existe; de lo contrario cae a selectores DOM con regex.
  */
 export function parseDetailPage(html, external_id) {
   try {
     if (!html) return null
 
-    const blob = extractEmbeddedJson(html)
-    // Forma de `__NEXT_DATA__.props.pageProps` u homólogo: NO CONFIRMADA.
-    // Tratamos el blob como bolsa de pistas best-effort, nunca como fuente
-    // única obligatoria.
-    const blobItem = blob?.props?.pageProps?.item ?? blob?.item ?? null
+    const state = extractInitialState(html)
+    const comps = state?.components ?? {}
+    const eventData = state?.track?.melidata_event?.event_data ?? null
+    const sellerProfile = comps.seller_profile ?? comps.seller_profile_rex ?? comps.fixed?.seller_profile ?? comps.fixed?.seller_profile_rex ?? null
+    const mapInfo = comps.location_and_points?.map_info ?? null
 
     const titleM = html.match(/<title>([^<]*)<\/title>/)
-    const title = blobItem?.title ?? (titleM ? decode(titleM[1]).replace(/\s*[|-]\s*Portalinmobiliario.*$/i, '') : null)
+    const title = comps.header?.title ?? (titleM ? decode(titleM[1]).replace(/\s*[|-]\s*Portalinmobiliario.*$/i, '') : null)
 
-    const operation = blobItem?.operation ??
-      (/arriendo|arrendar/i.test(`${title ?? ''} ${html.slice(0, 2000)}`) ? 'rent' : 'sale')
+    // domain_id (ej. "MLC-HOUSES_FOR_RENT" / "MLC-INDIVIDUAL_HOUSES_FOR_SALE")
+    // codifica operación + tipo de propiedad de forma inequívoca.
+    const domainId = eventData?.domain_id ?? ''
+    const operation = /FOR_RENT/i.test(domainId) ? 'rent'
+      : /FOR_SALE/i.test(domainId) ? 'sale'
+      : (/arriendo|arrendar/i.test(`${title ?? ''} ${html.slice(0, 2000)}`) ? 'rent' : 'sale')
+    const property_type = /APARTMENT/i.test(domainId) ? 'departamento'
+      : /HOUSE/i.test(domainId) ? 'casa'
+      : null
 
-    // Precio: preferimos el blob; fallback a regex sobre el bloque de precio
-    // de Andes (mismo patrón que en el listado).
-    let price = blobItem?.price?.amount ?? null
-    let currency = blobItem?.price?.currency_id ?? null
+    // Precio: `event_data.price` es el monto crudo (sin formatear) y
+    // `currency_id` viene como código ISO ("CLF" = Unidad de Fomento, no el
+    // literal "UF") — normalizamos a la convención del resto del scraper.
+    let price = eventData?.price ?? null
+    let currency = eventData?.currency_id === 'CLF' ? 'UF' : (eventData?.currency_id ?? null)
     if (price == null) {
       const priceBlockM = html.match(/andes-money-amount__fraction[^>]*>([\d.,]+)/)
       price = priceBlockM ? toInt(priceBlockM[1]) : null
@@ -174,104 +229,105 @@ export function parseDetailPage(html, external_id) {
     }
     currency = currency ?? 'CLP'
 
-    // Coordenadas: el pin "declarado por el vendedor" — el dato a triangular
-    // después, no a confiar ciegamente (ver research, sección de resolución
-    // de identidad). Buscamos en el blob o en un mapa estático embebido.
-    let latitude = blobItem?.location?.latitude ?? null
-    let longitude = blobItem?.location?.longitude ?? null
-    if (latitude == null || longitude == null) {
-      const coordM = html.match(/"latitude"\s*:\s*(-?\d+\.\d+)[\s\S]{0,80}?"longitude"\s*:\s*(-?\d+\.\d+)/)
-      if (coordM) {
-        latitude = parseFloat(coordM[1])
-        longitude = parseFloat(coordM[2])
-      }
+    // Coordenadas reales declaradas por el vendedor (a triangular después,
+    // ver identity-resolution-cl.mjs) — confirmado en
+    // `location_and_points.map_info.location`, distinto por cada ficha.
+    const loc = mapInfo?.location ?? null
+    const latitude = loc?.latitude != null ? parseFloat(loc.latitude) : null
+    const longitude = loc?.longitude != null ? parseFloat(loc.longitude) : null
+
+    // Dormitorios/baños/m²: `highlighted_specs_res.attributes[]`, cada uno
+    // con `icon.id` ∈ {BED, BATHROOM, SCALE_UP} y `label.text` (ej. "5 dorm.",
+    // "3 baños", "374 m² totales"). La clase CSS usada antes
+    // (poly-component__attributes-item) solo existe en el listado.
+    let bedrooms = null, bathrooms = null, square_meters = null
+    const specAttrs = comps.highlighted_specs_res?.attributes ?? comps.fixed?.highlighted_specs_res?.attributes ?? []
+    for (const a of specAttrs) {
+      const iconId = a?.icon?.id
+      const text = a?.label?.text
+      if (!text) continue
+      if (iconId === 'BED') bedrooms = toInt(text)
+      else if (iconId === 'BATHROOM') bathrooms = toInt(text)
+      else if (iconId === 'SCALE_UP') square_meters = toInt(text)
     }
 
-    // Atributos estructurados (dormitorios, baños, m², tipo). Sin confirmar
-    // contra HTML real; nombres de atributos siguiendo la convención ML
-    // (BEDROOMS, FULL_BATHROOMS, COVERED_AREA) documentada en research.
-    const attrs = [...html.matchAll(/poly-component__attributes-item[^>]*>([^<]+)</g)].map((m) => decode(m[1]))
-    let bedrooms = blobItem?.attributes?.BEDROOMS ?? null
-    let bathrooms = blobItem?.attributes?.FULL_BATHROOMS ?? null
-    let square_meters = blobItem?.attributes?.COVERED_AREA ?? null
-    for (const a of attrs) {
-      if (bedrooms == null && /dormitorio|habitaci/i.test(a)) bedrooms = toInt(a)
-      if (bathrooms == null && /baño/i.test(a)) bathrooms = toInt(a)
-      if (square_meters == null && /m²|m2/i.test(a)) square_meters = toInt(a)
-    }
+    // Comuna/dirección: `event_data.city` es la comuna ya limpia; respaldo en
+    // `map_info.item_location` ("Comuna, Región"). Dirección desde
+    // `map_info.item_address`, con la línea visible del header como respaldo.
+    const itemLocation = mapInfo?.item_location ?? null
+    const comuna = eventData?.city || (itemLocation ? itemLocation.split(',')[0].trim() : null) || null
+    const itemAddress = mapInfo?.item_address?.trim()
+    const headerAddress = comps.header?.link_label?.label?.text?.replace(/^,\s*/, '').trim()
+    const address = itemAddress || headerAddress || null
 
-    // Comuna/dirección: Portalinmobiliario usa "comuna" en vez de
-    // barrio/distrito. Sin selector confirmado; intento best-effort sobre
-    // breadcrumbs o bloque de ubicación típico de Andes.
-    const addrM = html.match(/ui-pdp-media__title|ui-vip-location[^>]*>([^<]+)</)
-    const address = blobItem?.location?.address_line ?? (addrM ? decode(addrM[1]) : null)
-    const comunaM = html.match(/"comuna"\s*:\s*"([^"]+)"/i) || html.match(/breadcrumb[\s\S]{0,300}?>([^<,]+),\s*Región/i)
-    const comuna = blobItem?.location?.city?.name ?? (comunaM ? decode(comunaM[1]) : null)
-
-    // Fotos: el carrusel de Andes en ficha usa <img ... data-zoom="...">
-    // o `srcset` con URLs http2.mlstatic.com. Sin confirmar.
+    // Fotos: `gallery_mosaic.primary` + `.secondary` — el HTML estático SOLO
+    // trae estas (siempre 5 en la muestra real), sin importar `total_count`
+    // (visto entre 11 y 30). El resto vive detrás del modal de galería
+    // (`media_counters[].url`), pendiente de un fetch adicional (Fase 2).
+    const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
     const photos = []
     const seenPhotos = new Set()
-    for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|webp))"/g)) {
-      if (!seenPhotos.has(m[1])) { seenPhotos.add(m[1]); photos.push(m[1]) }
-    }
+    const addPhoto = (url) => { if (url && !seenPhotos.has(url)) { seenPhotos.add(url); photos.push(url) } }
+    if (gallery?.primary?.src) addPhoto(gallery.primary.src)
+    for (const p of gallery?.secondary ?? []) addPhoto(p?.src)
     if (photos.length === 0) {
-      for (const m of html.matchAll(/(https?:\/\/http2\.mlstatic\.com\/[^\s"']+\.(?:jpg|webp))/g)) {
-        if (!seenPhotos.has(m[1])) { seenPhotos.add(m[1]); photos.push(m[1]) }
+      // Sin blob: último recurso, regex sobre el HTML renderizado.
+      for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|webp))"/g)) addPhoto(m[1])
+      if (photos.length === 0) {
+        for (const m of html.matchAll(/(https?:\/\/http2\.mlstatic\.com\/[^\s"']+\.(?:jpg|webp))/g)) addPhoto(m[1])
       }
     }
+    const photosTotalCount = gallery?.total_count ?? (photos.length || null)
+    const galleryMediaCounters = gallery?.media_counters ?? []
+    const galleryUrl = galleryMediaCounters.find((m) => m?.type === 'photos')?.url ?? null
+    const hasVideo = gallery?.has_video ?? false
+    const videoModalUrl = galleryMediaCounters.find((m) => m?.type === 'video')?.url ?? null
 
-    const advertiser_name = blobItem?.seller?.nickname ?? null
-    const advertiser_id = blobItem?.seller?.id ?? null
-    const advertiser_type = blobItem?.seller?.user_type === 'normal' ? 'particular' : (advertiser_name ? 'professional' : 'unknown')
-
-    // Extracción de video: preferir blob, fallback a regex como en Idealista
+    // Video: confirmado que el archivo real NUNCA aparece como URL directa en
+    // el HTML estático de la ficha — solo el booleano `has_video` y la URL
+    // del modal (`video_modal_url`). Mantenemos un intento best-effort por si
+    // alguna ficha sí lo incrusta (ej. tour 360°/iframe embebido).
     const videos = []
     const videoSet = new Set()
-
-    // Buscar en arrays conocidos del blob
-    if (blobItem) {
-      for (const key of ['videos', 'video', 'videoList', 'media']) {
-        const videosArr = blobItem[key]
-        if (Array.isArray(videosArr)) {
-          for (const v of videosArr) {
-            const url = v?.url ?? v?.src ?? v?.videoUrl ?? v?.videoLocation ?? v
-            if (typeof url === 'string' && /\.(?:mp4|webm|mov)|youtube|vimeo|mlstatic/i.test(url) && !videoSet.has(url)) {
-              videoSet.add(url)
-              videos.push(url)
-            }
-          }
-        }
-      }
+    for (const m of html.matchAll(/"(?:videoUrl|video_url|url)":\s*"(https?:\/\/[^"]+\.(?:mp4|webm|mov)|(?:youtube|vimeo)[^"]*)"/g)) {
+      const url = m[1]
+      if (!videoSet.has(url)) { videoSet.add(url); videos.push(url) }
     }
-
-    // Fallback a regex: buscar URLs de video en el HTML/JSON
     if (videos.length === 0) {
-      for (const m of html.matchAll(/"(?:videoUrl|video_url|url)":\s*"(https?:\/\/[^"]+\.(?:mp4|webm|mov)|(?:youtube|vimeo)[^"]*)"[\s\S]{0,200}?(?="video|")|(?=,)/g)) {
+      for (const m of html.matchAll(/(https?:\/\/[^"']+mlstatic\.com\/[^\s"']*\.(?:mp4|webm|mov))/gi)) {
         const url = m[1]
         if (!videoSet.has(url)) { videoSet.add(url); videos.push(url) }
       }
-      // Último intento: URLs mlstatic de video
-      if (videos.length === 0) {
-        for (const m of html.matchAll(/(https?:\/\/[^"']+mlstatic\.com\/[^\s"']*\.(?:mp4|webm|mov))/gi)) {
-          const url = m[1]
-          if (!videoSet.has(url)) { videoSet.add(url); videos.push(url) }
-        }
+    }
+
+    const advertiser_name = sellerProfile?.seller_name?.title?.text ?? null
+    const advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    const sellerType = eventData?.seller_type ?? null
+    const advertiser_type = sellerType
+      ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')
+      : (advertiser_name ? 'professional' : 'unknown')
+
+    // Property code (referencia canónica de ML, persiste en re-publicaciones):
+    // `seller_profile(.rex)?.bottom_extra_info[]` con título "Código de la
+    // propiedad" → subtitles[0].text.
+    let property_code = null
+    for (const item of sellerProfile?.bottom_extra_info ?? []) {
+      if (/c[oó]digo de la propiedad/i.test(item?.title?.text ?? '')) {
+        property_code = item?.subtitles?.[0]?.text ?? null
+        break
       }
     }
 
-    // Property code (referencia canónica que persiste en republicas): buscar en blob o HTML
-    let property_code = blobItem?.id ?? blobItem?.property_id ?? blobItem?.propertyCode ?? null
-    if (!property_code) {
-      // Intento en HTML: puede estar en data-* o en JSON
-      const propCodeM = html.match(/"(?:property[_-]?)?[iI]d"\s*:\s*(\d+)/) ||
-                        html.match(/data-property-code="([^"]+)"/) ||
-                        html.match(/"propertyCode"\s*:\s*"?(\d+)"?/)
-      property_code = propCodeM ? propCodeM[1] : null
-    }
+    // Seller reference (referencia interna de la corredora en su CRM):
+    // componente `code_internal`, label "Código interno <ref>". En la
+    // muestra real es mutuamente excluyente con `bottom_extra_info` (nunca
+    // aparecen ambos en la misma ficha).
+    const codeInternalLabel = comps.code_internal?.label?.text ?? comps.fixed?.code_internal?.label?.text ?? null
+    const seller_reference = codeInternalLabel
+      ? codeInternalLabel.replace(/^c[oó]digo interno\s*/i, '').trim() || null
+      : null
 
-    // Seller reference (referencia interna de la corredora)
-    const seller_reference = blobItem?.seller?.reference ?? blobItem?.seller?.reference_id ?? null
+    const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
     return {
       external_id,
@@ -280,19 +336,24 @@ export function parseDetailPage(html, external_id) {
       source_type: 'portal',
       source_url: `https://www.portalinmobiliario.com/${external_id}`,
       operation,
+      property_type,
       title,
       price, currency,
-      square_meters: square_meters != null ? toInt(square_meters) : null,
-      bedrooms: bedrooms != null ? toInt(bedrooms) : null,
-      bathrooms: bathrooms != null ? toInt(bathrooms) : null,
+      square_meters,
+      bedrooms,
+      bathrooms,
       latitude, longitude,
       address, comuna,
       advertiser_name, advertiser_type,
       advertiser_id,
       seller_reference,
       photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
-      videos: videos.length > 0 ? videos[0] : null,  // Primer video si existe
-      description: blobItem?.description?.plain_text ?? null,
+      photos_total_count: photosTotalCount,  // total real declarado por el portal (puede ser > 30)
+      gallery_url: galleryUrl,  // endpoint del modal con la galería completa (Fase 2: descarga real)
+      has_video: hasVideo,
+      video_modal_url: videoModalUrl,  // el archivo real no está en el HTML estático, solo este modal
+      videos,  // URLs de video directas si alguna vez aparecen embebidas (raro)
+      description,
     }
   } catch {
     // Estructura inesperada de la ficha: degradar a `null`, igual que un

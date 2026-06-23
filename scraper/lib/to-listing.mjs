@@ -139,13 +139,24 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Resuelve el precio en CLP de una fila scrapeada. Devuelve null si no hay
- * suficiente información (ni price_clp ni price_uf+ufRate).
+ * Resuelve el precio en CLP de una fila scrapeada. `parseDetailPage` entrega
+ * `price`+`currency` (no `price_clp`/`price_uf` separados); si la fila ya
+ * trae esos campos explícitos se respetan, si no se derivan de `currency`.
+ * Devuelve null si no hay suficiente información (anuncio en UF sin tasa).
  */
 function resolvePriceClp(row, ufRate) {
   if (row.price_clp != null) return Math.round(row.price_clp)
   if (row.price_uf != null && ufRate != null) return Math.round(row.price_uf * ufRate)
+  if (row.price != null) {
+    if (row.currency === 'UF') return ufRate != null ? Math.round(row.price * ufRate) : null
+    return Math.round(row.price)
+  }
   return null
+}
+
+function resolvePriceUf(row) {
+  if (row.price_uf != null) return row.price_uf
+  return row.currency === 'UF' ? row.price ?? null : null
 }
 
 export function toAppListingCl(row, { zoneSlug, ufRate, ufRateDate, today = new Date().toISOString().slice(0, 10) } = {}) {
@@ -173,8 +184,9 @@ export function toAppListingCl(row, { zoneSlug, ufRate, ufRateDate, today = new 
       .replace(/\s*[|-]\s*Portalinmobiliario.*$/i, '')
       .trim() || `Inmueble ${row.external_id}`,
     operation: row.operation,
+    property_type: row.property_type ?? null,
     price,
-    price_uf: row.price_uf ?? null,
+    price_uf: resolvePriceUf(row),
     uf_rate: ufRate ?? null,
     // Fecha de la serie UF usada para la conversión (ver getUfRateCl en
     // uf-rate-cl.mjs) — null si no se necesitó conversión (anuncio ya en CLP).
