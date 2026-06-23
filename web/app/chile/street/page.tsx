@@ -6,7 +6,7 @@ import nextDynamic from 'next/dynamic'
 import Link from 'next/link'
 import {
   Search, X, ChevronLeft, Loader2, MapPin, Home, Building2,
-  Landmark, AlertCircle, ArrowLeft, ExternalLink,
+  Landmark, AlertCircle, ArrowLeft, ExternalLink, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 
 const StreetViewMap = nextDynamic(() => import('@/components/map/StreetViewMap'), { ssr: false })
@@ -94,6 +94,7 @@ export default function StreetPage() {
   const [pinCoords, setPinCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [pinGeojson, setPinGeojson] = useState<object | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [panelOpen, setPanelOpen] = useState(true)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── búsqueda con debounce ────────────────────────────────────────────────
@@ -172,7 +173,9 @@ export default function StreetPage() {
     <div className="flex h-screen bg-[var(--c-bg)] overflow-hidden">
 
       {/* ── panel izquierdo ──────────────────────────────────────────────── */}
-      <div className="w-[380px] flex-shrink-0 flex flex-col border-r border-[var(--c-border-card)] bg-[var(--c-bg)] z-10">
+      <div
+        className={`${panelOpen ? 'w-[380px]' : 'w-0'} flex-shrink-0 flex flex-col border-r border-[var(--c-border-card)] bg-[var(--c-bg)] z-10 overflow-hidden transition-[width] duration-200`}
+      >
 
         {/* header */}
         <div className="px-4 pt-4 pb-3 border-b border-[var(--c-border-card)]">
@@ -386,6 +389,14 @@ export default function StreetPage() {
 
       {/* ── mapa ─────────────────────────────────────────────────────────── */}
       <div className="flex-1 relative">
+        {/* toggle panel */}
+        <button
+          onClick={() => setPanelOpen((v) => !v)}
+          className="absolute top-4 left-4 z-[1000] bg-black/60 backdrop-blur border border-white/10 text-white/80 hover:text-white hover:bg-black/80 rounded-lg p-2 transition-colors shadow-lg"
+          title={panelOpen ? 'Ocultar panel' : 'Mostrar panel'}
+        >
+          {panelOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+        </button>
         <StreetViewMap
           center={mapCenter}
           zoom={mapZoom}
