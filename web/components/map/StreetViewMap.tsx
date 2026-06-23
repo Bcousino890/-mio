@@ -16,6 +16,7 @@ interface Props {
   pin?: StreetViewPin | null
   comunaCode?: string | null
   onParcelClick?: (props: { rol: string; sii_comuna_code: string; comuna_name: string }) => void
+  onZoomChange?: (zoom: number) => void
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,7 +30,7 @@ function loadLeaflet() {
 
 const MIN_ZOOM_PARCELS = 15  // solo cargar predios con zoom ≥ 15
 
-export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onParcelClick }: Props) {
+export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onParcelClick, onZoomChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -42,6 +43,8 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
   const loadingRef = useRef(false)
   const onParcelClickRef = useRef(onParcelClick)
   onParcelClickRef.current = onParcelClick
+  const onZoomChangeRef = useRef(onZoomChange)
+  onZoomChangeRef.current = onZoomChange
 
   // Cargar predios del viewport
   async function loadParcels() {
@@ -120,6 +123,7 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
 
       // Cargar predios al mover/hacer zoom
       map.on('moveend zoomend', () => {
+        onZoomChangeRef.current?.(map.getZoom())
         if (parcelLayerRef.current) { parcelLayerRef.current.remove(); parcelLayerRef.current = null }
         if (map.getZoom() >= MIN_ZOOM_PARCELS) loadParcels()
       })
