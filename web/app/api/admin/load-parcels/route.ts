@@ -110,27 +110,38 @@ try:
     )
     gdf = gdf[gdf['geom'].notna()]
 
-    # cadastre_parcels_cl (ver 0020_cadastre_chile.sql) usa comuna_id (FK a
-    # chile_comunas), no una columna sii_comuna_code directa. El código
-    # numérico del nombre de archivo (ej. "Lo_Barnechea_15161") no es
-    # confiable como sii_comuna_code (ver 0022-0027), así que la comuna se
-    # resuelve por nombre.
     stem = os.path.splitext(file_name)[0]
-    # quita prefijo timestamp_hash_ que agrega upload-raw (ej: 1782183311127_7e423f03_)
     stem = re.sub(r'^\\d+_[0-9a-f]+_', '', stem)
-    # quita el sufijo " (1)" que agregan navegadores/SO al re-descargar un archivo
-    stem = re.sub(r'\\s*\\(\\d+\\)\\s*$', '', stem)
+    stem = re.sub(r'[_\\s]*\\(\\d+\\)\\s*$', '', stem)
     stem = re.sub(r'_+', '_', stem).strip('_')
-    comuna_name = re.sub(r'[_\\s]*\\d+\\s*$', '', stem).replace('_', ' ').strip()
+    code_match = re.search(r'_(\\d{4,5})$', stem)
+    sii_code = code_match.group(1) if code_match else None
+    comuna_name = re.sub(r'_\\d+$', '', stem).replace('_', ' ').strip()
+
+    import unicodedata
+    def no_accent(s):
+        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn').lower()
 
     engine = sa.create_engine(db_url)
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT id FROM chile_comunas WHERE name ILIKE :n"),
-            {"n": comuna_name},
-        ).fetchone()
+        row = None
+        if sii_code:
+            row = conn.execute(
+                text("SELECT id FROM chile_comunas WHERE sii_comuna_code = :c"),
+                {"c": sii_code},
+            ).fetchone()
         if row is None:
-            print(f"ERR:No se encontró la comuna '{comuna_name}' (de archivo {file_name}) en chile_comunas")
+            row = conn.execute(
+                text("SELECT id FROM chile_comunas WHERE name ILIKE :n"),
+                {"n": comuna_name},
+            ).fetchone()
+        if row is None:
+            all_rows = conn.execute(text("SELECT id, name FROM chile_comunas")).fetchall()
+            match = next((r for r in all_rows if no_accent(r[1]) == no_accent(comuna_name)), None)
+            if match:
+                row = match
+        if row is None:
+            print(f"ERR:No se encontró la comuna '{comuna_name}' (código {sii_code}, archivo {file_name}) en chile_comunas")
             sys.exit(0)
         comuna_id = str(row[0])
 
