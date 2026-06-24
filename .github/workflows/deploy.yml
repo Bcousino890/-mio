@@ -84,6 +84,22 @@ jobs:
               echo "🔑 POSTGRES_PASSWORD generado aleatoriamente"
             fi
 
+            # SmartProxy Chile (SMARTPROXY_CL_*): si están definidos como secrets
+            # del repo, se sincronizan al .env del VPS en cada deploy (si no, no
+            # se toca nada — sigue funcionando como antes). Así rotar el secret
+            # en GitHub alcanza, sin entrar por SSH a editar el .env a mano.
+            upsert_env() {
+              local key="$1" val="$2"
+              [ -z "$val" ] && return
+              grep -v "^${key}=" .env > .env.tmp || true
+              mv .env.tmp .env
+              echo "${key}=${val}" >> .env
+            }
+            upsert_env "SMARTPROXY_CL_HOST" "${{ secrets.SMARTPROXY_CL_HOST }}"
+            upsert_env "SMARTPROXY_CL_PORT" "${{ secrets.SMARTPROXY_CL_PORT }}"
+            upsert_env "SMARTPROXY_CL_USER" "${{ secrets.SMARTPROXY_CL_USER }}"
+            upsert_env "SMARTPROXY_CL_PASS" "${{ secrets.SMARTPROXY_CL_PASS }}"
+
             # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
             if docker ps --format '{{.Names}}' | grep -q casafari-app; then
               echo "▶ Deploy incremental (app ya existe)"
