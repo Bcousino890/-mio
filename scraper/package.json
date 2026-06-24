@@ -8,10 +8,13 @@
     "scrape": "node scrape-zone.mjs"
   },
   "dependencies": {
-    "pg": "^8.13.1",
-    "sharp": "^0.33.0",
-    "pg-boss": "^10.1.0",
+    "axios": "^1.18.1",
+    "cheerio": "^1.2.0",
     "graphology": "^0.25.4",
-    "graphology-components": "^1.0.0"
+    "graphology-components": "^1.0.0",
+    "pg": "^8.13.1",
+    "pg-boss": "^10.1.0",
+    "playwright": "^1.61.1",
+    "sharp": "^0.33.0"
   }
 }
