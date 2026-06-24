@@ -34,6 +34,8 @@ function transformChileRow(row: any): Listing {
     price,
     square_meters: row.square_meters || 0,
     price_sqm: row.price_sqm || 0,
+    bedrooms: row.bedrooms || 0,
+    bathrooms: row.bathrooms || 0,
     zone_name: row.comuna_name || 'Sin comuna',
     portal,
     source_type: 'portal' as const,
