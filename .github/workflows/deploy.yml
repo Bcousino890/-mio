@@ -99,6 +99,8 @@ jobs:
             upsert_env "SMARTPROXY_CL_PORT" "${{ secrets.SMARTPROXY_CL_PORT }}"
             upsert_env "SMARTPROXY_CL_USER" "${{ secrets.SMARTPROXY_CL_USER }}"
             upsert_env "SMARTPROXY_CL_PASS" "${{ secrets.SMARTPROXY_CL_PASS }}"
+            upsert_env "DEALERNET_USER" "${{ secrets.DEALERNET_USER }}"
+            upsert_env "DEALERNET_PASSWORD" "${{ secrets.DEALERNET_PASSWORD }}"
 
             # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
             if docker ps --format '{{.Names}}' | grep -q casafari-app; then
