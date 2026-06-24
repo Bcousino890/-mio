@@ -6,11 +6,24 @@
 // Policy de Nominatim (https://operations.osmfoundation.org/policies/nominatim/):
 // User-Agent identificable obligatorio + máximo ~1 req/s. Rate-limiter en
 // memoria single-process; no coordina entre procesos.
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 const USER_AGENT = 'casafari-mio-web/1.0 (contacto@casafari-mio.local)'
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
 const MIN_INTERVAL_MS = 1100
 const TIMEOUT_MS = 8000
+
+// Cuenta SmartProxy dedicada a Chile (SMARTPROXY_CL_*) — separada de
+// SMARTPROXY_PROXY_* (que sigue siendo la cuenta de España/Idealista usada
+// por scraper/lib/fetch.mjs), para no romper ese scraping al rotar esta.
+function proxyUrl(): string | null {
+  if (process.env.PROXY_URL) return process.env.PROXY_URL
+  const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
+  if (SMARTPROXY_CL_USER) {
+    return `http://${SMARTPROXY_CL_USER}:${SMARTPROXY_CL_PASS}@${SMARTPROXY_CL_HOST}:${SMARTPROXY_CL_PORT}`
+  }
+  return null
+}
 
 let lastRequestAt = 0
 let queue: Promise<unknown> = Promise.resolve()
@@ -35,9 +48,11 @@ export interface GeoPoint {
 async function nominatimSearch(query: string): Promise<GeoPoint | null> {
   const url = `${NOMINATIM_URL}?q=${encodeURIComponent(query)}&format=json&limit=1&accept-language=es&countrycodes=cl`
   try {
-    const res = await fetch(url, {
+    const px = proxyUrl()
+    const res = await undiciFetch(url, {
       headers: { 'User-Agent': USER_AGENT },
       signal: AbortSignal.timeout(TIMEOUT_MS),
+      dispatcher: px ? new ProxyAgent(px) : undefined,
     })
     if (!res.ok) return null
     const data = await res.json()

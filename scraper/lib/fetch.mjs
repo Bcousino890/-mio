@@ -37,7 +37,7 @@ const DEFAULT_PROFILE = 'idealista'
 
 const TIMEOUT_S = 25
 
-function proxyUrl() {
+function proxyUrl(profile) {
   // SMARTPROXY_URL: URL completa de API Smartproxy (Extracción API)
   // Ej: https://api.smartproxy.com/v2/proxy?cc=CL&city=Santiago&...
   if (process.env.SMARTPROXY_URL) {
@@ -46,6 +46,16 @@ function proxyUrl() {
     return process.env.SMARTPROXY_URL
   }
   if (process.env.PROXY_URL) return process.env.PROXY_URL
+
+  // Cuenta SmartProxy dedicada a Chile (geo-targeting CL/Santiago), separada
+  // de la cuenta SMARTPROXY_PROXY_* de España/Idealista para no mezclarlas.
+  if (profile === 'portalinmobiliario') {
+    const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
+    if (SMARTPROXY_CL_USER) {
+      return `http://${SMARTPROXY_CL_USER}:${SMARTPROXY_CL_PASS}@${SMARTPROXY_CL_HOST}:${SMARTPROXY_CL_PORT}`
+    }
+  }
+
   const { PROXY_PROVIDER, SMARTPROXY_PROXY_HOST, SMARTPROXY_PROXY_PORT,
           SMARTPROXY_PROXY_USER, SMARTPROXY_PROXY_PASS,
           GEONODE_PROXY_HOST, GEONODE_PROXY_PORT, GEONODE_PROXY_USER, GEONODE_PROXY_PASS } = process.env
@@ -75,7 +85,7 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
       '-A', ua,
       '-w', '\n__HTTP_STATUS__:%{http_code}',
     ]
-    const px = useProxy ? proxyUrl() : null
+    const px = useProxy ? proxyUrl(profile) : null
     if (px) args.push('-x', px)
     args.push(url)
 
