@@ -6,7 +6,8 @@ import Link from 'next/link'
 import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
-  BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock
+  BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
+  Phone, MessageCircle
 } from 'lucide-react'
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
@@ -126,6 +127,12 @@ export default function CatastroPage() {
   const [selectedRol, setSelectedRol] = useState<any>(null)
   const [rolDetail, setRolDetail] = useState<any>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  // DealerNet (contactabilidad / directorio teléfonos del propietario)
+  const [dealernetContact, setDealernetContact] = useState<any>(null)
+  const [dealernetPhones, setDealernetPhones] = useState<any[]>([])
+  const [dealernetLoading, setDealernetLoading] = useState(false)
+  const [dealernetError, setDealernetError] = useState<string | null>(null)
+  const [dealernetRutInput, setDealernetRutInput] = useState('')
   // Building units state
   const [buildingUnits, setBuildingUnits] = useState<any[]>([])
   const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
@@ -195,6 +202,49 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setDetailLoading(false))
   }, [selectedRol, zone.siiCode])
+
+  // Fetch contacto DealerNet ya guardado para este rol (cache — no vuelve a
+  // golpear el web service hasta que el usuario pida "Actualizar")
+  useEffect(() => {
+    setDealernetContact(null)
+    setDealernetPhones([])
+    setDealernetError(null)
+    setDealernetRutInput('')
+    if (!selectedRol || !zone.siiCode) return
+    fetch(`/api/chile/dealernet-lookup?sii_rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && d.contact) {
+          setDealernetContact(d.contact)
+          setDealernetPhones(d.phones ?? [])
+        }
+      })
+      .catch(() => {})
+  }, [selectedRol, zone.siiCode])
+
+  const searchDealernet = useCallback((rutOverride?: string) => {
+    if (!selectedRol || !zone.siiCode) return
+    const rut = (rutOverride ?? dealernetRutInput).trim()
+    if (!rut) return
+    setDealernetLoading(true)
+    setDealernetError(null)
+    fetch('/api/chile/dealernet-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setDealernetContact({ nombre_titular: d.nombre_titular, retcode: d.retcode, retmsg: d.retmsg })
+          setDealernetPhones(d.phones ?? [])
+        } else {
+          setDealernetError(d.error ?? 'Error consultando DealerNet')
+        }
+      })
+      .catch(() => setDealernetError('Error de red consultando DealerNet'))
+      .finally(() => setDealernetLoading(false))
+  }, [selectedRol, zone.siiCode, dealernetRutInput])
 
   // Fetch building units when user clicks "Ver departamentos"
   const loadBuildingUnits = useCallback((rolPadre: string) => {
@@ -474,14 +524,71 @@ export default function CatastroPage() {
                       </div>
                     </div>
 
-                    {/* Propietario — no disponible vía SII. El certificado de TGR sí lo
-                        incluye, pero su formulario está protegido con reCAPTCHA v3 y solo
-                        está pensado para consulta manual puntual — por eso se enlaza en vez
-                        de automatizarse. */}
+                    {/* Propietario — el SII solo entrega el nombre (no RUT, no
+                        teléfono). Para contactabilidad se consulta DealerNet por RUT
+                        (ingresado a mano, ya que no hay búsqueda inversa por dirección
+                        en su protocolo) y el resultado se guarda en BD para no repetir
+                        la consulta cada vez que se abre la ficha. El Certificado de TGR
+                        sigue de fallback manual (su formulario tiene reCAPTCHA). */}
                     <div>
                       <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Propietario</p>
-                      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 space-y-2">
-                        <p className="text-[11px] text-slate-600">No disponible en SII. El Certificado de Deuda de Contribuciones de TGR incluye el nombre del propietario por rol — consulta manual (protegida con reCAPTCHA).</p>
+                      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 space-y-2.5">
+                        {rolDetail.rol?.nombre_propietario && (
+                          <div>
+                            <p className="text-[10px] text-slate-600">Nombre (SII)</p>
+                            <p className="text-[11px] text-slate-300 font-medium">{rolDetail.rol.nombre_propietario}</p>
+                          </div>
+                        )}
+
+                        {(dealernetContact?.nombre_titular) && (
+                          <div>
+                            <p className="text-[10px] text-slate-600">Titular (DealerNet)</p>
+                            <p className="text-[11px] text-slate-300 font-medium">{dealernetContact.nombre_titular}</p>
+                          </div>
+                        )}
+
+                        {dealernetPhones.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-slate-600">Teléfonos</p>
+                            {dealernetPhones.map((p: any, i: number) => (
+                              <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                                <Phone size={11} className="text-slate-500 flex-shrink-0" />
+                                <span className="font-mono text-slate-200">{p.phone_e164}</span>
+                                {p.ind_whatsapp && <MessageCircle size={11} className="text-green-500 flex-shrink-0" aria-label="WhatsApp" />}
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded ${p.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
+                                  {p.categoria === 'probable' ? 'probable' : 'alternativo'}
+                                </span>
+                                {p.clasificacion && (
+                                  <span className="text-[9px] text-slate-600">{p.clasificacion === 'C' ? 'celular' : p.clasificacion === 'F' ? 'fijo' : p.clasificacion}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {dealernetError && (
+                          <p className="text-[11px] text-red-400">{dealernetError}</p>
+                        )}
+
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <input
+                            type="text"
+                            value={dealernetRutInput}
+                            onChange={(e) => setDealernetRutInput(e.target.value)}
+                            placeholder="RUT propietario, ej. 12.345.678-9"
+                            className="flex-1 text-[11px] bg-slate-900/40 border border-slate-800/50 rounded-lg px-2 py-1.5 text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-slate-700"
+                            onKeyDown={(e) => { if (e.key === 'Enter') searchDealernet() }}
+                          />
+                          <button
+                            onClick={() => searchDealernet()}
+                            disabled={dealernetLoading || !dealernetRutInput.trim()}
+                            className="flex items-center gap-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
+                          >
+                            {dealernetLoading ? <RefreshCw size={12} className="animate-spin" /> : <Phone size={12} />}
+                            {dealernetContact ? 'Actualizar' : 'Buscar'}
+                          </button>
+                        </div>
+
                         <a
                           href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
                           target="_blank"
