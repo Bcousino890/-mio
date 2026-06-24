@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import dynamic from 'next/dynamic'
 import PageShell from '@/components/PageShell'
 import {
   Link2, Search, Building2, MapPin, Layers, ExternalLink,
@@ -9,6 +10,8 @@ import {
   Sofa, Archive, PawPrint, Receipt, Waves, Dumbbell,
   Flame, Wind, Tv, Phone, Droplets, Zap, ChevronLeft, ChevronRight
 } from 'lucide-react'
+
+const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
 
 const DESTINO_LABELS: Record<string, string> = {
   H: 'Habitacional', C: 'Comercio', O: 'Oficina', I: 'Industria',
@@ -57,6 +60,7 @@ export default function CaptarUrlPage() {
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [photoIdx, setPhotoIdx] = useState(0)
+  const [selectedRol, setSelectedRol] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -64,6 +68,7 @@ export default function CaptarUrlPage() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setSelectedRol(null)
 
     try {
       const res = await fetch('/api/chile/parse-listing', {
@@ -132,9 +137,19 @@ export default function CaptarUrlPage() {
           <div className="rounded-2xl overflow-hidden ring-1 ring-white/5 bg-[var(--c-card)]">
             {/* Image area with gradient overlay */}
             <div className="relative h-64 bg-[var(--c-card)] overflow-hidden group">
-              <div className="w-full h-full flex items-center justify-center text-slate-700 text-sm bg-gradient-to-br from-slate-900 to-slate-800">
-                Mapa de ubicación
-              </div>
+              {ext.lat && ext.lng ? (
+                <ListingMatchMap
+                  listingLat={ext.lat}
+                  listingLng={ext.lng}
+                  candidates={result.sii_candidates ?? []}
+                  selectedRol={selectedRol}
+                  onSelectCandidate={setSelectedRol}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-700 text-sm bg-gradient-to-br from-slate-900 to-slate-800">
+                  Sin coordenadas — no se pudo ubicar el anuncio en el mapa
+                </div>
+              )}
 
               {/* Dark scrim bottom */}
               <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
@@ -330,36 +345,56 @@ export default function CaptarUrlPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {result.sii_candidates.map((rol: any, i: number) => (
-                  <a
-                    key={rol.rol}
-                    href={`/chile/catastro`}
-                    className="flex items-center gap-3 p-3 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-blue-700/50 hover:bg-blue-950/20 transition-colors group"
-                  >
-                    <div className="w-6 h-6 rounded-full bg-blue-950 border border-blue-800/50 flex items-center justify-center text-[10px] font-bold text-blue-400 flex-shrink-0">
-                      {i + 1}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-mono text-sm text-blue-400">{rol.rol}</span>
-                        {rol.rol_padre && <Layers size={11} className="text-purple-400" aria-label="Unidad de edificio" />}
-                        {rol.codigo_destino_principal && (
-                          <span className="text-[10px] text-slate-600">
-                            {DESTINO_LABELS[rol.codigo_destino_principal] ?? rol.codigo_destino_principal}
-                          </span>
+                {result.sii_candidates.map((rol: any, i: number) => {
+                  const score = rol.match_score as number | undefined
+                  const scoreColor = score == null ? 'text-slate-600' : score >= 75 ? 'text-emerald-400' : score >= 45 ? 'text-amber-400' : 'text-red-400'
+                  const scoreBg = score == null ? 'bg-slate-800/50' : score >= 75 ? 'bg-emerald-950/40 border-emerald-900/50' : score >= 45 ? 'bg-amber-950/40 border-amber-900/50' : 'bg-red-950/40 border-red-900/50'
+                  const isSelected = selectedRol === rol.rol
+                  return (
+                    <button
+                      key={rol.rol}
+                      type="button"
+                      onClick={() => setSelectedRol(rol.rol)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition-colors group ${
+                        isSelected ? 'border-blue-600 bg-blue-950/30' : 'border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-blue-700/50 hover:bg-blue-950/20'
+                      }`}
+                    >
+                      <div className="w-6 h-6 rounded-full bg-blue-950 border border-blue-800/50 flex items-center justify-center text-[10px] font-bold text-blue-400 flex-shrink-0">
+                        {i + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="font-mono text-sm text-blue-400">{rol.rol}</span>
+                          {rol.rol_padre && <Layers size={11} className="text-purple-400" aria-label="Unidad de edificio" />}
+                          {rol.codigo_destino_principal && (
+                            <span className="text-[10px] text-slate-600">
+                              {DESTINO_LABELS[rol.codigo_destino_principal] ?? rol.codigo_destino_principal}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 truncate">{rol.direccion ?? '—'}</p>
+                      </div>
+                      {score != null && (
+                        <div className={`flex-shrink-0 px-2 py-1 rounded-lg border text-xs font-bold ${scoreBg} ${scoreColor}`}>
+                          {score.toFixed(0)}%
+                        </div>
+                      )}
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-semibold text-slate-200">{fmtCLP(rol.avaluo_fiscal_total)}</p>
+                        {rol.superficie_terreno_m2 && (
+                          <p className="text-[10px] text-slate-600">{rol.superficie_terreno_m2} m²</p>
                         )}
                       </div>
-                      <p className="text-xs text-slate-500 truncate">{rol.direccion ?? '—'}</p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-semibold text-slate-200">{fmtCLP(rol.avaluo_fiscal_total)}</p>
-                      {rol.superficie_terreno_m2 && (
-                        <p className="text-[10px] text-slate-600">{rol.superficie_terreno_m2} m²</p>
-                      )}
-                    </div>
-                    <ExternalLink size={12} className="text-slate-700 group-hover:text-slate-400 flex-shrink-0" />
-                  </a>
-                ))}
+                      <a
+                        href="/chile/catastro"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-shrink-0"
+                      >
+                        <ExternalLink size={12} className="text-slate-700 group-hover:text-slate-400" />
+                      </a>
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>
