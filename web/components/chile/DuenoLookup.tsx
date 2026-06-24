@@ -3,10 +3,16 @@
 import { useState } from 'react'
 import {
   Search, Phone, Mail, MapPin, Loader2, CheckCircle2,
-  AlertCircle, ExternalLink, MessageCircle, RefreshCw, Link2
+  AlertCircle, ExternalLink, MessageCircle
 } from 'lucide-react'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
+
+const PRODUCTS = [
+  { code: '3410', label: 'Directorio Teléfonos', description: 'Solo números — más económico' },
+  { code: '3407', label: 'Contactabilidad', description: 'Teléfonos + clasificación + calidad' },
+  { code: '3408', label: 'Verificación Múltiple', description: 'Emails + direcciones' },
+] as const
 
 interface Phone {
   phone_e164: string
@@ -55,12 +61,20 @@ export default function DuenoLookup() {
   const [rut, setRut] = useState('')
   const [portalUrl, setPortalUrl] = useState('')
   const [notes, setNotes] = useState('')
+  // Default: solo directorio teléfonos (más barato)
+  const [selectedProducts, setSelectedProducts] = useState<string[]>(['3410'])
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
   const [result, setResult] = useState<LookupResult | null>(null)
 
+  function toggleProduct(code: string) {
+    setSelectedProducts(prev =>
+      prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
+    )
+  }
+
   async function handleLookup() {
-    if (!rut.trim()) return
+    if (!rut.trim() || selectedProducts.length === 0) return
     setStatus('loading')
     setError('')
     setResult(null)
@@ -70,6 +84,7 @@ export default function DuenoLookup() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rut: rut.trim(),
+          product_codes: selectedProducts,
           portal_url: portalUrl.trim() || null,
           notes: notes.trim() || null,
         }),
@@ -190,6 +205,29 @@ export default function DuenoLookup() {
           </div>
         </div>
 
+        <div>
+          <label className="text-[11px] font-medium text-slate-300 block mb-1.5">Servicios a consultar</label>
+          <div className="space-y-1.5">
+            {PRODUCTS.map(({ code, label, description }) => (
+              <label key={code} className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${selectedProducts.includes(code) ? 'border-blue-700/60 bg-blue-950/20' : 'border-[var(--c-border-strong)] bg-[var(--c-hover)]'}`}>
+                <input
+                  type="checkbox"
+                  checked={selectedProducts.includes(code)}
+                  onChange={() => toggleProduct(code)}
+                  className="mt-0.5 accent-blue-500"
+                />
+                <div>
+                  <p className="text-[11px] text-slate-200 font-medium">{label}</p>
+                  <p className="text-[10px] text-slate-500">{description}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+          {selectedProducts.length === 0 && (
+            <p className="text-[10px] text-amber-400 mt-1">Selecciona al menos un servicio</p>
+          )}
+        </div>
+
         {error && (
           <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-2 text-[11px] text-red-300">
             <AlertCircle size={12} className="flex-shrink-0" />
@@ -199,7 +237,7 @@ export default function DuenoLookup() {
 
         <button
           onClick={handleLookup}
-          disabled={status === 'loading' || !rut.trim()}
+          disabled={status === 'loading' || !rut.trim() || selectedProducts.length === 0}
           className="w-full flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium py-2 rounded-lg transition-colors"
         >
           {status === 'loading' ? <Loader2 size={12} className="animate-spin" /> : <Phone size={12} />}

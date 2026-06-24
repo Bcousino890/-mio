@@ -5,8 +5,11 @@ import {
   isValidRut,
   queryDealernet,
   DEFAULT_DEALERNET_PRODUCTS,
+  DEALERNET_PRODUCTS,
   type DealernetPhone,
 } from '@/lib/dealernet'
+
+const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -43,6 +46,15 @@ export async function POST(request: NextRequest) {
   const portalUrl = body?.portal_url ? String(body.portal_url).trim() : null
   const notes = body?.notes ? String(body.notes).trim() : null
 
+  // product_codes: array of '3407'|'3408'|'3410' — defaults to all three
+  const rawCodes = Array.isArray(body?.product_codes) ? body.product_codes : null
+  const productCodes: string[] = rawCodes
+    ? rawCodes.filter((c: unknown) => typeof c === 'string' && VALID_PRODUCT_CODES.has(c as any))
+    : DEFAULT_DEALERNET_PRODUCTS
+  if (productCodes.length === 0) {
+    return NextResponse.json({ success: false, error: 'Selecciona al menos un producto' }, { status: 400 })
+  }
+
   const rut = parseRut(rutInput)
   if (!rut) {
     return NextResponse.json({ success: false, error: 'RUT inválido' }, { status: 400 })
@@ -53,7 +65,7 @@ export async function POST(request: NextRequest) {
 
   let lookup
   try {
-    lookup = await queryDealernet(rut, DEFAULT_DEALERNET_PRODUCTS)
+    lookup = await queryDealernet(rut, productCodes)
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Error consultando DealerNet' },
