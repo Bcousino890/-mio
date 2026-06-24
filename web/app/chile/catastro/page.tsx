@@ -12,6 +12,7 @@ import {
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
+import { useSiiRolePins } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 import type { DrawnShape } from '@/components/map/CadastreMap'
 
@@ -278,8 +279,10 @@ export default function CatastroPage() {
   }, [drawnShape, zone.siiCode])
 
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
+  const { rolePoints } = useSiiRolePins(zone.siiCode)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = layerTab === 'catastro' ? allPins : []
+  const activeRolePoints = layerTab === 'catastro' ? rolePoints : []
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
@@ -862,11 +865,13 @@ export default function CatastroPage() {
           <CadastreMap
             parcels={parcels}
             pins={pins}
+            rolePoints={activeRolePoints}
             center={zone.center}
             zoom={15}
             highlightedParcelId={selectedRol?.matched_parcel_id || null}
             onMapClick={() => setSelectedRol(null)}
             onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
+            onRolePointClick={(point) => { if (point.rol) setSelectedRol({ rol: point.rol }) }}
             onShapeDrawn={setDrawnShape}
             zoneRecordCount={zoneCount}
             zoneRecordLoading={zoneCountLoading}
