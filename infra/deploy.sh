@@ -16,6 +16,9 @@ SHARED_NET="${SHARED_NET:-$(docker inspect "$SHARED_NGINX" \
   --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
   | grep -v '^$' | head -1)}"
 
+echo "▶ [0/4] Asegurando Nominatim propio (CL) arriba — no bloquea el deploy..."
+$COMPOSE up -d nominatim || true
+
 echo "▶ [1/4] Build de la app..."
 $COMPOSE build app
 

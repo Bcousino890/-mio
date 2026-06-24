@@ -87,21 +87,27 @@ async function runJob(siiComunaCode: string) {
       const batch = await fetchBatch(siiComunaCode, afterRol)
       if (batch.length === 0) break
 
-      for (const { rol, direccion } of batch) {
-        const point = await geocodeAddressCl({ address: direccion, comuna: state.comunaName })
-        if (point) {
-          await pool.query(
-            `UPDATE sii_roles_cl SET lat = $1, lng = $2 WHERE rol = $3 AND sii_comuna_code = $4`,
-            [point.lat, point.lng, rol, siiComunaCode]
-          )
-          state.geocoded++
-        } else {
-          state.noMatch++
-        }
-        state.processed++
-        afterRol = rol
-        state.updatedAt = new Date().toISOString()
-      }
+      // Disparar el lote completo en paralelo: geocodeAddressCl ya aplica su
+      // propio límite de concurrencia/pacing internamente (ver geocode-cl.ts),
+      // así que aquí no hace falta serializar — solo se beneficia del propio
+      // Nominatim self-hosted cuando está listo.
+      await Promise.all(
+        batch.map(async ({ rol, direccion }) => {
+          const point = await geocodeAddressCl({ address: direccion, comuna: state.comunaName })
+          if (point) {
+            await pool.query(
+              `UPDATE sii_roles_cl SET lat = $1, lng = $2 WHERE rol = $3 AND sii_comuna_code = $4`,
+              [point.lat, point.lng, rol, siiComunaCode]
+            )
+            state.geocoded++
+          } else {
+            state.noMatch++
+          }
+          state.processed++
+          state.updatedAt = new Date().toISOString()
+        })
+      )
+      afterRol = batch[batch.length - 1].rol
     }
 
     state.status = 'done'
