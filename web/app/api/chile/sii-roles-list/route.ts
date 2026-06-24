@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
                 r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2,
                 p.matched_parcel_id
          FROM sii_roles_cl r
-         LEFT JOIN property_rc_cl p ON r.rol = p.sii_rol
+         LEFT JOIN property_rc_cl p ON r.rol = p.rol_matriz OR r.rol = p.rol_unidad
          ${where}
          ORDER BY ${sort}
          LIMIT ${pageSize} OFFSET ${offset}`,
