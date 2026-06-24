@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
-import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
+import { SlidersHorizontal, Map, ChevronDown, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
 import type { Listing } from '@/lib/mock-listings'
 
 const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })
@@ -24,7 +24,6 @@ const PAGE_SIZE = 30
 function transformChileRow(row: any): Listing {
   const portal = row.portal || 'portalinmobiliario'
   const price = row.price || 0
-  const currency = row.currency || 'CLP'
   const listedDate = new Date().toISOString().split('T')[0]
 
   return {
@@ -90,9 +89,19 @@ export default function AnunciosChileClient() {
   const [bedroomsMin, setBedroomsMin] = useState<number | null>(null)
   const [bathroomsMin, setBathroomsMin] = useState<number | null>(null)
   const [identityResolved, setIdentityResolved] = useState(false)
+  // SSR-safe desktop detection: window is not available during server render,
+  // so we resolve isDesktop after mount and keep it updated on resize.
+  const [isDesktop, setIsDesktop] = useState(false)
 
   const combinedActive = hoverId ?? activeId
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const update = () => setIsDesktop(window.innerWidth >= 1024)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -210,7 +219,7 @@ export default function AnunciosChileClient() {
         {/* Sidebar & Results */}
         <div className="lg:col-span-1 flex flex-col overflow-hidden">
           {/* Filters Panel */}
-          {(showFiltersPanel || window.innerWidth >= 1024) && (
+          {(showFiltersPanel || isDesktop) && (
             <div className="flex-1 overflow-y-auto bg-slate-800 border-r border-slate-700 p-4">
               <div className="space-y-4">
                 <div>
@@ -315,8 +324,39 @@ export default function AnunciosChileClient() {
             </div>
           )}
 
+          {/* Toolbar: result count + sort */}
+          <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-slate-800 border-t border-b border-slate-700">
+            <span className="text-xs text-slate-400">
+              {loading ? 'Cargando…' : `${total.toLocaleString('es-CL')} anuncios`}
+            </span>
+            <div className="relative">
+              <button
+                onClick={() => setShowSortMenu(!showSortMenu)}
+                className="flex items-center gap-1 text-xs text-slate-300 hover:text-white px-2 py-1 rounded hover:bg-slate-700 transition-colors"
+              >
+                {SORT_LABELS[sortBy]}
+                <ChevronDown size={14} />
+              </button>
+              {showSortMenu && (
+                <div className="absolute right-0 top-full mt-1 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden min-w-[180px]">
+                  {(Object.keys(SORT_LABELS) as SortKey[]).map(key => (
+                    <button
+                      key={key}
+                      onClick={() => { setSortBy(key); setShowSortMenu(false) }}
+                      className={`block w-full text-left px-3 py-2 text-xs transition-colors ${
+                        sortBy === key ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      {SORT_LABELS[key]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Results List */}
-          <div className="flex-1 overflow-y-auto border-t border-slate-700 lg:border-t-0">
+          <div className="flex-1 overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center p-8">
                 <div className="text-slate-400">Cargando...</div>
@@ -330,12 +370,14 @@ export default function AnunciosChileClient() {
             {listings.map(listing => (
               <div
                 key={listing.id}
-                onMouseEnter={() => setHoverId(listing.id)}
-                onMouseLeave={() => setHoverId(null)}
                 onClick={() => setActiveId(listing.id)}
-                className="border-b border-slate-700 last:border-b-0 cursor-pointer hover:bg-slate-700/50 transition-colors"
+                className="border-b border-slate-700 last:border-b-0 cursor-pointer hover:bg-slate-700/50 transition-colors p-3"
               >
-                <PropertyCard listing={listing} isActive={combinedActive === listing.id} preview="minimal" />
+                <PropertyCard
+                  listing={listing}
+                  active={combinedActive === listing.id}
+                  onHover={setHoverId}
+                />
               </div>
             ))}
 
@@ -367,9 +409,14 @@ export default function AnunciosChileClient() {
         </div>
 
         {/* Map */}
-        {(showMap || window.innerWidth >= 1024) && (
+        {(showMap || isDesktop) && (
           <div className="hidden lg:block lg:col-span-2 h-screen">
-            <PropertyMap listings={listings} hoverId={hoverId} activeId={activeId} />
+            <PropertyMap
+              listings={listings}
+              activeId={combinedActive}
+              onMarkerClick={(id) => setActiveId(id)}
+              onMarkerHover={(id) => setHoverId(id)}
+            />
           </div>
         )}
       </div>

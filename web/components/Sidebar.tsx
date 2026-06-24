@@ -93,8 +93,8 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       href: '/chile/anuncios',
       label: 'Anuncios',
       icon: Building2,
-      description: 'Portalinmobiliario deduplicado',
-      badge: 'PRONTO',
+      description: 'Portal Inmobiliario · venta y arriendo RM',
+      badge: 'NEW',
     },
     {
       href: '/chile/oportunidades',
