@@ -40,6 +40,8 @@ export async function POST(request: NextRequest) {
   const rutInput = String(body?.rut ?? '').trim()
   const siiRol = body?.sii_rol ? String(body.sii_rol) : null
   const siiComunaCode = body?.sii_comuna_code ? String(body.sii_comuna_code) : null
+  const portalUrl = body?.portal_url ? String(body.portal_url).trim() : null
+  const notes = body?.notes ? String(body.notes).trim() : null
 
   const rut = parseRut(rutInput)
   if (!rut) {
@@ -65,8 +67,8 @@ export async function POST(request: NextRequest) {
 
     const contactRes = await client.query(
       `INSERT INTO dealernet_contacts_cl
-         (rut_num, rut_dv, sii_rol, sii_comuna_code, nombre_titular, products_requested, retcode, retmsg, raw_response)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (rut_num, rut_dv, sii_rol, sii_comuna_code, nombre_titular, products_requested, retcode, retmsg, raw_response, portal_url, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (rut_num, rut_dv) DO UPDATE SET
          sii_rol = COALESCE(EXCLUDED.sii_rol, dealernet_contacts_cl.sii_rol),
          sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, dealernet_contacts_cl.sii_comuna_code),
@@ -74,7 +76,9 @@ export async function POST(request: NextRequest) {
          products_requested = EXCLUDED.products_requested,
          retcode = EXCLUDED.retcode,
          retmsg = EXCLUDED.retmsg,
-         raw_response = EXCLUDED.raw_response
+         raw_response = EXCLUDED.raw_response,
+         portal_url = COALESCE(EXCLUDED.portal_url, dealernet_contacts_cl.portal_url),
+         notes = COALESCE(EXCLUDED.notes, dealernet_contacts_cl.notes)
        RETURNING id`,
       [
         rut.num,
@@ -86,6 +90,8 @@ export async function POST(request: NextRequest) {
         lookup.retcode,
         lookup.retmsg,
         JSON.stringify(lookup.raw),
+        portalUrl,
+        notes,
       ]
     )
     const contactId = contactRes.rows[0].id
@@ -156,6 +162,8 @@ export async function POST(request: NextRequest) {
       phones: dedupePhones(lookup.phones),
       addresses: lookup.addresses,
       emails: lookup.emails,
+      rut_num: rut.num,
+      rut_dv: rut.dv,
     })
   } catch (error) {
     await client.query('ROLLBACK')

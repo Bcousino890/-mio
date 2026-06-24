@@ -273,10 +273,10 @@ export default function CatastroPage() {
           setDealernetContact({ nombre_titular: d.nombre_titular, retcode: d.retcode, retmsg: d.retmsg })
           setDealernetPhones(d.phones ?? [])
         } else {
-          setDealernetError(d.error ?? 'Error consultando DealerNet')
+          setDealernetError(d.error ?? 'Error al obtener datos del dueño')
         }
       })
-      .catch(() => setDealernetError('Error de red consultando DealerNet'))
+      .catch(() => setDealernetError('Error de red al obtener datos del dueño'))
       .finally(() => setDealernetLoading(false))
   }, [selectedRol, zone.siiCode, dealernetRutInput])
 
@@ -703,7 +703,7 @@ export default function CatastroPage() {
 
                         {(dealernetContact?.nombre_titular) && (
                           <div>
-                            <p className="text-[10px] text-slate-600">Titular (DealerNet)</p>
+                            <p className="text-[10px] text-slate-600">Titular</p>
                             <p className="text-[11px] text-slate-300 font-medium">{dealernetContact.nombre_titular}</p>
                           </div>
                         )}
@@ -746,9 +746,23 @@ export default function CatastroPage() {
                             className="flex items-center gap-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
                           >
                             {dealernetLoading ? <RefreshCw size={12} className="animate-spin" /> : <Phone size={12} />}
-                            {dealernetContact ? 'Actualizar' : 'Buscar'}
+                            {dealernetContact ? 'Actualizar' : 'Obtener dueño'}
                           </button>
                         </div>
+
+                        {rolDetail.rol?.nombre_propietario && (
+                          <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                            <span className="text-[10px] text-slate-600">¿No tienes el RUT?</span>
+                            <a
+                              href={`https://www.nombrerutyfirma.com/buscar?t=nombre&r=${encodeURIComponent(rolDetail.rol.nombre_propietario)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] text-amber-400 hover:text-amber-300 inline-flex items-center gap-0.5"
+                            >
+                              Buscar en rutificador <ExternalLink size={9} />
+                            </a>
+                          </div>
+                        )}
 
                         <a
                           href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
