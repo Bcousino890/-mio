@@ -6,7 +6,9 @@ export async function POST(request: NextRequest) {
 
   let codes: string[] = []
   if (Array.isArray(body.sii_comuna_codes)) {
-    codes = body.sii_comuna_codes.filter((c: unknown): c is string => typeof c === 'string').map(c => c.trim())
+    codes = (body.sii_comuna_codes as unknown[])
+      .filter((c: unknown): c is string => typeof c === 'string')
+      .map((c: string) => c.trim())
   } else if (typeof body.sii_comuna_code === 'string') {
     codes = [body.sii_comuna_code.trim()]
   }
