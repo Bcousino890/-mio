@@ -3,10 +3,26 @@
 // códigos de "producto", documentado en DEALERNET - Protocolo Web-Services
 // v11. No existe búsqueda por dirección en este protocolo — solo por RUT.
 import { XMLParser } from 'fast-xml-parser'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 
 const DEALERNET_WSDL_URL = process.env.DEALERNET_WSDL_URL || 'http://infows.dealernet.cl/wsinfodlnt.asmx'
-const DEALERNET_USER = process.env.DEALERNET_USER
-const DEALERNET_PASSWORD = process.env.DEALERNET_PASSWORD
+
+// Lee el .env del disco como fallback para cuando las credenciales se guardaron
+// desde la UI de configuración sin reiniciar el contenedor. process.env solo se
+// puebla al arrancar; el archivo .env sí se actualiza en caliente.
+function getDealernetCreds(): { user: string | null; pass: string | null } {
+  const user = process.env.DEALERNET_USER
+  const pass = process.env.DEALERNET_PASSWORD
+  if (user && pass) return { user, pass }
+  try {
+    const content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
+    const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null
+    return { user: user ?? parse('DEALERNET_USER'), pass: pass ?? parse('DEALERNET_PASSWORD') }
+  } catch {
+    return { user: null, pass: null }
+  }
+}
 
 export const DEALERNET_PRODUCTS = {
   CONTACTABILIDAD: '3407',
@@ -74,17 +90,17 @@ function escapeXml(value: string): string {
     .replace(/'/g, '&apos;')
 }
 
-function buildRequestXml(rut: ParsedRut, productCodes: string[]): string {
-  const user = escapeXml(DEALERNET_USER ?? '')
-  const pass = escapeXml(DEALERNET_PASSWORD ?? '')
+function buildRequestXml(rut: ParsedRut, productCodes: string[], user: string, pass: string): string {
+  const userXml = escapeXml(user)
+  const passXml = escapeXml(pass)
   const prods = productCodes.map(cod => `<prod cod="${escapeXml(cod)}" gls="" />`).join('')
   return `<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:web="http://dealernet.cl/webservices/">
   <soapenv:Header/>
   <soapenv:Body>
     <web:CentralDeInformacion>
-      <web:ctausr>${user}</web:ctausr>
-      <web:ctapwd>${pass}</web:ctapwd>
+      <web:ctausr>${userXml}</web:ctausr>
+      <web:ctapwd>${passXml}</web:ctapwd>
       <web:input>
         <root>
           <tipocns>O</tipocns>
@@ -271,10 +287,11 @@ export async function queryDealernet(
   rut: ParsedRut,
   productCodes: string[] = DEFAULT_DEALERNET_PRODUCTS
 ): Promise<DealernetLookupResult> {
-  if (!DEALERNET_USER || !DEALERNET_PASSWORD) {
+  const { user, pass } = getDealernetCreds()
+  if (!user || !pass) {
     throw new Error('DEALERNET_USER / DEALERNET_PASSWORD no configurados en el entorno')
   }
-  const body = buildRequestXml(rut, productCodes)
+  const body = buildRequestXml(rut, productCodes, user, pass)
   const res = await fetch(DEALERNET_WSDL_URL, {
     method: 'POST',
     headers: {
