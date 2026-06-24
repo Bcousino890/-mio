@@ -1,0 +1,17 @@
+{
+  "url": "https://www.portalinmobiliario.com/arriendo/casa/propiedades-usadas/lo-curro-vitacura-santiago-metropolitana",
+  "strategy": "MOCK DATA (testing)",
+  "timestamp": "2026-06-24T12:21:17.596Z",
+  "scrape_result": {
+    "mlc_ids": [
+      "MLC-1847000001",
+      "MLC-1847000002",
+      "MLC-1847000003",
+      "MLC-1847000004",
+      "MLC-1847000005"
+    ],
+    "estimated_count": 10,
+    "parsed_at": "2026-06-24T12:21:17.596Z"
+  },
+  "html_size_bytes": 1579
+}
