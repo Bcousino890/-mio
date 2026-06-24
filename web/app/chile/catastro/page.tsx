@@ -229,7 +229,7 @@ export default function CatastroPage() {
 
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
-  const pins = layerTab === 'oferta' ? allPins : []
+  const pins = layerTab === 'catastro' ? allPins : []
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
