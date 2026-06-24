@@ -3,11 +3,18 @@ import { startGeocodeJob } from '@/lib/geocode-job-state'
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
-  const siiComunaCode = typeof body.sii_comuna_code === 'string' ? body.sii_comuna_code.trim() : ''
-  if (!siiComunaCode) {
-    return NextResponse.json({ success: false, error: 'sii_comuna_code required' }, { status: 400 })
+
+  let codes: string[] = []
+  if (Array.isArray(body.sii_comuna_codes)) {
+    codes = body.sii_comuna_codes.filter(c => typeof c === 'string').map(c => c.trim())
+  } else if (typeof body.sii_comuna_code === 'string') {
+    codes = [body.sii_comuna_code.trim()]
   }
 
-  const state = startGeocodeJob(siiComunaCode)
-  return NextResponse.json({ success: true, job: state })
+  if (codes.length === 0) {
+    return NextResponse.json({ success: false, error: 'sii_comuna_code(s) required' }, { status: 400 })
+  }
+
+  const jobs = codes.map(code => startGeocodeJob(code))
+  return NextResponse.json({ success: true, jobs })
 }

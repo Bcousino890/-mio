@@ -2,12 +2,14 @@ import PageShell from '@/components/PageShell'
 import { Settings } from 'lucide-react'
 import IngestPanel from '@/components/admin/IngestPanel'
 import GeocodeRolesPanel from '@/components/admin/GeocodeRolesPanel'
+import ProxyConfigPanel from '@/components/admin/ProxyConfigPanel'
 
 export default function SettingsPage() {
   return (
     <PageShell title="Configuración" subtitle="Importar datos · zonas · cron">
       <div className="space-y-4">
         <IngestPanel />
+        <ProxyConfigPanel />
         <GeocodeRolesPanel />
 
         <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">

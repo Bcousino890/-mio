@@ -28,8 +28,8 @@ function fmtNum(n: number) {
 }
 
 export default function GeocodeRolesPanel() {
-  const [siiCode, setSiiCode] = useState(COMUNAS[0].siiCode)
-  const [job, setJob] = useState<JobState | null>(null)
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([COMUNAS[0].siiCode])
+  const [jobs, setJobs] = useState<Map<string, JobState>>(new Map())
   const [starting, setStarting] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -37,43 +37,57 @@ export default function GeocodeRolesPanel() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
   }
 
-  async function pollStatus(code: string) {
+  async function pollStatus() {
     try {
-      const res = await fetch(`/api/admin/geocode-roles/status?sii_comuna_code=${code}`)
-      const data = await res.json()
-      if (data.success) {
-        setJob(data.job)
-        if (data.job.status !== 'running') stopPolling()
-      }
-    } catch { /* ignorar errores transitorios de polling */ }
+      const statuses = await Promise.all(
+        selectedCodes.map(code =>
+          fetch(`/api/admin/geocode-roles/status?sii_comuna_code=${code}`)
+            .then(r => r.json())
+            .then(d => d.success ? { code, job: d.job } : null)
+        )
+      )
+      const newJobs = new Map(jobs)
+      statuses.forEach(s => {
+        if (s) newJobs.set(s.code, s.job)
+      })
+      setJobs(newJobs)
+      const anyRunning = Array.from(newJobs.values()).some(j => j.status === 'running')
+      if (!anyRunning) stopPolling()
+    } catch { /* ignorar */ }
   }
 
   useEffect(() => {
+    if (selectedCodes.length === 0) {
+      stopPolling()
+      setJobs(new Map())
+      return
+    }
     stopPolling()
-    pollStatus(siiCode)
-    return stopPolling
-  }, [siiCode])
+    pollStatus()
+  }, [selectedCodes])
 
   async function handleStart() {
+    if (selectedCodes.length === 0) return
     setStarting(true)
     try {
       const res = await fetch('/api/admin/geocode-roles/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sii_comuna_code: siiCode }),
+        body: JSON.stringify({ sii_comuna_codes: selectedCodes }),
       })
       const data = await res.json()
       if (data.success) {
-        setJob(data.job)
+        const newJobs = new Map(jobs)
+        data.jobs.forEach((j: JobState) => newJobs.set(j.siiComunaCode, j))
+        setJobs(newJobs)
         stopPolling()
-        pollRef.current = setInterval(() => pollStatus(siiCode), 2000)
+        pollRef.current = setInterval(pollStatus, 2000)
       }
     } catch { /* ignorar */ }
     setStarting(false)
   }
 
-  const running = job?.status === 'running'
-  const pct = job && job.totalPending > 0 ? Math.min(100, Math.round((job.processed / job.totalPending) * 100)) : 0
+  const running = Array.from(jobs.values()).some(j => j.status === 'running')
 
   return (
     <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 space-y-4">
@@ -82,57 +96,75 @@ export default function GeocodeRolesPanel() {
         <p className="text-sm font-semibold text-slate-200">Geocodificar roles SII (pines en el mapa)</p>
       </div>
       <p className="text-[11px] text-slate-500">
-        Busca la dirección de cada rol sin coordenadas vía OpenStreetMap/Nominatim (~1 req/s) y guarda
-        lat/lng en la base de datos. Corre en el servidor de forma continua hasta procesar todos los
-        roles pendientes de la comuna, aunque cierres esta página.
+        Selecciona una o más comunas y lanza geocodificación en paralelo. Busca direcciones vía OpenStreetMap/Nominatim y guarda
+        lat/lng en la BD. Corre en el servidor hasta procesar todos los roles, aunque cierres esta página.
       </p>
 
-      <div className="flex items-center gap-2">
-        <select
-          value={siiCode}
-          onChange={(e) => setSiiCode(e.target.value)}
-          disabled={running}
-          className="bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-2 py-1.5 text-slate-200 disabled:opacity-50"
-        >
+      <div className="space-y-2">
+        <p className="text-[10px] font-medium text-slate-400 uppercase">Comunas</p>
+        <div className="grid grid-cols-2 gap-2">
           {COMUNAS.map((c) => (
-            <option key={c.siiCode} value={c.siiCode}>{c.label}</option>
+            <label key={c.siiCode} className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer hover:text-slate-100">
+              <input
+                type="checkbox"
+                checked={selectedCodes.includes(c.siiCode)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedCodes([...selectedCodes, c.siiCode])
+                  } else {
+                    setSelectedCodes(selectedCodes.filter(code => code !== c.siiCode))
+                  }
+                }}
+                disabled={running}
+                className="w-4 h-4 rounded border-[var(--c-border-strong)] bg-[var(--c-hover)] disabled:opacity-50 cursor-pointer"
+              />
+              {c.label}
+            </label>
           ))}
-        </select>
-        <button
-          onClick={handleStart}
-          disabled={running || starting}
-          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[11px] font-medium px-3 py-1.5 rounded-lg transition-colors"
-        >
-          {running || starting ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-          {running ? 'Geocodificando…' : 'Iniciar geocodificación'}
-        </button>
+        </div>
       </div>
 
-      {job && job.status !== 'idle' && (
-        <div className="bg-slate-900/40 rounded-lg p-3 space-y-2 text-[11px]">
-          <div className="flex justify-between text-slate-400">
-            <span>{job.comunaName ?? job.siiComunaCode}</span>
-            <span className="font-mono">
-              {fmtNum(job.processed)} / {fmtNum(job.totalPending)}
-            </span>
-          </div>
-          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 transition-all duration-300 rounded-full" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="flex items-center gap-3 text-slate-500">
-            <span className="text-emerald-400">{fmtNum(job.geocoded)} geocodificados</span>
-            <span>{fmtNum(job.noMatch)} sin match</span>
-          </div>
-          {job.status === 'done' && (
-            <div className="flex items-center gap-1.5 text-emerald-400">
-              <CheckCircle2 size={11} /> Completado
-            </div>
-          )}
-          {job.status === 'error' && (
-            <div className="flex items-center gap-1.5 text-red-400">
-              <AlertCircle size={11} /> {job.error}
-            </div>
-          )}
+      <button
+        onClick={handleStart}
+        disabled={running || starting || selectedCodes.length === 0}
+        className="w-full flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium py-2 rounded-lg transition-colors"
+      >
+        {running || starting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+        {running ? 'Geocodificando…' : `Iniciar geocodificación (${selectedCodes.length})`}
+      </button>
+
+      {jobs.size > 0 && (
+        <div className="space-y-3">
+          {Array.from(jobs.values()).map((job) => {
+            const pct = job.totalPending > 0 ? Math.min(100, Math.round((job.processed / job.totalPending) * 100)) : 0
+            return (
+              <div key={job.siiComunaCode} className="bg-slate-900/40 rounded-lg p-3 space-y-2 text-[11px]">
+                <div className="flex justify-between items-center">
+                  <span className="font-medium text-slate-300">{job.comunaName ?? job.siiComunaCode}</span>
+                  <span className="font-mono text-slate-400">
+                    {fmtNum(job.processed)} / {fmtNum(job.totalPending)}
+                  </span>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 transition-all duration-300 rounded-full" style={{ width: `${pct}%` }} />
+                </div>
+                <div className="flex items-center gap-3 text-slate-500">
+                  <span className="text-emerald-400">{fmtNum(job.geocoded)} geocodificados</span>
+                  <span>{fmtNum(job.noMatch)} sin match</span>
+                </div>
+                {job.status === 'done' && (
+                  <div className="flex items-center gap-1.5 text-emerald-400">
+                    <CheckCircle2 size={11} /> Completado
+                  </div>
+                )}
+                {job.status === 'error' && (
+                  <div className="flex items-center gap-1.5 text-red-400">
+                    <AlertCircle size={11} /> {job.error}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
