@@ -23,13 +23,14 @@ export async function GET(request: NextRequest) {
   try {
     const res = await pool.query(
       `SELECT
-         id,
-         rol,
-         ST_AsGeoJSON(geom)::json AS geojson,
-         ST_Y(ST_Centroid(geom)) AS lat,
-         ST_X(ST_Centroid(geom)) AS lng
-       FROM cadastre_parcels_cl
-       WHERE sii_comuna_code = $1 AND rol = $2
+         p.id,
+         p.rol,
+         ST_AsGeoJSON(p.geom)::json AS geojson,
+         ST_Y(ST_Centroid(p.geom)) AS lat,
+         ST_X(ST_Centroid(p.geom)) AS lng
+       FROM cadastre_parcels_cl p
+       JOIN chile_comunas cc ON cc.id = p.comuna_id
+       WHERE cc.sii_comuna_code = $1 AND p.rol = $2
        LIMIT 1`,
       [comuna, rol]
     )
