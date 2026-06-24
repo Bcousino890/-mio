@@ -19,6 +19,11 @@ export async function GET(request: NextRequest) {
   const destino = sp.get('destino')?.trim()
   const rolPadre = sp.get('rol_padre')?.trim()
   const serie = sp.get('serie')?.trim() || ''
+  const avaluoMin = sp.get('avaluo_min')?.trim()
+  const avaluoMax = sp.get('avaluo_max')?.trim()
+  const superficieMin = sp.get('superficie_min')?.trim()
+  const superficieMax = sp.get('superficie_max')?.trim()
+  const ubicacion = sp.get('ubicacion')?.trim()
   const sortParam = sp.get('sort') || 'avaluo_desc'
   const sort = SORT_CLAUSES[sortParam] ?? SORT_CLAUSES.avaluo_desc
   const page = Math.max(1, Number(sp.get('page')) || 1)
@@ -27,8 +32,8 @@ export async function GET(request: NextRequest) {
 
   try {
     const conditions: string[] = ['r.sii_comuna_code = $1']
-    const params: (string | number)[] = [siiComunaCode]
-    const addParam = (v: string | number) => { params.push(v); return `$${params.length}` }
+    const params: (string | number | string[])[] = [siiComunaCode]
+    const addParam = (v: string | number | string[]) => { params.push(v); return `$${params.length}` }
 
     if (serie) conditions.push(`r.serie = ${addParam(serie)}`)
     if (rolPadre) conditions.push(`r.rol_padre = ${addParam(rolPadre)}`)
@@ -36,7 +41,19 @@ export async function GET(request: NextRequest) {
       const qParam = addParam(`%${q}%`)
       conditions.push(`(r.rol ILIKE ${qParam} OR r.direccion ILIKE ${qParam})`)
     }
-    if (destino) conditions.push(`r.codigo_destino_principal = ${addParam(destino)}`)
+    if (destino) {
+      const codes = destino.split(',').map(c => c.trim()).filter(Boolean)
+      if (codes.length > 1) {
+        conditions.push(`r.codigo_destino_principal = ANY(${addParam(codes)})`)
+      } else if (codes.length === 1) {
+        conditions.push(`r.codigo_destino_principal = ${addParam(codes[0])}`)
+      }
+    }
+    if (avaluoMin && !Number.isNaN(Number(avaluoMin))) conditions.push(`r.avaluo_fiscal_total >= ${addParam(Number(avaluoMin))}`)
+    if (avaluoMax && !Number.isNaN(Number(avaluoMax))) conditions.push(`r.avaluo_fiscal_total <= ${addParam(Number(avaluoMax))}`)
+    if (superficieMin && !Number.isNaN(Number(superficieMin))) conditions.push(`r.superficie_terreno_m2 >= ${addParam(Number(superficieMin))}`)
+    if (superficieMax && !Number.isNaN(Number(superficieMax))) conditions.push(`r.superficie_terreno_m2 <= ${addParam(Number(superficieMax))}`)
+    if (ubicacion === 'U' || ubicacion === 'R') conditions.push(`r.codigo_ubicacion = ${addParam(ubicacion)}`)
 
     const where = `WHERE ${conditions.join(' AND ')}`
 
@@ -49,7 +66,7 @@ export async function GET(request: NextRequest) {
                 r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2,
                 p.matched_parcel_id
          FROM sii_roles_cl r
-         LEFT JOIN property_rc_cl p ON r.rol = p.sii_rol
+         LEFT JOIN property_rc_cl p ON r.rol = p.rol_matriz OR r.rol = p.rol_unidad
          ${where}
          ORDER BY ${sort}
          LIMIT ${pageSize} OFFSET ${offset}`,

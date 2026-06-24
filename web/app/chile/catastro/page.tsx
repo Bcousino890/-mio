@@ -12,6 +12,7 @@ import {
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
+import { useSiiRolePins } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 import type { DrawnShape } from '@/components/map/CadastreMap'
 
@@ -65,14 +66,12 @@ const CALIDAD_LABELS: Record<string, string> = {
   '5': 'Inferior',
 }
 
-const DESTINO_OPTIONS = [
-  { value: '', label: 'Todos los destinos' },
-  { value: 'H', label: 'Habitacional' },
-  { value: 'C', label: 'Comercio' },
-  { value: 'O', label: 'Oficina' },
-  { value: 'I', label: 'Industria' },
-  { value: 'W', label: 'Sitio eriazo' },
-  { value: 'Z', label: 'Estacionamiento' },
+const DESTINO_OPTIONS = Object.entries(DESTINO_LABELS).map(([value, label]) => ({ value, label }))
+
+const UBICACION_OPTIONS = [
+  { value: '', label: 'Todas' },
+  { value: 'U', label: 'Urbano' },
+  { value: 'R', label: 'Rural' },
 ]
 
 const SORT_OPTIONS = [
@@ -111,9 +110,21 @@ export default function CatastroPage() {
   // Search & filter state
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
-  const [destino, setDestino] = useState('')
+  const [destinos, setDestinos] = useState<string[]>([])
+  const [destinoDropdownOpen, setDestinoDropdownOpen] = useState(false)
   const [sort, setSort] = useState<SortKey>('avaluo_desc')
   const [page, setPage] = useState(1)
+  // Filtros avanzados (avalúo, superficie, ubicación)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [avaluoMinInput, setAvaluoMinInput] = useState('')
+  const [avaluoMaxInput, setAvaluoMaxInput] = useState('')
+  const [avaluoMin, setAvaluoMin] = useState('')
+  const [avaluoMax, setAvaluoMax] = useState('')
+  const [superficieMinInput, setSuperficieMinInput] = useState('')
+  const [superficieMaxInput, setSuperficieMaxInput] = useState('')
+  const [superficieMin, setSuperficieMin] = useState('')
+  const [superficieMax, setSuperficieMax] = useState('')
+  const [ubicacion, setUbicacion] = useState('')
 
   // Currency display state
   const [showUF, setShowUF] = useState(false)
@@ -154,8 +165,26 @@ export default function CatastroPage() {
     return () => clearTimeout(t)
   }, [searchInput])
 
+  // Debounce numeric range filters
+  useEffect(() => {
+    const t = setTimeout(() => setAvaluoMin(avaluoMinInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [avaluoMinInput])
+  useEffect(() => {
+    const t = setTimeout(() => setAvaluoMax(avaluoMaxInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [avaluoMaxInput])
+  useEffect(() => {
+    const t = setTimeout(() => setSuperficieMin(superficieMinInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [superficieMinInput])
+  useEffect(() => {
+    const t = setTimeout(() => setSuperficieMax(superficieMaxInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [superficieMaxInput])
+
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [zoneId, destino, sort, filterRolPadre])
+  useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
 
   // Fetch stats
   useEffect(() => {
@@ -176,8 +205,13 @@ export default function CatastroPage() {
       sort,
     })
     if (search) params.set('q', search)
-    if (destino) params.set('destino', destino)
+    if (destinos.length > 0) params.set('destino', destinos.join(','))
     if (filterRolPadre) params.set('rol_padre', filterRolPadre)
+    if (avaluoMin) params.set('avaluo_min', avaluoMin)
+    if (avaluoMax) params.set('avaluo_max', avaluoMax)
+    if (superficieMin) params.set('superficie_min', superficieMin)
+    if (superficieMax) params.set('superficie_max', superficieMax)
+    if (ubicacion) params.set('ubicacion', ubicacion)
     fetch(`/api/chile/sii-roles-list?${params}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -190,7 +224,7 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
     return () => controller.abort()
-  }, [zone.siiCode, page, search, destino, sort, filterRolPadre])
+  }, [zone.siiCode, page, search, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
 
   // Fetch rol detail
   useEffect(() => {
@@ -278,11 +312,30 @@ export default function CatastroPage() {
   }, [drawnShape, zone.siiCode])
 
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
+  const { rolePoints } = useSiiRolePins(zone.siiCode)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = layerTab === 'catastro' ? allPins : []
+  const activeRolePoints = layerTab === 'catastro' ? rolePoints : []
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
+
+  const toggleDestino = (value: string) => {
+    setDestinos(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value])
+  }
+
+  const hasAdvancedFilters = !!(avaluoMinInput || avaluoMaxInput || superficieMinInput || superficieMaxInput || ubicacion)
+  const hasAnyFilter = destinos.length > 0 || hasAdvancedFilters || !!filterRolPadre
+
+  const clearAllFilters = () => {
+    setDestinos([])
+    setAvaluoMinInput(''); setAvaluoMaxInput('')
+    setAvaluoMin(''); setAvaluoMax('')
+    setSuperficieMinInput(''); setSuperficieMaxInput('')
+    setSuperficieMin(''); setSuperficieMax('')
+    setUbicacion('')
+    setFilterRolPadre(null)
+  }
 
   // Helper to render currency with optional dual display
   const renderCurrency = (value: number | null) => {
@@ -426,14 +479,43 @@ export default function CatastroPage() {
               )}
             </div>
             <div className="flex gap-2">
-              <select
-                value={destino}
-                onChange={e => setDestino(e.target.value)}
-                disabled={!zone.hasData}
-                className="flex-1 text-xs bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg px-2 py-1.5 text-slate-400 focus:outline-none focus:border-blue-600/50 disabled:opacity-40"
-              >
-                {DESTINO_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <div className="relative flex-1">
+                <button
+                  type="button"
+                  onClick={() => setDestinoDropdownOpen(v => !v)}
+                  disabled={!zone.hasData}
+                  className="w-full flex items-center gap-1.5 text-xs bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg px-2 py-1.5 text-slate-400 focus:outline-none focus:border-blue-600/50 disabled:opacity-40 hover:border-blue-600/30 transition-colors"
+                >
+                  <span className="flex-1 text-left truncate">
+                    {destinos.length === 0 ? 'Todos los destinos' : destinos.length === 1 ? (DESTINO_LABELS[destinos[0]] ?? destinos[0]) : `${destinos.length} destinos`}
+                  </span>
+                  <ChevronDown size={11} className={`flex-shrink-0 transition-transform ${destinoDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {destinoDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-1.5 z-50 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl shadow-xl shadow-black/40 p-1.5 w-[220px] max-h-64 overflow-y-auto">
+                    {DESTINO_OPTIONS.map(o => (
+                      <label key={o.value} className="flex items-center gap-2 px-2 py-1 rounded-lg text-[11px] text-slate-400 hover:bg-[var(--c-surface)] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={destinos.includes(o.value)}
+                          onChange={() => toggleDestino(o.value)}
+                          className="accent-blue-600"
+                        />
+                        <span className="font-mono text-slate-500">{o.value}</span>
+                        {o.label}
+                      </label>
+                    ))}
+                    {destinos.length > 0 && (
+                      <button
+                        onClick={() => setDestinos([])}
+                        className="w-full mt-1 pt-1.5 border-t border-[var(--c-border-card)] text-[10px] text-slate-600 hover:text-slate-400 text-left px-2"
+                      >
+                        Limpiar destinos
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               <select
                 value={sort}
                 onChange={e => setSort(e.target.value as SortKey)}
@@ -442,7 +524,78 @@ export default function CatastroPage() {
               >
                 {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              <button
+                type="button"
+                onClick={() => setFiltersOpen(v => !v)}
+                disabled={!zone.hasData}
+                className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-colors disabled:opacity-40 ${
+                  filtersOpen || hasAdvancedFilters
+                    ? 'bg-blue-950/40 border-blue-900/50 text-blue-400'
+                    : 'bg-[var(--c-card)] border-[var(--c-border-card)] text-slate-400 hover:border-blue-600/30'
+                }`}
+                title="Más filtros"
+              >
+                <Filter size={12} />
+                {hasAdvancedFilters && <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />}
+              </button>
             </div>
+
+            {filtersOpen && (
+              <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)]/60 p-2 space-y-2">
+                <div>
+                  <p className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">Avalúo ({showUF ? 'UF' : 'CLP'})</p>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={avaluoMinInput}
+                      onChange={e => setAvaluoMinInput(e.target.value)}
+                      placeholder="Mín."
+                      className="w-1/2 text-[11px] bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-lg px-2 py-1 text-slate-300 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50"
+                    />
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={avaluoMaxInput}
+                      onChange={e => setAvaluoMaxInput(e.target.value)}
+                      placeholder="Máx."
+                      className="w-1/2 text-[11px] bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-lg px-2 py-1 text-slate-300 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">Superficie (m²)</p>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={superficieMinInput}
+                      onChange={e => setSuperficieMinInput(e.target.value)}
+                      placeholder="Mín."
+                      className="w-1/2 text-[11px] bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-lg px-2 py-1 text-slate-300 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50"
+                    />
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={superficieMaxInput}
+                      onChange={e => setSuperficieMaxInput(e.target.value)}
+                      placeholder="Máx."
+                      className="w-1/2 text-[11px] bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-lg px-2 py-1 text-slate-300 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">Ubicación</p>
+                  <select
+                    value={ubicacion}
+                    onChange={e => setUbicacion(e.target.value)}
+                    className="w-full text-[11px] bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-lg px-2 py-1 text-slate-300 focus:outline-none focus:border-blue-600/50"
+                  >
+                    {UBICACION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Roles count + Currency toggle */}
@@ -457,6 +610,14 @@ export default function CatastroPage() {
                   className="flex items-center gap-1 text-[10px] bg-purple-950/40 border border-purple-900/50 text-purple-400 px-1.5 py-0.5 rounded hover:bg-purple-950/60 transition-colors"
                 >
                   <Layers size={9} />Edificio {filterRolPadre}<X size={9} />
+                </button>
+              )}
+              {hasAnyFilter && (
+                <button
+                  onClick={clearAllFilters}
+                  className="flex items-center gap-1 text-[10px] bg-slate-900/40 border border-slate-800/50 text-slate-500 px-1.5 py-0.5 rounded hover:text-slate-300 hover:bg-slate-900/60 transition-colors"
+                >
+                  <X size={9} />Limpiar filtros
                 </button>
               )}
             </div>
@@ -862,11 +1023,13 @@ export default function CatastroPage() {
           <CadastreMap
             parcels={parcels}
             pins={pins}
+            rolePoints={activeRolePoints}
             center={zone.center}
             zoom={15}
             highlightedParcelId={selectedRol?.matched_parcel_id || null}
             onMapClick={() => setSelectedRol(null)}
             onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
+            onRolePointClick={(point) => { if (point.rol) setSelectedRol({ rol: point.rol }) }}
             onShapeDrawn={setDrawnShape}
             zoneRecordCount={zoneCount}
             zoneRecordLoading={zoneCountLoading}
