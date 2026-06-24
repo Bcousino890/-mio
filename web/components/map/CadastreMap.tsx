@@ -4,19 +4,39 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
+import type { SiiRolePoint } from '@/lib/use-sii-role-pins'
 import { formatCLP } from '@/lib/currency-formatter'
 
 interface Props {
   parcels: CadastreParcel[]
   pins: CadastreListingPin[]
+  rolePoints?: SiiRolePoint[]
   center?: { lat: number; lng: number }
   zoom?: number
   onShapeDrawn?: (shape: DrawnShape | null) => void
   highlightedParcelId?: string | null
   onMapClick?: () => void
   onParcelClick?: (parcel: CadastreParcel) => void
+  onRolePointClick?: (rolePoint: SiiRolePoint) => void
   zoneRecordCount?: number | null
   zoneRecordLoading?: boolean
+}
+
+const ROLE_POINT_COLOR = '#64748b'
+
+function rolePointPopupHtml(point: SiiRolePoint) {
+  const rows = [
+    point.direccion ? `<div style="color:#334155;margin-top:3px">${point.direccion}</div>` : '',
+    `<div style="color:#64748b;margin-top:3px">Rol: ${point.rol ?? 'sin rol'}</div>`,
+    point.avaluo_fiscal_total ? `<div style="color:#475569;margin-top:3px">Avalúo: ${formatCLP(point.avaluo_fiscal_total)}</div>` : '',
+    point.superficie_terreno_m2 ? `<div style="color:#475569;margin-top:3px">Superficie: ${point.superficie_terreno_m2} m²</div>` : '',
+    `<div style="color:#94a3b8;font-size:11px;margin-top:4px">Fuente: SII (rol catastral)</div>`,
+  ].filter(Boolean).join('')
+  return `
+    <div style="font-family:system-ui;font-size:12px;line-height:1.5;min-width:160px">
+      ${rows}
+    </div>
+  `
 }
 
 export interface DrawnShape {
@@ -142,7 +162,7 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, onParcelClick, zoneRecordCount, zoneRecordLoading }: Props) {
+export default function CadastreMap({ parcels, pins, rolePoints = [], center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, onParcelClick, onRolePointClick, zoneRecordCount, zoneRecordLoading }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -287,6 +307,25 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
         })
         const marker = L.marker([point.lat, point.lng], { icon }).addTo(map)
         marker.bindPopup(groupPopupHtml(groupPins[0].comuna, groupPins), { maxWidth: 280, offset: [0, -4] })
+      })
+
+      // Puntos crudos de sii_roles_cl (roles del SII, no anuncios) — peso
+      // visual deliberadamente bajo (radio pequeño, sin relleno fuerte) para
+      // no competir con los pines de anuncios/parcelas, que sí representan
+      // datos de mayor confianza/relevancia para el usuario.
+      rolePoints.forEach((point) => {
+        const marker = L.circleMarker([point.lat, point.lng], {
+          radius: 3,
+          color: ROLE_POINT_COLOR,
+          weight: 1,
+          fillColor: ROLE_POINT_COLOR,
+          fillOpacity: 0.5,
+        }).addTo(map)
+        marker.bindPopup(rolePointPopupHtml(point))
+        marker.on('click', () => {
+          onMapClick?.()
+          onRolePointClick?.(point)
+        })
       })
 
       // Draw tools
@@ -473,6 +512,12 @@ export default function CadastreMap({ parcels, pins, center, zoom = 16, onShapeD
           <span className="w-3 h-1.5 rounded-sm bg-[#22d3ee]/40 border border-[#22d3ee] inline-block flex-shrink-0" />
           Parcela IDE Chile
         </div>
+        {rolePoints.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#64748b] inline-block flex-shrink-0" />
+            Rol SII (catastro)
+          </div>
+        )}
       </div>
     </div>
   )
