@@ -19,6 +19,7 @@ import {
   Upload,
   Link2,
   Eye,
+  UserSearch,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -116,6 +117,12 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       icon: Link2,
       description: 'Portal Inmobiliario → triangular con SII',
       badge: 'NEW',
+    },
+    {
+      href: '/chile/duenos',
+      label: 'Dueños',
+      icon: UserSearch,
+      description: 'Buscar propietario · RUT · teléfonos',
     },
     {
       href: '/chile/street',

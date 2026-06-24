@@ -144,6 +144,8 @@ export default function CatastroPage() {
   const [dealernetLoading, setDealernetLoading] = useState(false)
   const [dealernetError, setDealernetError] = useState<string | null>(null)
   const [dealernetRutInput, setDealernetRutInput] = useState('')
+  // Default: solo directorio teléfonos (más barato); usuario puede añadir más
+  const [dealernetProducts, setDealernetProducts] = useState<string[]>(['3410'])
   // Building units state
   const [buildingUnits, setBuildingUnits] = useState<any[]>([])
   const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
@@ -259,13 +261,13 @@ export default function CatastroPage() {
   const searchDealernet = useCallback((rutOverride?: string) => {
     if (!selectedRol || !zone.siiCode) return
     const rut = (rutOverride ?? dealernetRutInput).trim()
-    if (!rut) return
+    if (!rut || dealernetProducts.length === 0) return
     setDealernetLoading(true)
     setDealernetError(null)
     fetch('/api/chile/dealernet-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode }),
+      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts }),
     })
       .then(r => r.json())
       .then(d => {
@@ -273,12 +275,12 @@ export default function CatastroPage() {
           setDealernetContact({ nombre_titular: d.nombre_titular, retcode: d.retcode, retmsg: d.retmsg })
           setDealernetPhones(d.phones ?? [])
         } else {
-          setDealernetError(d.error ?? 'Error consultando DealerNet')
+          setDealernetError(d.error ?? 'Error al obtener datos del dueño')
         }
       })
-      .catch(() => setDealernetError('Error de red consultando DealerNet'))
+      .catch(() => setDealernetError('Error de red al obtener datos del dueño'))
       .finally(() => setDealernetLoading(false))
-  }, [selectedRol, zone.siiCode, dealernetRutInput])
+  }, [selectedRol, zone.siiCode, dealernetRutInput, dealernetProducts])
 
   // Fetch building units when user clicks "Ver departamentos"
   const loadBuildingUnits = useCallback((rolPadre: string) => {
@@ -703,7 +705,7 @@ export default function CatastroPage() {
 
                         {(dealernetContact?.nombre_titular) && (
                           <div>
-                            <p className="text-[10px] text-slate-600">Titular (DealerNet)</p>
+                            <p className="text-[10px] text-slate-600">Titular</p>
                             <p className="text-[11px] text-slate-300 font-medium">{dealernetContact.nombre_titular}</p>
                           </div>
                         )}
@@ -731,7 +733,27 @@ export default function CatastroPage() {
                           <p className="text-[11px] text-red-400">{dealernetError}</p>
                         )}
 
-                        <div className="flex items-center gap-1.5 pt-1">
+                        {/* Selector de servicios */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] text-slate-600 mr-0.5">Servicio:</span>
+                          {[
+                            { code: '3410', label: 'Tel.' },
+                            { code: '3407', label: 'Contact.' },
+                            { code: '3408', label: 'Verif.' },
+                          ].map(({ code, label }) => (
+                            <button
+                              key={code}
+                              onClick={() => setDealernetProducts(prev =>
+                                prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
+                              )}
+                              className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${dealernetProducts.includes(code) ? 'bg-blue-700/30 border-blue-600/50 text-blue-300' : 'bg-slate-900/30 border-slate-800/40 text-slate-600 hover:text-slate-400'}`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
                           <input
                             type="text"
                             value={dealernetRutInput}
@@ -742,13 +764,27 @@ export default function CatastroPage() {
                           />
                           <button
                             onClick={() => searchDealernet()}
-                            disabled={dealernetLoading || !dealernetRutInput.trim()}
+                            disabled={dealernetLoading || !dealernetRutInput.trim() || dealernetProducts.length === 0}
                             className="flex items-center gap-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
                           >
                             {dealernetLoading ? <RefreshCw size={12} className="animate-spin" /> : <Phone size={12} />}
-                            {dealernetContact ? 'Actualizar' : 'Buscar'}
+                            {dealernetContact ? 'Actualizar' : 'Obtener dueño'}
                           </button>
                         </div>
+
+                        {rolDetail.rol?.nombre_propietario && (
+                          <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                            <span className="text-[10px] text-slate-600">¿No tienes el RUT?</span>
+                            <a
+                              href={`https://www.nombrerutyfirma.com/buscar?t=nombre&r=${encodeURIComponent(rolDetail.rol.nombre_propietario)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] text-amber-400 hover:text-amber-300 inline-flex items-center gap-0.5"
+                            >
+                              Buscar en rutificador <ExternalLink size={9} />
+                            </a>
+                          </div>
+                        )}
 
                         <a
                           href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
