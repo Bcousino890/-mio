@@ -95,6 +95,7 @@ export default function StreetPage() {
   const [pinGeojson, setPinGeojson] = useState<object | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [panelOpen, setPanelOpen] = useState(true)
+  const [mapZoomLevel, setMapZoomLevel] = useState(12)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── búsqueda con debounce ────────────────────────────────────────────────
@@ -401,8 +402,8 @@ export default function StreetPage() {
           center={mapCenter}
           zoom={mapZoom}
           comunaCode={selected?.sii_comuna_code ?? null}
+          onZoomChange={setMapZoomLevel}
           onParcelClick={async ({ rol, sii_comuna_code }) => {
-            // Buscar el rol clicado en el panel
             try {
               const res = await fetch(`/api/chile/sii-search?q=${encodeURIComponent(rol)}&comuna=${sii_comuna_code}&limit=1`)
               const data = await res.json()
@@ -416,6 +417,14 @@ export default function StreetPage() {
             geojson: pinGeojson,
           } : null}
         />
+
+        {/* badge zoom — aparece cuando el zoom es bajo */}
+        {mapZoomLevel < 15 && !selected && (
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1000] bg-black/70 backdrop-blur border border-white/10 text-white/80 text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-lg pointer-events-none">
+            <MapPin size={11} className="text-blue-400" />
+            Acerca el mapa para ver los predios
+          </div>
+        )}
 
         {/* badge sin datos de ubicación */}
         {!pinCoords && selected && !geocoding && (
