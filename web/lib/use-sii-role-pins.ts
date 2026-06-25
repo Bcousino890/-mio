@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 
 export interface SiiRolePoint {
   rol: string | null
@@ -10,25 +10,44 @@ export interface SiiRolePoint {
   superficie_terreno_m2: number | null
 }
 
-export function useSiiRolePins(siiComunaCode: string | null) {
+export interface MapBounds {
+  minLat: number
+  maxLat: number
+  minLng: number
+  maxLng: number
+}
+
+export function useSiiRolePins(siiComunaCode: string | null, bounds?: MapBounds | null) {
   const [rolePoints, setRolePoints] = useState<SiiRolePoint[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [truncated, setTruncated] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => {
+  const fetchRoles = useCallback(() => {
     if (!siiComunaCode) {
       setRolePoints([])
       return
     }
 
-    let cancelled = false
+    // Cancel previous request
+    if (abortRef.current) abortRef.current.abort()
+    abortRef.current = new AbortController()
+
     setLoading(true)
     setError(null)
 
-    fetch(`/api/chile/sii-roles-geojson?sii_comuna_code=${siiComunaCode}`)
+    const params = new URLSearchParams({ sii_comuna_code: siiComunaCode })
+    if (bounds) {
+      params.set('min_lat', String(bounds.minLat))
+      params.set('max_lat', String(bounds.maxLat))
+      params.set('min_lng', String(bounds.minLng))
+      params.set('max_lng', String(bounds.maxLng))
+    }
+
+    fetch(`/api/chile/sii-roles-geojson?${params}`, { signal: abortRef.current.signal })
       .then((res) => res.json())
       .then((data) => {
-        if (cancelled) return
         if (data.success && data.features) {
           const transformed: SiiRolePoint[] = data.features.map((feature: any) => ({
             rol: feature.properties?.rol ?? null,
@@ -40,24 +59,26 @@ export function useSiiRolePins(siiComunaCode: string | null) {
             superficie_terreno_m2: feature.properties?.superficie_terreno_m2 ?? null,
           }))
           setRolePoints(transformed)
+          setTruncated(!!data.truncated)
         } else {
           setError(data.error || 'Failed to load sii role pins')
           setRolePoints([])
         }
       })
       .catch((err) => {
-        if (cancelled) return
+        if (err.name === 'AbortError') return
         setError(err.message)
         setRolePoints([])
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        setLoading(false)
       })
+  }, [siiComunaCode, bounds?.minLat, bounds?.maxLat, bounds?.minLng, bounds?.maxLng])
 
-    return () => {
-      cancelled = true
-    }
-  }, [siiComunaCode])
+  useEffect(() => {
+    fetchRoles()
+    return () => { abortRef.current?.abort() }
+  }, [fetchRoles])
 
-  return { rolePoints, loading, error }
+  return { rolePoints, loading, error, truncated, refetch: fetchRoles }
 }

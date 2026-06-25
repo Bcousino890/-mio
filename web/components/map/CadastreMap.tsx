@@ -6,7 +6,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
-import type { SiiRolePoint } from '@/lib/use-sii-role-pins'
+import type { SiiRolePoint, MapBounds } from '@/lib/use-sii-role-pins'
 import { formatCLP } from '@/lib/currency-formatter'
 
 interface Props {
@@ -20,6 +20,7 @@ interface Props {
   onMapClick?: () => void
   onParcelClick?: (parcel: CadastreParcel) => void
   onRolePointClick?: (rolePoint: SiiRolePoint) => void
+  onBoundsChange?: (bounds: MapBounds) => void
   zoneRecordCount?: number | null
   zoneRecordLoading?: boolean
 }
@@ -187,7 +188,12 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-export default function CadastreMap({ parcels, pins, rolePoints = [], center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, onParcelClick, onRolePointClick, zoneRecordCount, zoneRecordLoading }: Props) {
+function getMapBounds(map: any): MapBounds {
+  const b = map.getBounds()
+  return { minLat: b.getSouth(), maxLat: b.getNorth(), minLng: b.getWest(), maxLng: b.getEast() }
+}
+
+export default function CadastreMap({ parcels, pins, rolePoints = [], center, zoom = 16, onShapeDrawn, highlightedParcelId, onMapClick, onParcelClick, onRolePointClick, onBoundsChange, zoneRecordCount, zoneRecordLoading }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -339,6 +345,10 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
         const marker = L.marker([point.lat, point.lng], { icon }).addTo(map)
         marker.bindPopup(groupPopupHtml(groupPins[0].comuna, groupPins), { maxWidth: 280, offset: [0, -4] })
       })
+
+      // Report initial bounds and on every viewport change
+      onBoundsChange?.(getMapBounds(map))
+      map.on('moveend', () => { onBoundsChange?.(getMapBounds(map)) })
 
       // Listen to zoom changes — roles se renderizan en el useEffect separado
       map.on('zoomend', () => {

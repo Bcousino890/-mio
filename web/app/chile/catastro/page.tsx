@@ -12,11 +12,16 @@ import {
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
-import { useSiiRolePins } from '@/lib/use-sii-role-pins'
+import { useSiiRolePins, type MapBounds } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
-import type { DrawnShape } from '@/components/map/CadastreMap'
+import GoogleMapsView from '@/components/map/GoogleMapsView'
 
-const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
+interface DrawnShape {
+  type: 'polygon' | 'circle' | 'rectangle'
+  coordinates?: [number, number][]
+  center?: [number, number]
+  radius?: number
+}
 
 const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
   confirmed: 'Confirmado (catastro)',
@@ -159,6 +164,9 @@ export default function CatastroPage() {
   const [zoneCount, setZoneCount] = useState<number | null>(null)
   const [zoneCountLoading, setZoneCountLoading] = useState(false)
 
+  // Map viewport bounds — updated by CadastreMap on every pan/zoom
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null)
+
   const PAGE_SIZE = 50
 
   // Debounce search
@@ -187,6 +195,9 @@ export default function CatastroPage() {
 
   // Reset page on filter change
   useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
+
+  // Reset map bounds when zone changes so the hook doesn't use stale bbox
+  useEffect(() => { setMapBounds(null) }, [zoneId])
 
   // Fetch stats
   useEffect(() => {
@@ -314,7 +325,7 @@ export default function CatastroPage() {
   }, [drawnShape, zone.siiCode])
 
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
-  const { rolePoints } = useSiiRolePins(zone.siiCode)
+  const { rolePoints } = useSiiRolePins(zone.siiCode, mapBounds)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = layerTab === 'catastro' ? allPins : []
   const activeRolePoints = layerTab === 'catastro' ? rolePoints : []
@@ -684,6 +695,22 @@ export default function CatastroPage() {
                             <span className="text-[11px] text-slate-300 font-medium">{value}</span>
                           </div>
                         ) : null)}
+                        <div className="flex px-3 py-2 border-b border-[var(--c-border-card)]/40">
+                          <span className="text-[11px] text-slate-600 w-28 flex-shrink-0">Coordenadas</span>
+                          {rolDetail.rol?.lat && rolDetail.rol?.lng ? (
+                            <a
+                              href={`https://www.google.com/maps/search/${rolDetail.rol.lat},${rolDetail.rol.lng}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-blue-400 hover:text-blue-300 font-medium cursor-pointer inline-flex items-center gap-1"
+                            >
+                              {rolDetail.rol.lat.toFixed(6)}, {rolDetail.rol.lng.toFixed(6)}
+                              <ExternalLink size={9} />
+                            </a>
+                          ) : (
+                            <span className="text-[11px] text-slate-500 italic">Cargando coordenadas...</span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1056,19 +1083,10 @@ export default function CatastroPage() {
 
         {/* RIGHT: map */}
         <div className="flex-1 relative">
-          <CadastreMap
-            parcels={parcels}
-            pins={pins}
-            rolePoints={activeRolePoints}
+          <GoogleMapsView
+            selectedRol={rolDetail?.rol ? { lat: rolDetail.rol.lat, lng: rolDetail.rol.lng, direccion: rolDetail.rol.direccion } : null}
             center={zone.center}
             zoom={15}
-            highlightedParcelId={selectedRol?.matched_parcel_id || null}
-            onMapClick={() => setSelectedRol(null)}
-            onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
-            onRolePointClick={(point) => { if (point.rol) setSelectedRol({ rol: point.rol }) }}
-            onShapeDrawn={setDrawnShape}
-            zoneRecordCount={zoneCount}
-            zoneRecordLoading={zoneCountLoading}
           />
         </div>
       </div>
