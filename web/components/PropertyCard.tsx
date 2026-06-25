@@ -150,9 +150,23 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
 
         {/* Bottom row */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
-            <MapPin size={10} className="text-slate-700" />
-            <span className="truncate max-w-[140px]">{l.zone_name}</span>
+          <div className="flex flex-col gap-1 text-[11px] text-slate-600 flex-1">
+            <div className="flex items-center gap-1.5">
+              <MapPin size={10} className="text-slate-700 flex-shrink-0" />
+              <span className="truncate max-w-[140px]">{l.zone_name}</span>
+            </div>
+            {l.latitude && l.longitude && (
+              <a
+                href={`https://maps.google.com/?q=${l.latitude},${l.longitude}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+                title={`${l.latitude.toFixed(6)}, ${l.longitude.toFixed(6)}`}
+              >
+                📍 {l.latitude.toFixed(4)}, {l.longitude.toFixed(4)}
+              </a>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {l.listing_count > 1 && (
