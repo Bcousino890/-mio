@@ -600,6 +600,25 @@ export default function PropertyDetailPage({ params }: { params: Promise<{ id: s
                   </div>
                 )}
 
+                {l.latitude && l.longitude && (
+                  <a
+                    href={`https://maps.google.com/?q=${l.latitude},${l.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-start gap-2 mt-3 p-2.5 bg-[var(--c-surface)] rounded-xl hover:bg-[var(--c-active)]/20 transition-colors group"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-[var(--c-active)] flex items-center justify-center flex-shrink-0">
+                      <MapPin size={14} className="text-blue-400" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-slate-300 group-hover:text-blue-400 transition-colors">
+                        {l.latitude.toFixed(6)}, {l.longitude.toFixed(6)}
+                      </p>
+                      <p className="text-[11px] text-blue-400 mt-0.5">Abrir en Google Maps →</p>
+                    </div>
+                  </a>
+                )}
+
                 {l.source_url && l.source_url !== '#' && (
                   <a
                     href={l.source_url}
