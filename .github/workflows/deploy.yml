@@ -32,7 +32,7 @@ jobs:
     steps:
       # 1. El runner descarga el código (repo privado → acceso automático)
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.1
 
       # 2. Preparar la clave SSH para llegar al VPS
       - name: Configurar SSH
