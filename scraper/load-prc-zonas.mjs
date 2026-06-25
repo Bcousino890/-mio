@@ -21,10 +21,14 @@ import { program } from 'commander'
 const { Client } = pg
 
 // ─── Configuración de comunas target ─────────────────────────────────────────
+// Códigos SII CONFIRMADOS tras ingesta catastral.cl S2-2025
+// Ver: https://crm.cremme.es/api/debug/sii-roles-status
 const COMUNAS_TARGET = {
   vitacura: {
-    sii_code: '13132',
+    sii_code: '15160',  // Correcto (no 13132)
     nombre: 'Vitacura',
+    total_roles: 225462,
+    roles_con_coords: 219338,
     arcgis_service: 'https://services9.arcgis.com/kKJR3Qt68ohAWuet/arcgis/rest/services/PRC_Vitacura/FeatureServer/0',
     zonas: [
       {
@@ -67,8 +71,10 @@ const COMUNAS_TARGET = {
   },
 
   lascondes: {
-    sii_code: '13114',
+    sii_code: '15108',  // Correcto (no 13114)
     nombre: 'Las Condes',
+    total_roles: 390000,
+    roles_con_coords: 360233,
     arcgis_service: null,  // TODO: buscar si existe
     zonas: [
       {
@@ -99,8 +105,10 @@ const COMUNAS_TARGET = {
   },
 
   lobarnechea: {
-    sii_code: '13115',
+    sii_code: '15161',  // Correcto (no 13115)
     nombre: 'Lo Barnechea',
+    total_roles: 148515,
+    roles_con_coords: 134073,
     arcgis_service: null,
     zonas: [
       {
@@ -131,8 +139,10 @@ const COMUNAS_TARGET = {
   },
 
   colina: {
-    sii_code: '13301',
+    sii_code: '14201',  // Correcto (no 13301)
     nombre: 'Colina',
+    total_roles: 118806,
+    roles_con_coords: 110997,
     arcgis_service: null,
     zonas: [
       {
@@ -165,6 +175,8 @@ const COMUNAS_TARGET = {
   providencia: {
     sii_code: '13123',
     nombre: 'Providencia',
+    total_roles: 0,  // ⚠️ NO CARGADO EN BD (ver https://crm.cremme.es/api/debug/sii-roles-status)
+    roles_con_coords: 0,
     arcgis_service: null,
     zonas: [
       {

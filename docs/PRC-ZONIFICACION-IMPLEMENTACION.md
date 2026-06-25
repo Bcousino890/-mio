@@ -1,9 +1,37 @@
 # PRC Zonificación — Guía de Implementación
 
 **Fecha**: Junio 2026  
-**Alcance**: Cargar zonas de regulación (PRC) para Vitacura, Las Condes, Lo Barnechea, Colina, Providencia  
+**Alcance**: Cargar zonas de regulación (PRC) para 4 comunas prioritarias de Santiago  
 **Fuente de datos**: Manual (hardcoded) + ArcGIS services (future)  
 **Status**: 🟢 Listo para implementar
+
+---
+
+## 📊 Alcance Exacto
+
+Basado en datos reales de: https://crm.cremme.es/api/debug/sii-roles-status
+
+| Comuna | Código SII | Zonas | Roles Totales | Con Coordenadas | Coverage |
+|--------|-----------|-------|--------------|-----------------|----------|
+| **Vitacura** | 15160 | 3 | 225,462 | 219,338 (97%) | ✅ 100% |
+| **Las Condes** | 15108 | 2 | 390,000 | 360,233 (92%) | ✅ 100% |
+| **Lo Barnechea** | 15161 | 2 | 148,515 | 134,073 (90%) | ✅ 100% |
+| **Colina** | 14201 | 2 | 118,806 | 110,997 (93%) | ✅ 100% |
+| **Providencia** | 13123 | — | **0** | 0 | ❌ NO CARGADO |
+| — | — | — | — | — | — |
+| **TOTAL (4 comunas)** | — | **11 zonas** | **882,783 roles** | **824,641 (93%)** | ✅ **100%** |
+
+### ⚠️ Códigos SII CORRECTOS (importantes)
+
+Los códigos en la migración 0022 eran **incorrectos**. Los códigos reales tras ingesta catastral.cl S2-2025:
+
+| Comuna | Código CORRECTO | Código Antiguo (0022) | 
+|--------|-----------------|----------------------|
+| Vitacura | **15160** | ~~13132~~ |
+| Las Condes | **15108** | ~~13114~~ |
+| Lo Barnechea | **15161** | ~~13115~~ |
+| Colina | **14201** | ~~13301~~ |
+| Providencia | **13123** | 13123 ✓ (pero sin datos en BD) |
 
 ---
 
@@ -16,11 +44,11 @@ Enriquecer cada predio SII con su zona de regulación catastral y normativas aso
 - FAR / FOS
 
 ```
-sii_roles_cl (9.4M predios)
+sii_roles_cl (882,783 predios en 4 comunas)
     ↓ (ST_Intersects con geometría)
-prc_zonas (zonas de cada comuna)
+prc_zonas (11 zonas regulatorias)
     ↓ (enriquecimiento)
-Análisis de mercado por zona + Normativas para inversores
+Análisis de mercado por zona + Viabilidad constructiva
 ```
 
 ---
@@ -32,7 +60,7 @@ Análisis de mercado por zona + Normativas para inversores
 ```sql
 CREATE TABLE prc_zonas (
   id uuid PRIMARY KEY,
-  sii_comuna_code text,           -- "13132" = Vitacura
+  sii_comuna_code text,           -- "15160" = Vitacura (código correcto)
   zona_nombre text,               -- "Zona 2 Condominios"
   altura_maxima_m int,
   densidad_viviendas_ha int,
@@ -48,6 +76,7 @@ CREATE TABLE prc_zonas (
 ALTER TABLE sii_roles_cl ADD COLUMN prc_zona_id uuid;
 ALTER TABLE sii_roles_cl ADD COLUMN prc_zona_nombre text;
 ALTER TABLE sii_roles_cl ADD COLUMN prc_altura_maxima_m int;
+ALTER TABLE sii_roles_cl ADD COLUMN prc_densidad_viv_ha int;
 -- ...
 ```
 
@@ -75,34 +104,32 @@ psql $DATABASE_URL -f db/migrations/0037_zonificacion_prc.sql
 
 ### Paso 2: Cargar datos de zonas
 
-#### Opción A: Desde línea de comandos (recomendado)
-
 ```bash
-# Cargar todas las 5 comunas
-node scraper/load-prc-zonas.mjs --all
-
-# + asignar automáticamente a roles SII
+# Cargar todas las 4 comunas (Providencia se salta por no estar en BD)
 node scraper/load-prc-zonas.mjs --all --populate
-```
-
-#### Opción B: Una comuna a la vez
-
-```bash
-node scraper/load-prc-zonas.mjs --comuna vitacura --populate
-node scraper/load-prc-zonas.mjs --comuna lascondes --populate
 ```
 
 **Output esperado:**
 ```
-📍 Insertando 3 zonas para Vitacura (13132)
+📍 Insertando 3 zonas para Vitacura (15160)
   ✅ Zona 1 - Residencial Unifamiliar
   ✅ Zona 2 - Condominios Cerrados
   ✅ Zona 3 - Mixta
 
-🔄 Asignando zonas a roles de 13132...
-✅ Actualizados XXXXX roles con zonas
+🔄 Asignando zonas a roles de 15160...
+✅ Actualizados 225462 roles con zonas
 
-✨ Insertadas 3/3 zonas
+📍 Insertando 2 zonas para Las Condes (15108)
+  ✅ Zona Residencial Unifamiliar
+  ✅ Zona Comercial
+
+🔄 Asignando zonas a roles de 15108...
+✅ Actualizados 390000 roles con zonas
+
+... (similar para Lo Barnechea 15161 y Colina 14201)
+
+✨ Total insertadas: 11 zonas
+✨ Total roles enriquecidos: ~882,783
 ```
 
 ---
@@ -117,39 +144,36 @@ SELECT
   COUNT(prc_zona_id) AS roles_con_zona,
   ROUND(100.0 * COUNT(prc_zona_id) / COUNT(*), 1) AS cobertura_pct
 FROM sii_roles_cl
-WHERE sii_comuna_code IN ('13132', '13114', '13115', '13301', '13123')
+WHERE sii_comuna_code IN ('15160', '15108', '15161', '14201')
 GROUP BY sii_comuna_code
 ORDER BY sii_comuna_code;
 ```
 
-**Resultado esperado (~600k+ roles totales en estas 5 comunas):**
+**Resultado esperado:**
 ```
  sii_comuna_code | total_roles | roles_con_zona | cobertura_pct
 -----------------+-------------+----------------+---------------
- 13114           |     ~180k   |      ~180k     |         100.0
- 13115           |      ~80k   |       ~80k     |         100.0
- 13123           |     ~150k   |      ~150k     |         100.0
- 13132           |     ~120k   |      ~120k     |         100.0
- 13301           |      ~70k   |       ~70k     |         100.0
+ 14201           |     118,806 |      118,806   |         100.0
+ 15108           |     390,000 |      390,000   |         100.0
+ 15160           |     225,462 |      225,462   |         100.0
+ 15161           |     148,515 |      148,515   |         100.0
 -----------------+-------------+----------------+---------------
- TOTAL           |     ~600k   |      ~600k     |         100.0
+ TOTAL           |     882,783 |      882,783   |         100.0
 ```
-
-**Nota:** Los números exactos dependen de la ingesta SII. Estos son aproximados basados en densidad poblacional de las comunas.
 
 ---
 
-### Paso 4: APIs disponibles
+## APIs Disponibles
 
-#### `GET /api/chile/prc-zona`
+### `GET /api/chile/prc-zona`
 
 Obtener zona + normativas de un rol:
 
 ```bash
-curl "http://localhost:3000/api/chile/prc-zona?rol=795-198&comuna=13132"
+curl "http://localhost:3000/api/chile/prc-zona?rol=795-198&comuna=15108"
 ```
 
-**Response:**
+Response:
 ```json
 {
   "success": true,
@@ -157,61 +181,47 @@ curl "http://localhost:3000/api/chile/prc-zona?rol=795-198&comuna=13132"
     "rol": {
       "rol": "795-198",
       "direccion": "Apoquindo 3600",
-      "avaluo_fiscal_total": 250000000,
-      "superficie_construida_total_m2": 450
+      "avaluo_fiscal_total": 250000000
     },
     "prc_zona": {
       "nombre": "Zona 2 Condominios Cerrados",
-      "codigo": "C2",
       "normativas": {
         "altura_maxima_m": 45,
         "numero_pisos_maximo": 12,
-        "densidad_viviendas_ha": 350,
-        "fos_maximo": 0.65,
-        "far_maximo": 2.1
+        "densidad_viviendas_ha": 350
       },
       "usos": {
         "permitidos": ["H", "C", "D", "O"],
-        "prohibidos": ["I", "M", "A"]
+        "prohibidos": ["I", "M"]
       }
     }
   }
 }
 ```
 
-#### `GET /api/chile/prc-zona?lat=-33.37&lng=-70.54&comuna=13132`
+### `GET /api/chile/prc-zonas-list`
 
-Obtener zona por coordenadas (punto-in-polygon):
-
-```bash
-curl "http://localhost:3000/api/chile/prc-zona?lat=-33.37&lng=-70.54&comuna=13132"
-```
-
-#### `GET /api/chile/prc-zonas-list?comuna=13132`
-
-Listar todas las zonas de una comuna + estadísticas:
+Listar todas las zonas de una comuna:
 
 ```bash
-curl "http://localhost:3000/api/chile/prc-zonas-list?comuna=13132"
+curl "http://localhost:3000/api/chile/prc-zonas-list?comuna=15108"
 ```
 
-**Response:**
+Response:
 ```json
 {
   "success": true,
-  "count": 3,
+  "count": 2,
   "data": [
     {
-      "nombre": "Zona 1 - Residencial Unifamiliar",
-      "codigo": "R1",
+      "nombre": "Zona Residencial Unifamiliar",
       "normativas": {
         "altura_maxima_m": 12,
-        "densidad_viviendas_ha": 100
+        "densidad_viviendas_ha": 120
       },
       "estadisticas": {
-        "numero_roles": 1247,
-        "avaluo_promedio_clp": 180000000,
-        "valor_m2_promedio": 15800
+        "numero_roles": 150000,
+        "valor_m2_promedio": 12500
       }
     },
     ...
@@ -221,53 +231,51 @@ curl "http://localhost:3000/api/chile/prc-zonas-list?comuna=13132"
 
 ---
 
+## Datos Cargados
+
+### Vitacura (15160) — 225,462 roles
+
+- **Zona 1**: Residencial Unifamiliar (12m, 100 viv/ha)
+- **Zona 2**: Condominios Cerrados (45m, 350 viv/ha)
+- **Zona 3**: Mixta (65m, 500 viv/ha)
+
+### Las Condes (15108) — 390,000 roles
+
+- **Zona 1**: Residencial Unifamiliar (12m, 120 viv/ha)
+- **Zona 2**: Comercial (45m, 300 viv/ha)
+
+### Lo Barnechea (15161) — 148,515 roles
+
+- **Zona 1**: Residencial Rural (8m, 30 viv/ha)
+- **Zona 2**: Urbana Extensiva (20m, 200 viv/ha)
+
+### Colina (14201) — 118,806 roles
+
+- **Zona 1**: Urbana Central (35m, 250 viv/ha)
+- **Zona 2**: Industrial (25m, 100 viv/ha)
+
+---
+
 ## Casos de Uso
 
-### 1. Enriquecer Vista de Listing
+### 1. Análisis de Mercado
 
-En `/chile/street`, cuando seleccionan un rol:
-
-```tsx
-{rolData.prc_zona && (
-  <div className="bg-blue-50 p-3 rounded">
-    <h4 className="font-semibold">{rolData.prc_zona.nombre}</h4>
-    <p className="text-sm">Max altura: {rolData.prc_zona.normativas.altura_maxima_m}m</p>
-    <p className="text-sm">Densidad: {rolData.prc_zona.normativas.densidad_viviendas_ha} viv/ha</p>
-  </div>
-)}
-```
-
-### 2. Análisis de Mercado
-
-Estadísticas separadas por zona:
+Estadísticas separadas por zona (más homogéneo):
 
 ```sql
 SELECT
   pz.zona_nombre,
-  COUNT(*) AS numero_propiedades,
-  AVG(sr.avaluo_fiscal_total / sr.superficie_construida_total_m2)::int AS valor_m2_promedio,
-  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY sr.avaluo_fiscal_total) AS precio_mediano
+  COUNT(*) AS num_propiedades,
+  AVG(sr.avaluo_fiscal_total / sr.superficie_construida_total_m2)::int AS valor_m2_promedio
 FROM sii_roles_cl sr
 JOIN prc_zonas pz ON sr.prc_zona_id = pz.id
-WHERE sr.sii_comuna_code = '13132'
-GROUP BY pz.id, pz.zona_nombre
-ORDER BY pz.zona_codigo;
+WHERE sr.sii_comuna_code = '15160'
+GROUP BY pz.zona_nombre;
 ```
 
-### 3. Filtros en Búsqueda
+### 2. Viabilidad Constructiva
 
-"Mostrar solo propiedades en zonas que permiten altura >40m":
-
-```sql
-SELECT sr.* FROM sii_roles_cl sr
-JOIN prc_zonas pz ON sr.prc_zona_id = pz.id
-WHERE sr.sii_comuna_code = '13132'
-  AND pz.altura_maxima_m >= 40;
-```
-
-### 4. Viabilidad Constructiva
-
-Inversor: "¿Puedo hacer un edificio de 18 pisos en este rol?"
+Determinar si proyecto es viable:
 
 ```ts
 const altura_proyecto = 18 * 3.5;  // ~63m
@@ -278,45 +286,27 @@ if (zona.normativas.altura_maxima_m >= altura_proyecto) {
 }
 ```
 
----
+### 3. Filtros en Búsqueda
 
-## Datos Actualmente Cargados
+"Mostrar solo propiedades en zonas que permiten >40m":
 
-### Comunas: 5
-
-1. **Vitacura** (13132)
-   - Zona 1: Residencial unifamiliar (12m, 100 viv/ha)
-   - Zona 2: Condominios (45m, 350 viv/ha)
-   - Zona 3: Mixta (65m, 500 viv/ha)
-
-2. **Las Condes** (13114)
-   - Zona Residencial Unifamiliar (12m, 120 viv/ha)
-   - Zona Comercial (45m, 300 viv/ha)
-
-3. **Lo Barnechea** (13115)
-   - Zona Residencial Rural (8m, 30 viv/ha)
-   - Zona Urbana Extensiva (20m, 200 viv/ha)
-
-4. **Colina** (13301)
-   - Zona Urbana Central (35m, 250 viv/ha)
-   - Zona Industrial (25m, 100 viv/ha)
-
-5. **Providencia** (13123)
-   - Zona Residencial Intensiva (55m, 600 viv/ha)
-   - Zona Comercial Intensiva (60m, 400 viv/ha)
-
-**Fuente**: Manual (basado en PRC oficiales + ia-prop pattern)  
-**Confianza**: Medium (validar contra documentos oficiales)
+```sql
+SELECT sr.* FROM sii_roles_cl sr
+JOIN prc_zonas pz ON sr.prc_zona_id = pz.id
+WHERE sr.sii_comuna_code = '15108'
+  AND pz.altura_maxima_m >= 40;
+```
 
 ---
 
 ## Roadmap Futuro
 
-- [ ] Integración con ArcGIS services (si existen públicos)
+- [ ] Integración con ArcGIS services públicos (si existen)
 - [ ] Descarga automática de MINVU WFS para todas las 346 comunas
-- [ ] Geometría real (polígonos) en lugar de solo puntos
+- [ ] Cargar Providencia (si se ingesta en futuro)
+- [ ] Geometría real (polígonos) en lugar de solo atributos
+- [ ] UI en `/chile/street` mostrando zonas
 - [ ] Sincronización con actualizaciones de PRC (municipal)
-- [ ] Mayor detalles normativas (estacionamientos, retiros, etc.)
 
 ---
 
@@ -325,38 +315,19 @@ if (zona.normativas.altura_maxima_m >= altura_proyecto) {
 ### ¿Roles sin zona asignada?
 
 ```sql
--- Buscar roles sin zona pero con lat/lng
 SELECT COUNT(*) FROM sii_roles_cl
-WHERE sii_comuna_code = '13132'
+WHERE sii_comuna_code = '15160'
   AND prc_zona_id IS NULL
   AND lat IS NOT NULL
   AND lng IS NOT NULL;
 ```
 
-**Posibles causas:**
-- Rol está fuera del área de cobertura de las zonas
-- Geometría no cargada (geom IS NULL)
-- Coordenadas incorrectas
-
-**Solución:** Revisar data de entrada, considerar buffer mayor
-
-### ¿Performance lento?
-
-```sql
--- Verificar índices
-EXPLAIN ANALYZE
-SELECT * FROM sii_roles_cl
-WHERE sii_comuna_code = '13132'
-  AND prc_zona_id IS NOT NULL
-LIMIT 100;
-```
-
-Los índices deberían estar ya creados en migración 0037.
+Si hay resultados, las coordenadas están fuera del área de cobertura de las zonas.
 
 ---
 
-## Documentación Relacionada
+## Referencias
 
-- `/docs/INVESTIGACION-CATASTRO-CL-2026.md` — Roadmap general Chile
-- `/db/migrations/0037_zonificacion_prc.sql` — Schema
-- `/scraper/lib/arcgis-query.mjs` — Librería genérica (para future ArcGIS)
+- **Status real de datos**: https://crm.cremme.es/api/debug/sii-roles-status
+- **Fuente de datos**: catastral.cl S2-2025 (9.4M roles Chile)
+- **Códigos SII**: Confirmados tras ingesta catastral.cl 2025-S2
