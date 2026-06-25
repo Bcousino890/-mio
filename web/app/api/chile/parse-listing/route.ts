@@ -109,22 +109,17 @@ async function findSiiCandidates(
     for (const radius of radios) {
       try {
         const query = `
-          WITH candidates AS (
-            SELECT
-              rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-              superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
-              ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
-              CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
-                   THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
-                   ELSE NULL END AS text_sim
-            FROM sii_roles_cl
-            WHERE sii_comuna_code = $1
-              AND lat IS NOT NULL AND lng IS NOT NULL
-              AND lat >= $3 - 0.1 AND lat <= $3 + 0.1
-              AND lng >= $4 - 0.1 AND lng <= $4 + 0.1
-          )
-          SELECT * FROM candidates
-          WHERE distance_m < $5
+          SELECT
+            rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
+            superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+            ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+            CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
+                 THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+                 ELSE NULL END AS text_sim
+          FROM sii_roles_cl
+          WHERE sii_comuna_code = $1
+            AND lat IS NOT NULL AND lng IS NOT NULL
+            AND ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
           ORDER BY distance_m ASC, avaluo_fiscal_total DESC NULLS LAST
           LIMIT 40
         `
@@ -275,12 +270,16 @@ export async function POST(request: NextRequest) {
 
     // 5. Find SII candidates, scored by distance + superficie + similitud de dirección
     const siiCode = (merged.sii_code as string) || null
+    const lat = merged.lat as number | null
+    const lng = merged.lng as number | null
+    const isValidGeo = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+
     const candidates = siiCode
       ? await findSiiCandidates(siiCode, {
           address: (merged.address as string) ?? null,
           sqm: (merged.sqm as number) ?? null,
-          lat: (merged.lat as number) ?? null,
-          lng: (merged.lng as number) ?? null,
+          lat: isValidGeo ? lat : null,
+          lng: isValidGeo ? lng : null,
           property_type: (merged.property_type as string) ?? null,
         })
       : []
