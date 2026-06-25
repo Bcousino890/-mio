@@ -131,9 +131,38 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
     }
     currency = currency ?? 'CLP'
 
-    const loc = mapInfo?.location ?? null
-    const latitude = loc?.latitude != null ? parseFloat(loc.latitude) : null
-    const longitude = loc?.longitude != null ? parseFloat(loc.longitude) : null
+    // Try multiple locations where coordinates might be stored
+    let latitude: number | null = null
+    let longitude: number | null = null
+
+    // Try 1: location_and_points.map_info.location
+    let loc = mapInfo?.location ?? null
+    if (loc?.latitude) latitude = parseFloat(loc.latitude)
+    if (loc?.longitude) longitude = parseFloat(loc.longitude)
+
+    // Try 2: location_and_points directly (sometimes lat/lng are here)
+    if (latitude == null && comps.location_and_points?.lat)
+      latitude = parseFloat(comps.location_and_points.lat)
+    if (longitude == null && comps.location_and_points?.lng)
+      longitude = parseFloat(comps.location_and_points.lng)
+
+    // Try 3: Search in the entire state object (last resort)
+    if (latitude == null || longitude == null) {
+      const findCoords = (obj: any): {lat?: string, lng?: string} | null => {
+        if (!obj || typeof obj !== 'object') return null
+        if (obj.lat && obj.lng) return {lat: obj.lat, lng: obj.lng}
+        for (const key of Object.keys(obj)) {
+          const result = findCoords(obj[key])
+          if (result) return result
+        }
+        return null
+      }
+      const coordsObj = findCoords(state)
+      if (coordsObj) {
+        if (latitude == null && coordsObj.lat) latitude = parseFloat(coordsObj.lat)
+        if (longitude == null && coordsObj.lng) longitude = parseFloat(coordsObj.lng)
+      }
+    }
 
     let bedrooms: number | null = null, bathrooms: number | null = null, square_meters: number | null = null
     const specAttrs = comps.highlighted_specs_res?.attributes ?? comps.fixed?.highlighted_specs_res?.attributes ?? []
