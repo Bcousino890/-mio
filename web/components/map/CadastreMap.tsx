@@ -309,18 +309,38 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
         marker.bindPopup(groupPopupHtml(groupPins[0].comuna, groupPins), { maxWidth: 280, offset: [0, -4] })
       })
 
-      // Puntos crudos de sii_roles_cl (roles del SII, no anuncios) — peso
-      // visual deliberadamente bajo (radio pequeño, sin relleno fuerte) para
-      // no competir con los pines de anuncios/parcelas, que sí representan
-      // datos de mayor confianza/relevancia para el usuario.
+      // Puntos crudos de sii_roles_cl (roles del SII, no anuncios) — mostrados
+      // como etiquetas visibles con rol y avalúo (similar a PropiTeQ).
       rolePoints.forEach((point) => {
-        const marker = L.circleMarker([point.lat, point.lng], {
-          radius: 3,
-          color: ROLE_POINT_COLOR,
-          weight: 1,
-          fillColor: ROLE_POINT_COLOR,
-          fillOpacity: 0.5,
-        }).addTo(map)
+        const avaluoText = point.avaluo_fiscal_total
+          ? `${formatCLP(point.avaluo_fiscal_total)}`
+          : ''
+
+        const icon = L.divIcon({
+          html: `
+            <div style="
+              background: #1e293b;
+              border: 1px solid #475569;
+              border-radius: 4px;
+              padding: 4px 6px;
+              font-size: 11px;
+              font-family: system-ui, -apple-system;
+              color: #cbd5e1;
+              white-space: nowrap;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+              pointer-events: auto;
+            ">
+              <div style="font-weight: 600; color: #f1f5f9;">${point.rol || 'sin rol'}</div>
+              ${avaluoText ? `<div style="color: #a1aec9; font-size: 10px; margin-top: 2px;">${avaluoText}</div>` : ''}
+            </div>
+          `,
+          className: 'role-point-label',
+          iconSize: [120, 50],
+          iconAnchor: [60, 25],
+          popupAnchor: [0, -25],
+        })
+
+        const marker = L.marker([point.lat, point.lng], { icon }).addTo(map)
         marker.bindPopup(rolePointPopupHtml(point))
         marker.on('click', () => {
           onMapClick?.()
