@@ -3,9 +3,9 @@ import { Pool } from 'pg'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Aumentado a 50k para mostrar toda una comuna pequeña.
-// El clustering en el frontend (Leaflet MarkerCluster) maneja la renderización eficiente.
-const MAX_FEATURES = 50000
+// Sin límite máximo - Leaflet MarkerCluster maneja la renderización eficiente
+// incluso con 225k+ roles. Mostrar todos los roles disponibles.
+const MAX_FEATURES = 999999
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams

@@ -436,10 +436,23 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
       spiderfyOnMaxZoom: true,
     })
 
+    // Agrupar por dirección para detectar edificios (múltiples roles en misma dirección)
+    const addressGroups = new Map<string | null, SiiRolePoint[]>()
     rolePoints.forEach((point) => {
-      // Crear pin azul simple
+      const key = point.direccion || `__no_addr_${Math.random()}`
+      if (!addressGroups.has(key)) addressGroups.set(key, [])
+      addressGroups.get(key)!.push(point)
+    })
+
+    rolePoints.forEach((point) => {
+      const addressKey = point.direccion || `__no_addr_${Math.random()}`
+      const sameAddressRoles = addressGroups.get(addressKey) || [point]
+      const isBuilding = sameAddressRoles.length > 1
+
+      // Crear pin: rojo si es edificio, azul si es single
+      const color = isBuilding ? '#ef4444' : '#3399f3'
       const icon = L.icon({
-        iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4IiBmaWxsPSIjMzM5OWYzIi8+PC9zdmc+',
+        iconUrl: `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="${color}"/></svg>`)}`,
         iconSize: [24, 24],
         iconAnchor: [12, 12],
         popupAnchor: [0, -12],
@@ -448,6 +461,7 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
       const marker = L.marker([point.lat, point.lng], { icon }).addTo(clusterGroup)
       marker.bindPopup(rolePointPopupHtml(point))
       marker.on('click', () => {
+        map.setView([point.lat, point.lng], 16, { animate: true })
         onMapClick?.()
         onRolePointClick?.(point)
       })
