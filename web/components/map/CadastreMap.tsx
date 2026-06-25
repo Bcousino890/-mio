@@ -180,6 +180,7 @@ function loadLeaflet() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(window as any).L = L
       await import('leaflet-draw')
+      await import('leaflet.markercluster')
       return L
     })
   }
