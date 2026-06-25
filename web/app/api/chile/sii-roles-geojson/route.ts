@@ -3,10 +3,9 @@ import { Pool } from 'pg'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Leaflet renders un-clustered markers fine up to a few thousand; a whole
-// comuna can have 200k+ roles, so we cap hard here instead of relying on the
-// frontend to throttle.
-const MAX_FEATURES = 3000
+// Aumentado a 50k para mostrar toda una comuna pequeña.
+// El clustering en el frontend (Leaflet MarkerCluster) maneja la renderización eficiente.
+const MAX_FEATURES = 50000
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
