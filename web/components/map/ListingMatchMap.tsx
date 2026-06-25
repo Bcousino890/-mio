@@ -10,6 +10,9 @@ export interface MatchCandidate {
   lng: number | null
   match_score: number
   avaluo_fiscal_total: number | null
+  superficie_terreno_m2?: number | null
+  superficie_construida_m2?: number | null
+  distance_m?: number | null
 }
 
 interface Props {
@@ -57,12 +60,30 @@ export default function ListingMatchMap({ listingLat, listingLng, candidates, se
         scrollWheelZoom: true,
       })
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap © CARTO',
-        maxZoom: 20,
+      // Google Satellite basemap para mejor visualización de ubicaciones exactas
+      L.tileLayer('https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+        subdomains: ['0', '1', '2', '3'],
+        attribution: '© Google',
+        maxZoom: 21,
       }).addTo(map)
 
       L.control.zoom({ position: 'topright' }).addTo(map)
+
+      // Círculos de radios visuales (100m, 300m, 1000m) para referencia de búsqueda
+      const radios = [
+        { radius: 100, color: '#10b981', opacity: 0.1 },
+        { radius: 300, color: '#f59e0b', opacity: 0.05 },
+        { radius: 1000, color: '#ef4444', opacity: 0.03 },
+      ]
+      for (const r of radios) {
+        L.circle([listingLat, listingLng], {
+          radius: r.radius,
+          color: r.color,
+          fillColor: r.color,
+          fillOpacity: r.opacity,
+          weight: 1,
+        }).addTo(map)
+      }
 
       // Pin azul: ubicación declarada por el anuncio
       const listingIcon = L.divIcon({
@@ -76,19 +97,24 @@ export default function ListingMatchMap({ listingLat, listingLng, candidates, se
 
       const bounds = L.latLngBounds([[listingLat, listingLng]])
 
-      for (const c of geoCandidates) {
+      for (let i = 0; i < geoCandidates.length; i++) {
+        const c = geoCandidates[i]
         const color = scoreColor(c.match_score)
+        const number = i + 1
         const icon = L.divIcon({
           className: '',
-          iconAnchor: [9, 9],
-          html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.35);"></div>`,
+          iconAnchor: [14, 14],
+          html: `<div style="width:28px;height:28px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;">${number}</div>`,
         })
         const marker = L.marker([c.lat as number, c.lng as number], { icon })
           .bindPopup(`
-            <div style="font-family:system-ui;font-size:12px;line-height:1.5;min-width:160px">
-              <div style="font-weight:700;color:#0f172a">Rol ${c.rol}</div>
+            <div style="font-family:system-ui;font-size:12px;line-height:1.5;min-width:180px">
+              <div style="font-weight:700;color:#0f172a">#${number} · Rol ${c.rol}</div>
               <div style="color:#64748b;font-size:11px;margin-top:1px">${c.direccion ?? '—'}</div>
-              <div style="margin-top:4px;font-weight:600;color:${color}">${c.match_score.toFixed(0)}% coincidencia</div>
+              ${c.distance_m ? `<div style="color:#64748b;font-size:11px;margin-top:2px">Distancia: ${(c.distance_m / 1000).toFixed(2)}km</div>` : ''}
+              ${c.superficie_terreno_m2 ? `<div style="color:#64748b;font-size:11px">Sup. terreno: ${c.superficie_terreno_m2}m²</div>` : ''}
+              ${c.superficie_construida_m2 ? `<div style="color:#64748b;font-size:11px">Sup. construida: ${c.superficie_construida_m2}m²</div>` : ''}
+              <div style="margin-top:6px;font-weight:600;color:${color}">${(c.match_score * 100).toFixed(0)}% coincidencia</div>
             </div>
           `)
         marker.on('click', () => onSelectCandidate?.(c.rol))
@@ -130,15 +156,15 @@ export default function ListingMatchMap({ listingLat, listingLng, candidates, se
         </div>
         <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block flex-shrink-0" />
-          Alta coincidencia (≥75%)
+          Alta coincidencia (≥92%)
         </div>
         <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block flex-shrink-0" />
-          Revisar (45–75%)
+          Revisar (65–91%)
         </div>
         <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block flex-shrink-0" />
-          Baja coincidencia (&lt;45%)
+          Baja coincidencia (&lt;65%)
         </div>
       </div>
     </div>
