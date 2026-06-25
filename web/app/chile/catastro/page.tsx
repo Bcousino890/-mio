@@ -12,7 +12,7 @@ import {
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
-import { useSiiRolePins } from '@/lib/use-sii-role-pins'
+import { useSiiRolePins, type MapBounds } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 import type { DrawnShape } from '@/components/map/CadastreMap'
 
@@ -159,6 +159,9 @@ export default function CatastroPage() {
   const [zoneCount, setZoneCount] = useState<number | null>(null)
   const [zoneCountLoading, setZoneCountLoading] = useState(false)
 
+  // Map viewport bounds — updated by CadastreMap on every pan/zoom
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null)
+
   const PAGE_SIZE = 50
 
   // Debounce search
@@ -187,6 +190,9 @@ export default function CatastroPage() {
 
   // Reset page on filter change
   useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
+
+  // Reset map bounds when zone changes so the hook doesn't use stale bbox
+  useEffect(() => { setMapBounds(null) }, [zoneId])
 
   // Fetch stats
   useEffect(() => {
@@ -314,7 +320,7 @@ export default function CatastroPage() {
   }, [drawnShape, zone.siiCode])
 
   const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
-  const { rolePoints } = useSiiRolePins(zone.siiCode)
+  const { rolePoints } = useSiiRolePins(zone.siiCode, mapBounds)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
   const pins = layerTab === 'catastro' ? allPins : []
   const activeRolePoints = layerTab === 'catastro' ? rolePoints : []
@@ -1066,6 +1072,7 @@ export default function CatastroPage() {
             onMapClick={() => setSelectedRol(null)}
             onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
             onRolePointClick={(point) => { if (point.rol) setSelectedRol({ rol: point.rol }) }}
+            onBoundsChange={setMapBounds}
             onShapeDrawn={setDrawnShape}
             zoneRecordCount={zoneCount}
             zoneRecordLoading={zoneCountLoading}

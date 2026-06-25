@@ -3,9 +3,8 @@ import { Pool } from 'pg'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Sin límite máximo - Leaflet MarkerCluster maneja la renderización eficiente
-// incluso con 225k+ roles. Mostrar todos los roles disponibles.
-const MAX_FEATURES = 999999
+// Viewport-based loading: max features per request to keep responses <5MB
+const MAX_FEATURES = 25000
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
@@ -16,6 +15,13 @@ export async function GET(request: NextRequest) {
 
   const q = sp.get('q')?.trim()
   const destino = sp.get('destino')?.trim()
+
+  // Optional viewport bbox for progressive loading
+  const minLat = sp.get('min_lat') ? Number(sp.get('min_lat')) : null
+  const maxLat = sp.get('max_lat') ? Number(sp.get('max_lat')) : null
+  const minLng = sp.get('min_lng') ? Number(sp.get('min_lng')) : null
+  const maxLng = sp.get('max_lng') ? Number(sp.get('max_lng')) : null
+  const hasBbox = minLat !== null && maxLat !== null && minLng !== null && maxLng !== null
 
   try {
     const conditions: string[] = ['r.sii_comuna_code = $1', 'r.lat IS NOT NULL', 'r.lng IS NOT NULL']
@@ -28,6 +34,11 @@ export async function GET(request: NextRequest) {
     }
     if (destino) conditions.push(`r.codigo_destino_principal = ${addParam(destino)}`)
 
+    if (hasBbox) {
+      conditions.push(`r.lat BETWEEN ${addParam(minLat!)} AND ${addParam(maxLat!)}`)
+      conditions.push(`r.lng BETWEEN ${addParam(minLng!)} AND ${addParam(maxLng!)}`)
+    }
+
     const where = `WHERE ${conditions.join(' AND ')}`
     const limitParam = addParam(MAX_FEATURES)
 
@@ -39,10 +50,6 @@ export async function GET(request: NextRequest) {
        LIMIT ${limitParam}`,
       params
     )
-
-    if (result.rows.length === MAX_FEATURES) {
-      console.warn(`sii-roles-geojson: truncated results at ${MAX_FEATURES} for sii_comuna_code=${siiComunaCode}`)
-    }
 
     const features = result.rows.map((row) => ({
       type: 'Feature',
@@ -61,6 +68,7 @@ export async function GET(request: NextRequest) {
       type: 'FeatureCollection',
       features,
       truncated: result.rows.length === MAX_FEATURES,
+      total_returned: result.rows.length,
     })
   } catch (error) {
     console.error('Error fetching sii roles GeoJSON:', error)
