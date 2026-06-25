@@ -2,6 +2,8 @@
 
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import { useEffect, useRef, useState } from 'react'
 import type { CadastreParcel, CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import type { SiiRolePoint } from '@/lib/use-sii-role-pins'
@@ -198,6 +200,8 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
   const parcelLayersRef = useRef<Map<string, any>>(new Map())
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rolePointLayersRef = useRef<Map<string, any>>(new Map())
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const roleClusterGroupRef = useRef<any>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -410,105 +414,49 @@ export default function CadastreMap({ parcels, pins, rolePoints = [], center, zo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Re-render role points when zoom level or toggle changes
+  // Re-render role points when toggle changes
   useEffect(() => {
     if (!mapRef.current) return
 
     const map = mapRef.current
     const L = (window as any).L
 
-    const renderRolePoints = () => {
-      rolePointLayersRef.current.forEach((layer) => map.removeLayer(layer))
-      rolePointLayersRef.current.clear()
-
-      if (!showRoleLabels || currentZoom < 15) return
-
-      const groupedRoles = groupRolesByAddress(rolePoints)
-      groupedRoles.forEach(({ key, address, center, roles }) => {
-        let html: string
-        if (roles.length === 1) {
-          const r = roles[0]
-          const avaluoText = r.avaluo_fiscal_total ? formatCLP(r.avaluo_fiscal_total) : ''
-          html = `
-            <div style="
-              background: #1e293b;
-              border: 1px solid #475569;
-              border-radius: 4px;
-              padding: 4px 6px;
-              font-size: 11px;
-              font-family: system-ui, -apple-system;
-              color: #cbd5e1;
-              white-space: nowrap;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-              pointer-events: auto;
-            ">
-              <div style="font-weight: 600; color: #f1f5f9;">${r.rol || 'sin rol'}</div>
-              ${avaluoText ? `<div style="color: #a1aec9; font-size: 10px; margin-top: 2px;">${avaluoText}</div>` : ''}
-            </div>
-          `
-        } else {
-          const totalAvaluo = roles.reduce((sum, r) => sum + (r.avaluo_fiscal_total ?? 0), 0)
-          const totalAvalText = totalAvaluo > 0 ? formatCLP(totalAvaluo) : ''
-          html = `
-            <div style="
-              background: #0f766e;
-              border: 1px solid #14b8a6;
-              border-radius: 4px;
-              padding: 4px 6px;
-              font-size: 11px;
-              font-family: system-ui, -apple-system;
-              color: #ccfbf1;
-              white-space: nowrap;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-              pointer-events: auto;
-              text-align: center;
-            ">
-              <div style="font-weight: 600; color: #f0fdfa;">${roles.length} unidades</div>
-              ${totalAvalText ? `<div style="color: #99f6e0; font-size: 10px; margin-top: 2px;">${totalAvalText}</div>` : ''}
-            </div>
-          `
-        }
-
-        const icon = L.divIcon({
-          html,
-          className: 'role-point-label',
-          iconSize: roles.length === 1 ? [120, 50] : [110, 50],
-          iconAnchor: [roles.length === 1 ? 60 : 55, 25],
-          popupAnchor: [0, -25],
-        })
-
-        const marker = L.marker([center.lat, center.lng], { icon }).addTo(map)
-
-        if (roles.length === 1) {
-          marker.bindPopup(rolePointPopupHtml(roles[0]))
-          marker.on('click', () => {
-            onMapClick?.()
-            onRolePointClick?.(roles[0])
-          })
-        } else {
-          const popupHtml = `
-            <div style="font-family:system-ui;font-size:12px;line-height:1.5;min-width:160px">
-              <div style="color:#0f766e;font-weight:600;margin-bottom:6px">${address || 'Sin dirección'}</div>
-              <div style="color:#64748b;margin-bottom:8px">${roles.length} unidades en este edificio</div>
-              <div style="max-height:200px;overflow-y:auto">
-                ${roles.map((r, i) => `
-                  ${i > 0 ? '<div style="border-top:1px solid #e2e8f0;margin-top:6px;padding-top:6px"></div>' : ''}
-                  <div style="color:#475569;font-weight:600">${r.rol || 'sin rol'}</div>
-                  ${r.avaluo_fiscal_total ? `<div style="color:#64748b;font-size:11px">${formatCLP(r.avaluo_fiscal_total)}</div>` : ''}
-                  ${r.superficie_terreno_m2 ? `<div style="color:#64748b;font-size:11px">${r.superficie_terreno_m2} m²</div>` : ''}
-                `).join('')}
-              </div>
-            </div>
-          `
-          marker.bindPopup(popupHtml)
-        }
-
-        rolePointLayersRef.current.set(key, marker)
-      })
+    // Limpiar cluster group anterior
+    if (roleClusterGroupRef.current) {
+      map.removeLayer(roleClusterGroupRef.current)
+      roleClusterGroupRef.current = null
     }
 
-    renderRolePoints()
-  }, [currentZoom, showRoleLabels, rolePoints])
+    if (!showRoleLabels || rolePoints.length === 0) return
+
+    // Crear MarkerClusterGroup
+    const clusterGroup = new (L as any).MarkerClusterGroup({
+      maxClusterRadius: 80,
+      disableClusteringAtZoom: 16,
+      spiderfyOnMaxZoom: true,
+    })
+
+    rolePoints.forEach((point) => {
+      // Crear pin azul simple
+      const icon = L.icon({
+        iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4IiBmaWxsPSIjMzM5OWYzIi8+PC9zdmc+',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+        popupAnchor: [0, -12],
+      })
+
+      const marker = L.marker([point.lat, point.lng], { icon }).addTo(clusterGroup)
+      marker.bindPopup(rolePointPopupHtml(point))
+      marker.on('click', () => {
+        onMapClick?.()
+        onRolePointClick?.(point)
+      })
+    })
+
+    // Agregar el cluster group al mapa
+    clusterGroup.addTo(map)
+    roleClusterGroupRef.current = clusterGroup
+  }, [showRoleLabels, rolePoints])
 
   // Handle highlighting parcel when highlightedParcelId changes
   useEffect(() => {
