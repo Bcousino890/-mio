@@ -16,6 +16,13 @@ import { useSiiRolePins, type MapBounds } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 import GoogleMapsView from '@/components/map/GoogleMapsView'
 
+interface DrawnShape {
+  type: 'polygon' | 'circle' | 'rectangle'
+  coordinates?: [number, number][]
+  center?: [number, number]
+  radius?: number
+}
+
 const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
   confirmed: 'Confirmado (catastro)',
   candidate: 'Candidato',
