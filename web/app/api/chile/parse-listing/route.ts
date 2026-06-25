@@ -109,22 +109,23 @@ async function findSiiCandidates(
     for (const radius of radios) {
       try {
         const query = `
-          SELECT
-            rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-            superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
-            CASE WHEN lat IS NOT NULL AND lng IS NOT NULL
-                 THEN ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326))
-                 ELSE NULL END AS distance_m,
-            CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
-                 THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
-                 ELSE NULL END AS text_sim
-          FROM sii_roles_cl
-          WHERE sii_comuna_code = $1
-            AND lat IS NOT NULL AND lng IS NOT NULL
-            AND ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
-          ORDER BY
-            ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) ASC,
-            avaluo_fiscal_total DESC NULLS LAST
+          WITH candidates AS (
+            SELECT
+              rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
+              superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+              ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+              CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
+                   THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+                   ELSE NULL END AS text_sim
+            FROM sii_roles_cl
+            WHERE sii_comuna_code = $1
+              AND lat IS NOT NULL AND lng IS NOT NULL
+              AND lat >= $3 - 0.1 AND lat <= $3 + 0.1
+              AND lng >= $4 - 0.1 AND lng <= $4 + 0.1
+          )
+          SELECT * FROM candidates
+          WHERE distance_m < $5
+          ORDER BY distance_m ASC, avaluo_fiscal_total DESC NULLS LAST
           LIMIT 40
         `
         const params = [siiCode, opts.address ?? null, opts.lat, opts.lng, radius]
