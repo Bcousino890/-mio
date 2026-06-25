@@ -112,16 +112,18 @@ async function findSiiCandidates(
           SELECT
             rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
             superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
-            ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+            CASE WHEN lat IS NOT NULL AND lng IS NOT NULL
+                 THEN ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326))
+                 ELSE NULL END AS distance_m,
             CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
                  THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
                  ELSE NULL END AS text_sim
           FROM sii_roles_cl
           WHERE sii_comuna_code = $1
             AND lat IS NOT NULL AND lng IS NOT NULL
-            AND ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
+            AND ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
           ORDER BY
-            ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) ASC,
+            ST_DistanceSphere(ST_SetSRID(ST_MakePoint(lng, lat), 4326), ST_SetSRID(ST_MakePoint($4, $3), 4326)) ASC,
             avaluo_fiscal_total DESC NULLS LAST
           LIMIT 40
         `
