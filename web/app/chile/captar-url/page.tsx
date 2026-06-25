@@ -347,8 +347,21 @@ export default function CaptarUrlPage() {
               <div className="space-y-2">
                 {result.sii_candidates.map((rol: any, i: number) => {
                   const score = rol.match_score as number | undefined
-                  const scoreColor = score == null ? 'text-slate-600' : score >= 75 ? 'text-emerald-400' : score >= 45 ? 'text-amber-400' : 'text-red-400'
-                  const scoreBg = score == null ? 'bg-slate-800/50' : score >= 75 ? 'bg-emerald-950/40 border-emerald-900/50' : score >= 45 ? 'bg-amber-950/40 border-amber-900/50' : 'bg-red-950/40 border-red-900/50'
+                  const percentScore = score ? Math.round(score * 100) : null
+
+                  let confidence_level = 'low_candidate'
+                  let scoreBadgeColor = 'bg-red-950/40 border-red-900/50 text-red-400'
+                  if (percentScore && percentScore >= 92) {
+                    confidence_level = 'confirmed'
+                    scoreBadgeColor = 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+                  } else if (percentScore && percentScore >= 80) {
+                    confidence_level = 'high_candidate'
+                    scoreBadgeColor = 'bg-green-950/40 border-green-900/50 text-green-400'
+                  } else if (percentScore && percentScore >= 65) {
+                    confidence_level = 'candidate'
+                    scoreBadgeColor = 'bg-amber-950/40 border-amber-900/50 text-amber-400'
+                  }
+
                   const isSelected = selectedRol === rol.rol
                   return (
                     <button
@@ -373,17 +386,26 @@ export default function CaptarUrlPage() {
                           )}
                         </div>
                         <p className="text-xs text-slate-500 truncate">{rol.direccion ?? '—'}</p>
-                      </div>
-                      {score != null && (
-                        <div className={`flex-shrink-0 px-2 py-1 rounded-lg border text-xs font-bold ${scoreBg} ${scoreColor}`}>
-                          {score.toFixed(0)}%
+                        <div className="flex gap-2 mt-1.5 flex-wrap">
+                          {rol.superficie_terreno_m2 && (
+                            <span className="text-[10px] text-slate-500 bg-slate-900/30 px-1.5 py-0.5 rounded">
+                              Terreno: {rol.superficie_terreno_m2}m²
+                            </span>
+                          )}
+                          {rol.superficie_construida_m2 && (
+                            <span className="text-[10px] text-slate-500 bg-slate-900/30 px-1.5 py-0.5 rounded">
+                              Construida: {rol.superficie_construida_m2}m²
+                            </span>
+                          )}
                         </div>
-                      )}
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-semibold text-slate-200">{fmtCLP(rol.avaluo_fiscal_total)}</p>
-                        {rol.superficie_terreno_m2 && (
-                          <p className="text-[10px] text-slate-600">{rol.superficie_terreno_m2} m²</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                        {percentScore != null && (
+                          <div className={`px-2.5 py-1 rounded-lg border text-xs font-bold ${scoreBadgeColor}`}>
+                            {percentScore}%
+                          </div>
                         )}
+                        <p className="text-sm font-semibold text-slate-200">{fmtCLP(rol.avaluo_fiscal_total)}</p>
                       </div>
                       <a
                         href="/chile/catastro"

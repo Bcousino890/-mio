@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Pool } from 'pg'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
-import { scoreCandidates, type SiiCandidateRow } from '@/lib/sii-match-cl'
+import { scoreCandidates as scoreCandidatesV2, type ParsedListing } from '@/lib/sii-match-cl-v2'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -89,70 +89,118 @@ async function fetchListingPage(url: string): Promise<string> {
   return res.text()
 }
 
-async function findSiiCandidates(siiCode: string, opts: {
-  address?: string | null
-  sqm?: number | null
-  lat?: number | null
-  lng?: number | null
-}) {
+async function findSiiCandidates(
+  siiCode: string,
+  opts: {
+    address?: string | null
+    sqm?: number | null
+    lat?: number | null
+    lng?: number | null
+    property_type?: string | null
+  },
+) {
   if (!siiCode) return []
 
-  try {
-    const hasGeo = opts.lat != null && opts.lng != null
+  const hasGeo = opts.lat != null && opts.lng != null
 
-    const query = `
+  // Búsqueda iterativa en radios si hay coords
+  if (hasGeo) {
+    const radios = [100, 300, 1000] // metros
+    for (const radius of radios) {
+      try {
+        const query = `
+          SELECT
+            rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
+            superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+            ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+            CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
+                 THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+                 ELSE NULL END AS text_sim
+          FROM sii_roles_cl
+          WHERE sii_comuna_code = $1
+            AND lat IS NOT NULL AND lng IS NOT NULL
+            AND ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
+          ORDER BY
+            ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) ASC,
+            avaluo_fiscal_total DESC NULLS LAST
+          LIMIT 40
+        `
+        const params = [siiCode, opts.address ?? null, opts.lat, opts.lng, radius]
+        const res = await pool.query(query, params)
+
+        if (res.rows.length > 0) {
+          // Puntuar candidatos
+          const scored = scoreCandidatesV2(
+            {
+              address: opts.address,
+              address_full: opts.address,
+              sqm: opts.sqm,
+              lat: opts.lat,
+              lng: opts.lng,
+              property_type: opts.property_type,
+            } as ParsedListing,
+            res.rows,
+          )
+
+          // Si encontramos un score muy alto (confirmed), parar
+          const confirmed = scored.find((s) => s.match_result.confidence_level === 'confirmed')
+          if (confirmed) return scored.slice(0, 5)
+
+          // Si encontramos 3+ high candidates, retornar
+          const highCandidates = scored.filter((s) => s.match_result.confidence_level === 'high_candidate')
+          if (highCandidates.length >= 3) return scored.slice(0, 5)
+
+          // Si hay buenos candidatos (score > 0.75), retornar
+          if (scored[0]?.match_score > 0.75) return scored.slice(0, 5)
+        }
+      } catch {
+        // Continuar al siguiente radio
+        continue
+      }
+    }
+  }
+
+  // Fallback: búsqueda por dirección si no hay geo o geo no tuvo resultados
+  try {
+    let query = `
       SELECT
         rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-        codigo_destino_principal, rol_padre, lat, lng,
-        CASE WHEN $4::double precision IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
-             THEN ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326))
-             ELSE NULL END AS distance_m,
+        superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+        NULL::double precision AS distance_m,
         CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
              THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
              ELSE NULL END AS text_sim
       FROM sii_roles_cl
       WHERE sii_comuna_code = $1
-        AND (
-          ($2::text IS NOT NULL AND direccion IS NOT NULL
-            AND similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2))) > 0.2)
-          OR ($4::double precision IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
-            AND ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < 400)
-          OR ($2::text IS NULL AND $4::double precision IS NULL)
-        )
-      ORDER BY
-        CASE WHEN $4::double precision IS NOT NULL AND lat IS NOT NULL AND lng IS NOT NULL
-             THEN ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) ELSE 1e9 END ASC,
-        avaluo_fiscal_total DESC NULLS LAST
-      LIMIT 40
     `
-    const params = [siiCode, opts.address ?? null, opts.lat ?? null, opts.lng ?? null]
+    const params: unknown[] = [siiCode]
+
+    if (opts.address) {
+      params.push(`%${opts.address.toUpperCase()}%`)
+      query += ` AND direccion ILIKE $${params.length}`
+    }
+
+    if (opts.sqm) {
+      params.push(opts.sqm * 0.5, opts.sqm * 1.5)
+      query += ` AND superficie_terreno_m2 BETWEEN $${params.length - 1} AND $${params.length}`
+    }
+
+    query += ` ORDER BY avaluo_fiscal_total DESC NULLS LAST LIMIT 40`
 
     const res = await pool.query(query, params)
-    return scoreCandidates(res.rows as SiiCandidateRow[], opts.sqm ?? null).slice(0, 12)
+    return scoreCandidatesV2(
+      {
+        address: opts.address,
+        address_full: opts.address,
+        sqm: opts.sqm,
+        lat: opts.lat,
+        lng: opts.lng,
+        property_type: opts.property_type,
+      } as ParsedListing,
+      res.rows,
+    ).slice(0, 12)
   } catch {
-    // Si PostGIS/pg_trgm fallan (ej. comuna sin lat/lng poblado), degradar a
-    // un filtro simple por dirección/m² en vez de devolver error al usuario.
-    try {
-      let query = `SELECT rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-                          codigo_destino_principal, rol_padre, lat, lng,
-                          NULL::double precision AS distance_m, NULL::double precision AS text_sim
-                   FROM sii_roles_cl
-                   WHERE sii_comuna_code = $1`
-      const params: unknown[] = [siiCode]
-      if (opts.address) {
-        params.push(`%${opts.address.toUpperCase()}%`)
-        query += ` AND direccion ILIKE $${params.length}`
-      }
-      if (opts.sqm) {
-        params.push(opts.sqm * 0.5, opts.sqm * 2)
-        query += ` AND superficie_terreno_m2 BETWEEN $${params.length - 1} AND $${params.length}`
-      }
-      query += ` ORDER BY avaluo_fiscal_total DESC NULLS LAST LIMIT 12`
-      const res = await pool.query(query, params)
-      return scoreCandidates(res.rows as SiiCandidateRow[], opts.sqm ?? null)
-    } catch {
-      return []
-    }
+    return []
   }
 }
 
@@ -230,6 +278,7 @@ export async function POST(request: NextRequest) {
           sqm: (merged.sqm as number) ?? null,
           lat: (merged.lat as number) ?? null,
           lng: (merged.lng as number) ?? null,
+          property_type: (merged.property_type as string) ?? null,
         })
       : []
 
