@@ -192,11 +192,15 @@ function addressSimilarityScore(listing: ParsedListing, candidate: SiiCandidateR
 
   if (!listingAddr || !candidateAddr) return 0
 
+  // Check exacto primero (antes de extractAddressComponents)
+  if (listingAddr === candidateAddr) return 0.4
+
   const listingComp = extractAddressComponents(listingAddr)
   const candidateComp = extractAddressComponents(candidateAddr)
 
-  // Búsqueda exacta vía + número
+  // Búsqueda por vía + número
   if (listingComp.vía && candidateComp.vía && listingComp.número && candidateComp.número) {
+    // Vía exacta + número exacto
     if (listingComp.vía === candidateComp.vía && listingComp.número === candidateComp.número) {
       return 0.4 // vía + número exacto
     }
@@ -210,12 +214,16 @@ function addressSimilarityScore(listing: ParsedListing, candidate: SiiCandidateR
     }
   }
 
-  // Trigram similarity (simple: contar caracteres comunes / total)
-  const commonChars = new Set([...listingAddr].filter((c) => candidateAddr.includes(c))).size
-  const similarity = commonChars / Math.max(listingAddr.length, candidateAddr.length)
+  // Trigram similarity (simple: contar palabras comunes)
+  const listingWords = new Set(listingAddr.split(/\s+/))
+  const candidateWords = new Set(candidateAddr.split(/\s+/))
+  const commonWords = [...listingWords].filter((w) => candidateWords.has(w)).length
+  const totalWords = Math.max(listingWords.size, candidateWords.size)
+  const wordSimilarity = commonWords / totalWords
 
-  if (similarity > 0.7) return 0.1 // fuzzy match fuerte
-  if (similarity > 0.5) return 0.05 // fuzzy match débil
+  if (wordSimilarity > 0.7) return 0.2 // palabras clave coinciden
+  if (wordSimilarity > 0.5) return 0.1 // mayoría de palabras coinciden
+  if (wordSimilarity > 0.3) return 0.05 // algunas palabras coinciden
 
   return 0
 }
