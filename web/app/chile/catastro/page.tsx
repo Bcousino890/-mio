@@ -695,9 +695,9 @@ export default function CatastroPage() {
                             <span className="text-[11px] text-slate-300 font-medium">{value}</span>
                           </div>
                         ) : null)}
-                        {(rolDetail.rol?.lat && rolDetail.rol?.lng) && (
-                          <div className="flex px-3 py-2 border-b border-[var(--c-border-card)]/40">
-                            <span className="text-[11px] text-slate-600 w-28 flex-shrink-0">Coordenadas</span>
+                        <div className="flex px-3 py-2 border-b border-[var(--c-border-card)]/40">
+                          <span className="text-[11px] text-slate-600 w-28 flex-shrink-0">Coordenadas</span>
+                          {rolDetail.rol?.lat && rolDetail.rol?.lng ? (
                             <a
                               href={`https://www.google.com/maps/search/${rolDetail.rol.lat},${rolDetail.rol.lng}`}
                               target="_blank"
@@ -707,8 +707,10 @@ export default function CatastroPage() {
                               {rolDetail.rol.lat.toFixed(6)}, {rolDetail.rol.lng.toFixed(6)}
                               <ExternalLink size={9} />
                             </a>
-                          </div>
-                        )}
+                          ) : (
+                            <span className="text-[11px] text-slate-500 italic">Cargando coordenadas...</span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
