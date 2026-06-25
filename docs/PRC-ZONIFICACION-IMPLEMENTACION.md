@@ -100,7 +100,7 @@ node scraper/load-prc-zonas.mjs --comuna lascondes --populate
   ✅ Zona 3 - Mixta
 
 🔄 Asignando zonas a roles de 13132...
-✅ Actualizados 2847 roles con zonas
+✅ Actualizados XXXXX roles con zonas
 
 ✨ Insertadas 3/3 zonas
 ```
@@ -122,17 +122,20 @@ GROUP BY sii_comuna_code
 ORDER BY sii_comuna_code;
 ```
 
-**Esperado:**
+**Resultado esperado (~600k+ roles totales en estas 5 comunas):**
 ```
  sii_comuna_code | total_roles | roles_con_zona | cobertura_pct
 -----------------+-------------+----------------+---------------
- 13114           |        4521 |           4521 |         100.0
- 13115           |        2156 |           2156 |         100.0
- 13123           |        3847 |           3847 |         100.0
- 13132           |        2847 |           2847 |         100.0
- 13301           |        1892 |           1892 |         100.0
-(5 rows)
+ 13114           |     ~180k   |      ~180k     |         100.0
+ 13115           |      ~80k   |       ~80k     |         100.0
+ 13123           |     ~150k   |      ~150k     |         100.0
+ 13132           |     ~120k   |      ~120k     |         100.0
+ 13301           |      ~70k   |       ~70k     |         100.0
+-----------------+-------------+----------------+---------------
+ TOTAL           |     ~600k   |      ~600k     |         100.0
 ```
+
+**Nota:** Los números exactos dependen de la ingesta SII. Estos son aproximados basados en densidad poblacional de las comunas.
 
 ---
 
