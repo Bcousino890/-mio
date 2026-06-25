@@ -363,6 +363,15 @@ export function scoreCandidate(
   components.distance_agreement = distanceAgreementScore(candidate.distance_m ?? null)
   raw += weights.distance_agreement * (components.distance_agreement ?? 0)
 
+  // Ajuste: Si dirección no tiene número de calle pero está muy cercano (<300m),
+  // subir score porque probablemente es la propiedad correcta
+  const addressHasNumber = /\d{3,}/.test(listing.address_full ?? listing.address ?? '')
+  const isVeryClose = (candidate.distance_m ?? Infinity) < 300
+  if (!addressHasNumber && isVeryClose && (components.address_similarity ?? 0) > 0) {
+    // Aumentar raw score como bonus por proximidad cuando no hay dirección exacta
+    raw += 0.15
+  }
+
   // Normalizar con sigmoid
   const score = sigmoid(raw)
 
