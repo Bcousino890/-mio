@@ -64,7 +64,14 @@ export default function CaptarUrlPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!url.trim()) return
+    let urlToSubmit = url.trim()
+    if (!urlToSubmit) return
+
+    // Auto-agregar https:// si falta el protocolo
+    if (!urlToSubmit.startsWith('http://') && !urlToSubmit.startsWith('https://')) {
+      urlToSubmit = 'https://' + urlToSubmit
+    }
+
     setLoading(true)
     setError(null)
     setResult(null)
@@ -74,7 +81,7 @@ export default function CaptarUrlPage() {
       const res = await fetch('/api/chile/parse-listing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: urlToSubmit }),
       })
       const data = await res.json()
       if (data.success) {
@@ -103,10 +110,10 @@ export default function CaptarUrlPage() {
           <div className="relative flex-1">
             <Link2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
             <input
-              type="url"
+              type="text"
               value={url}
               onChange={e => setUrl(e.target.value)}
-              placeholder="https://www.portalinmobiliario.com/MLC-..."
+              placeholder="www.portalinmobiliario.com/MLC-... o https://..."
               className="w-full pl-9 pr-4 py-2.5 text-sm bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-blue-600/50"
             />
           </div>
