@@ -104,8 +104,9 @@ async function findSiiCandidates(
   const hasGeo = opts.lat != null && opts.lng != null
 
   // Búsqueda iterativa en radios si hay coords
+  // Portal Inmobiliario da coordenadas referenciales, expandir radio inicial a 300m
   if (hasGeo) {
-    const radios = [100, 300, 1000] // metros
+    const radios = [300, 1000, 5000] // metros - coords del portal pueden estar 200-300m alejadas
     for (const radius of radios) {
       try {
         const query = `
