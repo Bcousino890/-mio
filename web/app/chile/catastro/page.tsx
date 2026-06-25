@@ -14,9 +14,7 @@ import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
 import { useSiiRolePins, type MapBounds } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
-import type { DrawnShape } from '@/components/map/CadastreMap'
-
-const CadastreMap = nextDynamicImport(() => import('@/components/map/CadastreMap'), { ssr: false })
+import GoogleMapsView from '@/components/map/GoogleMapsView'
 
 const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
   confirmed: 'Confirmado (catastro)',
@@ -1076,20 +1074,10 @@ export default function CatastroPage() {
 
         {/* RIGHT: map */}
         <div className="flex-1 relative">
-          <CadastreMap
-            parcels={parcels}
-            pins={pins}
-            rolePoints={activeRolePoints}
+          <GoogleMapsView
+            selectedRol={rolDetail?.rol ? { lat: rolDetail.rol.lat, lng: rolDetail.rol.lng, direccion: rolDetail.rol.direccion } : null}
             center={zone.center}
             zoom={15}
-            highlightedParcelId={selectedRol?.matched_parcel_id || null}
-            onMapClick={() => setSelectedRol(null)}
-            onParcelClick={(parcel) => { if (parcel.rol) setSelectedRol({ rol: parcel.rol }) }}
-            onRolePointClick={(point) => { if (point.rol) setSelectedRol({ rol: point.rol }) }}
-            onBoundsChange={setMapBounds}
-            onShapeDrawn={setDrawnShape}
-            zoneRecordCount={zoneCount}
-            zoneRecordLoading={zoneCountLoading}
           />
         </div>
       </div>
