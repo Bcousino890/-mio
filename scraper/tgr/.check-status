@@ -1,4 +1,4 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/check-tgr-status.yml.
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
-Check 2026-06-27 17:48 UTC — diagnóstico de recursos (RAM/CPU) y prueba de 4 lanzamientos paralelos de Chrome, ya que el fix de binario real no resolvió "no chrome binary".
+Check 2026-06-27 17:51 UTC — reproducir sesión Selenium directo vía chromedriver HTTP API con log verbose: recursos OK y 4 lanzamientos paralelos directos funcionan, pero Selenium real sigue fallando con "no chrome binary"; necesitamos el log verbose de chromedriver para ver la causa real detrás de ese mensaje genérico.
 
