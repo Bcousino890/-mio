@@ -48,6 +48,14 @@ jobs:
             fi
 
             echo ""
+            echo "── Primeras líneas del log (init workers, primer error) ──"
+            if [ -n "$LATEST_LOG" ]; then
+              head -60 "$LATEST_LOG"
+              echo "--- primer SessionNotCreatedException con contexto ---"
+              grep -n -B5 "SessionNotCreatedException\|DevToolsActivePort\|user_data_dir\|Failed to read JSON" "$LATEST_LOG" | head -60
+            fi
+
+            echo ""
             echo "── CSV de roles exportado ──"
             wc -l scraper/tgr/roles_input_rm.csv 2>/dev/null || echo "No existe roles_input_rm.csv"
 
