@@ -1027,7 +1027,9 @@ class Orquestador:
 def main():
     parser = argparse.ArgumentParser(description="Scraper TGR - Certificado de Deuda de Contribuciones")
     parser.add_argument("--input", type=str, help="CSV de entrada con columnas rol,comuna")
-    parser.add_argument("--workers", type=int, default=4)
+    # default=1: el WAF de tesoreria.cl bloquea por IP, no por tasa — varios
+    # workers en paralelo solo aceleran el bloqueo, no el throughput real.
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--max-reintentos", type=int, default=4)
     parser.add_argument("--test-fixture", action="store_true", help="Corre el test contra el caso conocido (Lo Barnechea)")
     parser.add_argument("--retry-failed", action="store_true", help="Reintenta todos los ROLs marcados como error")
