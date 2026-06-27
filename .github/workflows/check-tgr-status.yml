@@ -71,6 +71,13 @@ jobs:
             ls -la scraper/tgr/data 2>&1 || echo "(no existe data/)"
 
             echo ""
+            echo "── ¿chromedriver está confinado por snap/apparmor? ──"
+            ls -la /usr/bin/chromedriver 2>&1
+            dpkg -S /usr/bin/chromedriver 2>&1 || echo "(no es de un paquete deb)"
+            apt list --installed 2>/dev/null | grep -i chromedriver || echo "(no instalado vía apt)"
+            sudo aa-status 2>&1 | grep -i chrome || echo "(aa-status no disponible o sin perfiles chrome)"
+
+            echo ""
             echo "── Diagnóstico Chrome/ChromeDriver ──"
             which google-chrome google-chrome-stable chromium chromium-browser 2>&1 || echo "(ningún binario de chrome en PATH)"
             CHROME_BIN=$(command -v chromium || command -v chromium-browser)
