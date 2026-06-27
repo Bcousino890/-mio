@@ -69,21 +69,34 @@ else
   export CHROME_BINARY="$GOOGLE_CHROME_BIN"
 fi
 
-# ChromeDriver: lo fijamos explícitamente en vez de dejar que Selenium Manager
-# lo resuelva por worker. Con 4 workers en threads paralelos, cada uno invoca
-# Selenium Manager al crear su sesión; Selenium Manager tiene un bug conocido
-# de condición de carrera en su caché/lock cuando se invoca concurrentemente
-# por primera vez, lo que provocaba "no chrome binary at /usr/bin/google-chrome-stable"
-# en TODOS los workers simultáneamente pese a que el binario sí existía y
-# funcionaba (confirmado lanzándolo directo). Usamos el chromedriver de apt
-# (chromium-driver), que ya viene validado en este VPS.
-if ! command -v chromedriver >/dev/null 2>&1; then
-  apt-get update -qq
-  apt-get install -y -qq chromium-driver
+# ChromeDriver: NO usamos el paquete apt "chromium-driver" — confirmado por
+# diagnóstico que es un wrapper transicional de Ubuntu que en realidad invoca
+# el chromedriver del snap chromium (chromium-chromedriver, perfil AppArmor
+# snap.chromium.chromedriver, "aa-status" lo muestra activo). Ese perfil
+# confina el proceso a las rutas permitidas por el sandbox de snap y bloquea
+# el acceso a /opt/google/chrome/* (donde vive Google Chrome estable), lo que
+# causaba el "no chrome binary at ..." instantáneo (1ms, sin intento real de
+# stat/exec) sin importar si apuntábamos al wrapper o al binario real de
+# Chrome. Instalamos en su lugar el chromedriver oficial standalone (Chrome
+# for Testing), sin snap/AppArmor, en una versión que matchee la de Chrome.
+CHROMEDRIVER_STANDALONE_DIR="/opt/chromedriver-standalone"
+CHROMEDRIVER_BIN="$CHROMEDRIVER_STANDALONE_DIR/chromedriver"
+CHROME_VERSION="$("$CHROME_BINARY" --version | grep -oP '[\d.]+' | head -1)"
+if [ ! -x "$CHROMEDRIVER_BIN" ] || [ "$("$CHROMEDRIVER_BIN" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)" != "$CHROME_VERSION" ]; then
+  echo "▶ Instalando chromedriver standalone $CHROME_VERSION (sin snap/AppArmor)..."
+  mkdir -p "$CHROMEDRIVER_STANDALONE_DIR"
+  command -v unzip >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq unzip; }
+  CD_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+  wget -q -O /tmp/chromedriver-standalone.zip "$CD_URL"
+  rm -rf /tmp/chromedriver-extract
+  mkdir -p /tmp/chromedriver-extract
+  unzip -q -o /tmp/chromedriver-standalone.zip -d /tmp/chromedriver-extract
+  cp /tmp/chromedriver-extract/chromedriver-linux64/chromedriver "$CHROMEDRIVER_BIN"
+  chmod +x "$CHROMEDRIVER_BIN"
+  rm -rf /tmp/chromedriver-standalone.zip /tmp/chromedriver-extract
 fi
-CHROMEDRIVER_BIN="$(command -v chromedriver)"
-if [ -z "$CHROMEDRIVER_BIN" ] || [ ! -x "$CHROMEDRIVER_BIN" ]; then
-  echo "✗ chromedriver no está disponible tras instalar chromium-driver"
+if [ ! -x "$CHROMEDRIVER_BIN" ]; then
+  echo "✗ chromedriver standalone no está disponible tras la instalación"
   exit 1
 fi
 export CHROMEDRIVER_PATH="$CHROMEDRIVER_BIN"
