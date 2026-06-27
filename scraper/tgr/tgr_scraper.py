@@ -765,12 +765,27 @@ class WorkerTGR:
 
             except TimeoutException:
                 ultimo_error = "timeout esperando resultado"
+                waf_bloqueado = False
                 try:
                     url_actual = self.driver.current_url
                     snippet = re.sub(r"\s+", " ", self.driver.page_source)[:300]
                     logger.warning(f"Worker {self.worker_id}: timeout en {url_actual} — snippet página: {snippet!r}")
+                    if "Request Rejected" in snippet or "support ID is" in snippet:
+                        waf_bloqueado = True
                 except Exception:
                     pass
+
+                if waf_bloqueado:
+                    # WAF (F5 BIG-IP ASM) está rechazando la IP, no es timeout de red.
+                    # Reintentar rápido solo extiende el bloqueo: cooldown largo.
+                    ultimo_error = "bloqueado por WAF del sitio (Request Rejected)"
+                    cooldown = 300 + random.uniform(0, 60)
+                    logger.warning(
+                        f"Worker {self.worker_id}: ROL {rol} bloqueado por WAF. "
+                        f"Cooldown de {cooldown:.0f}s antes de reintentar..."
+                    )
+                    time.sleep(cooldown)
+                    continue
             except (NoSuchElementException, StaleElementReferenceException) as e:
                 ultimo_error = f"elemento no encontrado: {e}"
             except WebDriverException as e:
@@ -798,17 +813,18 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # workers=4 en paralelo generaba una ráfaga de ~1.2 req/s contra
-    # tesoreria.cl; las primeras consultas funcionaban pero pasados ~5 min
-    # el sitio empezó a no responder ("timeout esperando resultado") en el
-    # 100% de los intentos siguientes — patrón típico de throttling/bloqueo
-    # por IP ante tráfico tipo bot. Bajamos a 2 workers y subimos el delay
-    # entre consultas para reducir la tasa de requests y evitar el bloqueo.
-    workers: int = 2
+    # El snippet de página capturado en los timeouts confirmó que no es un
+    # timeout de red sino un bloqueo activo del WAF del sitio (F5 BIG-IP ASM,
+    # página "Request Rejected" con support ID) — la IP ya está marcada como
+    # bot. Bajar a 2 workers no fue suficiente porque el bloqueo es por IP,
+    # no solo por tasa. Bajamos a 1 worker y subimos aún más el delay para
+    # minimizar la huella, dejando que el cooldown largo en procesar() (ver
+    # detección de "Request Rejected") absorba los bloqueos restantes.
+    workers: int = 1
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
-    delay_min: float = 5.0
-    delay_max: float = 10.0
+    delay_min: float = 8.0
+    delay_max: float = 15.0
     timeout: int = 25
     headless: bool = True
     export_cada_n: int = 200
