@@ -6,4 +6,5 @@ Check 2026-06-27 18:09 UTC — nueva hipótesis: el paquete apt "chromium-driver
 Check 2026-06-27 18:18 UTC — confirmado y corregido: chromedriver standalone oficial instalado, scraper relanzado. Verificando si ya procesa certificados.
 Check 2026-06-27 18:30 UTC — segunda verificación tras dar más tiempo al scraper: confirmar si el conteo en Postgres ya subió de 0 y si el log sigue libre de SessionNotCreatedException.
 Check 2026-06-27 18:21 UTC (resultado) — ¡FIX CONFIRMADO! Conteo en Postgres = 4 certificados (subió de 0). Workers 0-3 con driver iniciado, sin SessionNotCreatedException. Hay timeouts ocasionales por ROL con reintento automático (comportamiento normal/esperado, no error fatal). Scraper procesando 1,019,740 roles en producción.
+Check 2026-06-27 18:48 UTC — chequeo de seguimiento tras ~30 min más de procesamiento: confirmar que el conteo sigue subiendo y que no surgieron errores nuevos (memoria, rate-limiting, captchas, etc.).
 
