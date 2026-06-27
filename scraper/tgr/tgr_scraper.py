@@ -16,6 +16,7 @@ Uso:
 
 import argparse
 import base64
+import contextlib
 import csv
 import io
 import logging
@@ -416,10 +417,24 @@ class BaseDatos:
         if self._pg_dsn:
             logger.info("DATABASE_URL detectado: los certificados también se guardarán en Postgres de producción")
 
+    @contextlib.contextmanager
     def _conn(self):
+        # sqlite3.Connection usado como "with conn:" solo gestiona la
+        # transacción (commit/rollback), NO cierra el archivo. Como cada
+        # llamada abre una conexión nueva y hay miles de llamadas desde
+        # varios hilos worker, sin cerrar explícitamente se agotan los file
+        # descriptors del proceso y sqlite3 falla con "unable to open
+        # database file" (es el mensaje genérico de sqlite3 para errores de
+        # open() del sistema, incluido EMFILE). Por eso aquí cerramos
+        # siempre la conexión real al salir, conservando para quien llama
+        # la misma sintaxis "with self._conn() as conn: ...".
         conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL;")  # permite lecturas concurrentes (dashboard)
-        return conn
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")  # permite lecturas concurrentes (dashboard)
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self):
         with self._lock, self._conn() as conn:
