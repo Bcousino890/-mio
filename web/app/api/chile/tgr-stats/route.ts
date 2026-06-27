@@ -19,7 +19,7 @@ function esEmpresa(nombre: string | null): boolean {
 
 export async function GET() {
   try {
-    const [globalRes, comunaRes, ultimosRes, erroresRes, esperadosRes, heartbeatRes, nombresRes] = await Promise.all([
+    const [globalRes, comunaRes, ultimosRes, erroresRes, esperadosRes, heartbeatRes, nombresRes, sinNombreRes] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(*) AS total,
@@ -46,11 +46,11 @@ export async function GET() {
         LIMIT 20
       `),
       pool.query(`
-        SELECT rol, comuna, error, intentos, fecha_consulta
+        SELECT rol, comuna, error, intentos, fecha_consulta, revisado, revisado_at, revisado_nota
         FROM tgr_certificados
         WHERE estado = 'error'
-        ORDER BY fecha_consulta DESC
-        LIMIT 50
+        ORDER BY revisado ASC, fecha_consulta DESC
+        LIMIT 200
       `),
       pool.query(`
         SELECT COUNT(*) AS total
@@ -63,6 +63,13 @@ export async function GET() {
         FROM tgr_certificados
       `),
       pool.query(`SELECT nombre FROM tgr_certificados WHERE nombre IS NOT NULL AND nombre != ''`),
+      pool.query(`
+        SELECT rol, comuna, estado, fecha_consulta, revisado, revisado_at, revisado_nota
+        FROM tgr_certificados
+        WHERE (nombre IS NULL OR nombre = '') AND estado != 'error'
+        ORDER BY revisado ASC, fecha_consulta DESC
+        LIMIT 200
+      `),
     ])
 
     const g = globalRes.rows[0]
@@ -110,7 +117,26 @@ export async function GET() {
       })),
       ultimos: ultimosRes.rows,
       errores_detalle: erroresRes.rows,
+      sin_nombre_detalle: sinNombreRes.rows,
     })
+  } catch (error) {
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const { rol, revisado, nota } = await request.json()
+    if (!rol || typeof revisado !== 'boolean') {
+      return NextResponse.json({ success: false, error: 'rol y revisado son requeridos' }, { status: 400 })
+    }
+    await pool.query(
+      `UPDATE tgr_certificados
+       SET revisado = $2, revisado_at = CASE WHEN $2 THEN now() ELSE NULL END, revisado_nota = $3
+       WHERE rol = $1`,
+      [rol, revisado, nota ?? null]
+    )
+    return NextResponse.json({ success: true })
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })
   }

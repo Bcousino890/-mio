@@ -25,6 +25,19 @@ interface ErrorRow {
   error: string | null
   intentos: number
   fecha_consulta: string
+  revisado: boolean
+  revisado_at: string | null
+  revisado_nota: string | null
+}
+
+interface SinNombreRow {
+  rol: string
+  comuna: string
+  estado: string
+  fecha_consulta: string
+  revisado: boolean
+  revisado_at: string | null
+  revisado_nota: string | null
 }
 
 interface ScraperStatus {
@@ -52,6 +65,7 @@ interface Stats {
   por_comuna: ComunaRow[]
   ultimos: UltimoRow[]
   errores_detalle: ErrorRow[]
+  sin_nombre_detalle: SinNombreRow[]
 }
 
 function formatoCLP(n: number | null) {
@@ -78,6 +92,8 @@ function Card({ label, value, color }: { label: string; value: string | number; 
 export default function TgrDuenoStats() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [ocultarRevisados, setOcultarRevisados] = useState(false)
+  const [marcando, setMarcando] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -101,6 +117,28 @@ export default function TgrDuenoStats() {
     return () => { cancelled = true; clearInterval(interval) }
   }, [])
 
+  const marcarRevisado = async (rol: string, revisado: boolean) => {
+    setMarcando(rol)
+    try {
+      await fetch('/api/chile/tgr-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rol, revisado }),
+      })
+      setStats(prev => {
+        if (!prev) return prev
+        const ahora = new Date().toISOString()
+        return {
+          ...prev,
+          errores_detalle: prev.errores_detalle.map(e => e.rol === rol ? { ...e, revisado, revisado_at: revisado ? ahora : null } : e),
+          sin_nombre_detalle: prev.sin_nombre_detalle.map(e => e.rol === rol ? { ...e, revisado, revisado_at: revisado ? ahora : null } : e),
+        }
+      })
+    } finally {
+      setMarcando(null)
+    }
+  }
+
   if (error) {
     return <div className="text-sm text-red-400">No se pudo cargar el estado del scraper: {error}</div>
   }
@@ -109,7 +147,9 @@ export default function TgrDuenoStats() {
     return <div className="text-sm text-slate-500">Cargando...</div>
   }
 
-  const { scraper_status, globales, por_comuna, ultimos, errores_detalle } = stats
+  const { scraper_status, globales, por_comuna, ultimos, errores_detalle, sin_nombre_detalle } = stats
+  const erroresVisibles = ocultarRevisados ? errores_detalle.filter(e => !e.revisado) : errores_detalle
+  const sinNombreVisibles = ocultarRevisados ? sin_nombre_detalle.filter(e => !e.revisado) : sin_nombre_detalle
 
   return (
     <div className="space-y-6">
@@ -184,13 +224,25 @@ export default function TgrDuenoStats() {
         </div>
       </div>
 
+      {(errores_detalle.length > 0 || sin_nombre_detalle.length > 0) && (
+        <div className="flex items-center justify-end gap-2">
+          <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
+            <input type="checkbox" checked={ocultarRevisados} onChange={e => setOcultarRevisados(e.target.checked)} />
+            Ocultar ya revisados
+          </label>
+        </div>
+      )}
+
       {errores_detalle.length > 0 && (
         <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">Roles con error ({errores_detalle.length})</h3>
+          <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">
+            Roles con error ({errores_detalle.filter(e => !e.revisado).length} pendientes de {errores_detalle.length})
+          </h3>
           <div className="overflow-x-auto max-h-80 overflow-y-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500 border-b border-[var(--c-border-card)]">
+                  <th className="py-2 pr-4">Revisado</th>
                   <th className="py-2 pr-4">ROL</th>
                   <th className="py-2 pr-4">Comuna</th>
                   <th className="py-2 pr-4">Error</th>
@@ -198,14 +250,65 @@ export default function TgrDuenoStats() {
                 </tr>
               </thead>
               <tbody>
-                {errores_detalle.map(e => (
-                  <tr key={e.rol} className="border-b border-[var(--c-border-card)]">
+                {erroresVisibles.map(e => (
+                  <tr key={e.rol} className={`border-b border-[var(--c-border-card)] ${e.revisado ? 'opacity-50' : ''}`}>
+                    <td className="py-2 pr-4">
+                      <input
+                        type="checkbox"
+                        checked={e.revisado}
+                        disabled={marcando === e.rol}
+                        onChange={ev => marcarRevisado(e.rol, ev.target.checked)}
+                      />
+                    </td>
                     <td className="py-2 pr-4">{e.rol}</td>
                     <td className="py-2 pr-4">{e.comuna}</td>
                     <td className="py-2 pr-4 text-red-400">{e.error || '—'}</td>
                     <td className="py-2 pr-4">{e.intentos}</td>
                   </tr>
                 ))}
+                {erroresVisibles.length === 0 && (
+                  <tr><td colSpan={5} className="py-3 text-slate-500">Todos los errores fueron revisados.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {sin_nombre_detalle.length > 0 && (
+        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+          <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">
+            Roles sin nombre de contribuyente ({sin_nombre_detalle.filter(e => !e.revisado).length} pendientes de {sin_nombre_detalle.length})
+          </h3>
+          <div className="overflow-x-auto max-h-80 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-[var(--c-border-card)]">
+                  <th className="py-2 pr-4">Revisado</th>
+                  <th className="py-2 pr-4">ROL</th>
+                  <th className="py-2 pr-4">Comuna</th>
+                  <th className="py-2 pr-4">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sinNombreVisibles.map(e => (
+                  <tr key={e.rol} className={`border-b border-[var(--c-border-card)] ${e.revisado ? 'opacity-50' : ''}`}>
+                    <td className="py-2 pr-4">
+                      <input
+                        type="checkbox"
+                        checked={e.revisado}
+                        disabled={marcando === e.rol}
+                        onChange={ev => marcarRevisado(e.rol, ev.target.checked)}
+                      />
+                    </td>
+                    <td className="py-2 pr-4">{e.rol}</td>
+                    <td className="py-2 pr-4">{e.comuna}</td>
+                    <td className="py-2 pr-4">{e.estado}</td>
+                  </tr>
+                ))}
+                {sinNombreVisibles.length === 0 && (
+                  <tr><td colSpan={4} className="py-3 text-slate-500">Todos los casos sin nombre fueron revisados.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
