@@ -16,3 +16,5 @@ Check 2026-06-27 19:13 UTC — scraper relanzado con diagnóstico de snippet de 
 Check 2026-06-27 19:28 UTC — ~15 min después del relanzamiento, suficiente tiempo para que ocurran timeouts reales con el diagnóstico activo; revisar snippets capturados.
 Check 2026-06-27 19:34 UTC — dashboard muestra "Scraper detenido/inactivo" (última escritura hace 2 min) tras relanzar con fix WAF (commit 3b9fea5); verificar si el proceso murió o quedó en cooldown largo, y si siguen apareciendo bloqueos "Request Rejected".
 Check 2026-06-27 19:43 UTC — ~15 min más de procesamiento con 1 worker + cooldown WAF; verificar si el conteo en Postgres ya sube y si los bloqueos "Request Rejected" se resolvieron o persisten.
+
+Check 2026-06-27 19:50 UTC — estado antes de relanzar con bloqueo de imagenes/CSS/fuentes (reduce ancho de banda ~10-15x, relevante para evaluacion de proxy por GB); confirmar conteo y persistencia de bloqueos WAF.
