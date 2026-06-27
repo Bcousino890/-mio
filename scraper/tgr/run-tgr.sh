@@ -56,9 +56,26 @@ if [ ! -x "$GOOGLE_CHROME_BIN" ]; then
   exit 1
 fi
 export CHROME_BINARY="$GOOGLE_CHROME_BIN"
-# No fijamos CHROMEDRIVER_PATH: dejamos que Selenium Manager (incluido desde
-# selenium 4.6+) resuelva y descargue el chromedriver exacto para esta versión
-# de Chrome automáticamente.
+
+# ChromeDriver: lo fijamos explícitamente en vez de dejar que Selenium Manager
+# lo resuelva por worker. Con 4 workers en threads paralelos, cada uno invoca
+# Selenium Manager al crear su sesión; Selenium Manager tiene un bug conocido
+# de condición de carrera en su caché/lock cuando se invoca concurrentemente
+# por primera vez, lo que provocaba "no chrome binary at /usr/bin/google-chrome-stable"
+# en TODOS los workers simultáneamente pese a que el binario sí existía y
+# funcionaba (confirmado lanzándolo directo). Usamos el chromedriver de apt
+# (chromium-driver), que ya viene validado en este VPS.
+if ! command -v chromedriver >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y -qq chromium-driver
+fi
+CHROMEDRIVER_BIN="$(command -v chromedriver)"
+if [ -z "$CHROMEDRIVER_BIN" ] || [ ! -x "$CHROMEDRIVER_BIN" ]; then
+  echo "✗ chromedriver no está disponible tras instalar chromium-driver"
+  exit 1
+fi
+export CHROMEDRIVER_PATH="$CHROMEDRIVER_BIN"
+echo "  CHROMEDRIVER_PATH=$CHROMEDRIVER_PATH"
 echo "  CHROME_BINARY=$CHROME_BINARY"
 
 cd scraper/tgr
