@@ -20,6 +20,7 @@ import {
   Link2,
   Eye,
   UserSearch,
+  Receipt,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -123,6 +124,13 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'Dueños',
       icon: UserSearch,
       description: 'Buscar propietario · RUT · teléfonos',
+    },
+    {
+      href: '/chile/tgr-dueno',
+      label: 'TGR DUEÑO',
+      icon: Receipt,
+      description: 'Certificado de deuda TGR · Región Metropolitana',
+      badge: 'PRONTO',
     },
     {
       href: '/chile/street',
