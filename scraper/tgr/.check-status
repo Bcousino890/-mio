@@ -2,4 +2,5 @@ Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
 Check 2026-06-27 17:53 UTC — log-path de chromedriver no generaba archivo; ahora capturamos su stdout/stderr directo con --verbose para ver la causa real detrás de "no chrome binary".
 Check 2026-06-27 18:05 UTC — listando directorio completo de instalación de Chrome (icudtl.dat, *.pak, locales/) para descartar archivos de soporte faltantes/mal ubicados.
+Check 2026-06-27 18:09 UTC — nueva hipótesis: el paquete apt "chromium-driver" en Ubuntu moderno puede ser un wrapper que invoca el chromedriver del snap chromium, confinado por AppArmor bajo el perfil snap.chromium.chromium, que bloquearía acceso a /opt/google/chrome/* (fuera del sandbox) — eso explicaría el fallo instantáneo (1ms) idéntico sin importar la ruta del binario real Chrome.
 
