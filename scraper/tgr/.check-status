@@ -1,4 +1,5 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/check-tgr-status.yml.
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
 Check 2026-06-27 17:53 UTC — log-path de chromedriver no generaba archivo; ahora capturamos su stdout/stderr directo con --verbose para ver la causa real detrás de "no chrome binary".
+Check 2026-06-27 18:05 UTC — listando directorio completo de instalación de Chrome (icudtl.dat, *.pak, locales/) para descartar archivos de soporte faltantes/mal ubicados.
 
