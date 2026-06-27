@@ -18,3 +18,5 @@ Check 2026-06-27 19:34 UTC — dashboard muestra "Scraper detenido/inactivo" (ú
 Check 2026-06-27 19:43 UTC — ~15 min más de procesamiento con 1 worker + cooldown WAF; verificar si el conteo en Postgres ya sube y si los bloqueos "Request Rejected" se resolvieron o persisten.
 
 Check 2026-06-27 19:50 UTC — estado antes de relanzar con bloqueo de imagenes/CSS/fuentes (reduce ancho de banda ~10-15x, relevante para evaluacion de proxy por GB); confirmar conteo y persistencia de bloqueos WAF.
+
+Check 2026-06-27 21:00 UTC — verificar si .env del host ya tiene SMARTPROXY_CL_HOST/PORT/USER/PASS (sincronizados desde GitHub Secrets por deploy.yml); solo confirmar presencia de las claves, NO mostrar valores.
