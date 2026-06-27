@@ -109,6 +109,10 @@ jobs:
             REAL_BIN="$(dirname "$(readlink -f "$GCS_BIN")")/chrome"
             ls -la "$REAL_BIN" 2>&1 || echo "(no existe el binario real esperado)"
             file "$REAL_BIN" 2>&1 || true
+            echo "── Directorio completo de instalación ──"
+            ls -la "$(dirname "$REAL_BIN")" 2>&1
+            echo "── strace del intento de stat/exec por chromedriver (si está disponible) ──"
+            which strace 2>&1 || echo "(strace no disponible)"
 
             echo ""
             echo "── Memoria / recursos del sistema ──"
