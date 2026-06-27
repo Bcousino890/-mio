@@ -1,4 +1,4 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/check-tgr-status.yml.
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
-Check 2026-06-27 15:53 UTC — verificación de continuidad tras 9+ min con Google Chrome stable.
+Check 2026-06-27 17:00 UTC — verificación tras relanzamiento con fix de CHROME_BINARY (ruta absoluta verificada).
 
