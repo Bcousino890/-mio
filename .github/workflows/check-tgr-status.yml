@@ -109,4 +109,23 @@ jobs:
             REAL_BIN="$(dirname "$(readlink -f "$GCS_BIN")")/chrome"
             ls -la "$REAL_BIN" 2>&1 || echo "(no existe el binario real esperado)"
             file "$REAL_BIN" 2>&1 || true
+
+            echo ""
+            echo "── Memoria / recursos del sistema ──"
+            free -h
+            nproc
+            ulimit -a 2>&1 | grep -i "open files\|max user processes"
+
+            echo ""
+            echo "── Probando lanzar 4 instancias de Chrome EN PARALELO (simula los 4 workers) ──"
+            for i in 1 2 3 4; do
+              (timeout 20 "$REAL_BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --remote-debugging-port=0 --user-data-dir=/tmp/diag-parallel-$i --dump-dom https://example.com > /tmp/diag-parallel-$i.out 2>/tmp/diag-parallel-$i.err; echo "worker $i exit=$?") &
+            done
+            wait
+            for i in 1 2 3 4; do
+              echo "--- worker $i stderr (últimas 15 líneas) ---"
+              tail -15 /tmp/diag-parallel-$i.err 2>&1
+              echo "--- worker $i stdout (primeras 3 líneas) ---"
+              head -3 /tmp/diag-parallel-$i.out 2>&1
+            done
           EOF
