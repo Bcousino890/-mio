@@ -792,11 +792,17 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    workers: int = 4
+    # workers=4 en paralelo generaba una ráfaga de ~1.2 req/s contra
+    # tesoreria.cl; las primeras consultas funcionaban pero pasados ~5 min
+    # el sitio empezó a no responder ("timeout esperando resultado") en el
+    # 100% de los intentos siguientes — patrón típico de throttling/bloqueo
+    # por IP ante tráfico tipo bot. Bajamos a 2 workers y subimos el delay
+    # entre consultas para reducir la tasa de requests y evitar el bloqueo.
+    workers: int = 2
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
-    delay_min: float = 2.0
-    delay_max: float = 4.5
+    delay_min: float = 5.0
+    delay_max: float = 10.0
     timeout: int = 25
     headless: bool = True
     export_cada_n: int = 200
