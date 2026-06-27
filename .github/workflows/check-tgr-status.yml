@@ -65,11 +65,17 @@ jobs:
             echo ""
             echo "── Diagnóstico Chrome/ChromeDriver ──"
             which google-chrome google-chrome-stable chromium chromium-browser 2>&1 || echo "(ningún binario de chrome en PATH)"
-            CHROMEDRIVER=$(find ~/.cache/selenium/chromedriver -name chromedriver -type f 2>/dev/null | head -1)
-            echo "chromedriver: ${CHROMEDRIVER:-no encontrado}"
-            if [ -n "$CHROMEDRIVER" ]; then
-              file "$CHROMEDRIVER"
-              ldd "$CHROMEDRIVER" 2>&1 | grep -i "not found" || echo "(sin libs faltantes según ldd)"
-              "$CHROMEDRIVER" --version 2>&1 || echo "(falló al ejecutar --version)"
+            CHROME_BIN=$(command -v chromium || command -v chromium-browser)
+            CHROMEDRIVER_BIN=$(command -v chromedriver)
+            echo "chromium: ${CHROME_BIN:-no encontrado}"
+            echo "chromedriver: ${CHROMEDRIVER_BIN:-no encontrado}"
+            if [ -n "$CHROMEDRIVER_BIN" ]; then
+              ldd "$CHROMEDRIVER_BIN" 2>&1 | grep -i "not found" || echo "(sin libs faltantes según ldd)"
+              "$CHROMEDRIVER_BIN" --version 2>&1 || echo "(falló al ejecutar --version)"
+            fi
+            if [ -n "$CHROME_BIN" ]; then
+              echo "── Probando lanzar chromium directamente (headless, --no-sandbox) ──"
+              timeout 15 "$CHROME_BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom https://example.com 2>&1 | tail -40
+              echo "exit code: $?"
             fi
           EOF
