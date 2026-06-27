@@ -38,3 +38,5 @@ yarn-error.log*
 coverage/
 *.local
 web/public/photos/__MACOSX/
+__pycache__/
+*.pyc
