@@ -19,15 +19,60 @@ interface UltimoRow {
   fecha_consulta: string
 }
 
+interface ErrorRow {
+  rol: string
+  comuna: string
+  error: string | null
+  intentos: number
+  fecha_consulta: string
+}
+
+interface ScraperStatus {
+  corriendo: boolean
+  ultima_consulta: string | null
+  segundos_desde_ultima: number | null
+  procesados_ultimos_5min: number
+}
+
 interface Stats {
-  globales: { total: number; con_deuda: number; sin_deuda: number; errores: number; monto_total_deuda: number }
+  scraper_status: ScraperStatus
+  globales: {
+    total: number
+    esperados: number
+    progreso_pct: number
+    con_deuda: number
+    sin_deuda: number
+    errores: number
+    con_nombre: number
+    sin_nombre: number
+    personas: number
+    empresas: number
+    monto_total_deuda: number
+  }
   por_comuna: ComunaRow[]
   ultimos: UltimoRow[]
+  errores_detalle: ErrorRow[]
 }
 
 function formatoCLP(n: number | null) {
   if (!n) return '—'
   return 'CLP ' + Math.round(n).toLocaleString('es-CL')
+}
+
+function formatoTiempo(segundos: number | null) {
+  if (segundos === null) return 'sin datos'
+  if (segundos < 60) return `hace ${Math.round(segundos)}s`
+  if (segundos < 3600) return `hace ${Math.round(segundos / 60)} min`
+  return `hace ${Math.round(segundos / 3600)} h`
+}
+
+function Card({ label, value, color }: { label: string; value: string | number; color?: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+      <div className="text-xs text-slate-500 uppercase tracking-wide">{label}</div>
+      <div className={`text-2xl font-semibold mt-1 ${color ?? ''}`}>{value}</div>
+    </div>
+  )
 }
 
 export default function TgrDuenoStats() {
@@ -64,31 +109,50 @@ export default function TgrDuenoStats() {
     return <div className="text-sm text-slate-500">Cargando...</div>
   }
 
-  const { globales, por_comuna, ultimos } = stats
+  const { scraper_status, globales, por_comuna, ultimos, errores_detalle } = stats
 
   return (
     <div className="space-y-6">
+      {/* Estado del scraper */}
+      <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${scraper_status.corriendo ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
+          <span className="text-sm font-medium">
+            {scraper_status.corriendo ? 'Scraper corriendo' : 'Scraper detenido / inactivo'}
+          </span>
+          <span className="text-xs text-slate-500">
+            última escritura {formatoTiempo(scraper_status.segundos_desde_ultima)}
+          </span>
+        </div>
+        <div className="text-xs text-slate-500">
+          {scraper_status.procesados_ultimos_5min} procesados en los últimos 5 min
+        </div>
+      </div>
+
+      {/* Progreso global */}
+      <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs uppercase tracking-wide text-slate-500">Progreso Región Metropolitana</h3>
+          <span className="text-xs text-slate-500">{globales.total.toLocaleString('es-CL')} / {globales.esperados.toLocaleString('es-CL')} roles ({globales.progreso_pct}%)</span>
+        </div>
+        <div className="w-full h-2 rounded-full bg-[var(--c-border-card)] overflow-hidden">
+          <div className="h-full bg-blue-500" style={{ width: `${Math.min(globales.progreso_pct, 100)}%` }} />
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Total procesados</div>
-          <div className="text-2xl font-semibold mt-1">{globales.total.toLocaleString('es-CL')}</div>
-        </div>
-        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Con deuda</div>
-          <div className="text-2xl font-semibold mt-1 text-red-400">{globales.con_deuda.toLocaleString('es-CL')}</div>
-        </div>
-        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Sin deuda</div>
-          <div className="text-2xl font-semibold mt-1">{globales.sin_deuda.toLocaleString('es-CL')}</div>
-        </div>
-        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Errores</div>
-          <div className="text-2xl font-semibold mt-1 text-red-400">{globales.errores.toLocaleString('es-CL')}</div>
-        </div>
-        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Monto detectado</div>
-          <div className="text-2xl font-semibold mt-1 text-blue-400">{formatoCLP(globales.monto_total_deuda)}</div>
-        </div>
+        <Card label="Total procesados" value={globales.total.toLocaleString('es-CL')} />
+        <Card label="Con deuda" value={globales.con_deuda.toLocaleString('es-CL')} color="text-red-400" />
+        <Card label="Sin deuda" value={globales.sin_deuda.toLocaleString('es-CL')} />
+        <Card label="Errores" value={globales.errores.toLocaleString('es-CL')} color="text-red-400" />
+        <Card label="Monto detectado" value={formatoCLP(globales.monto_total_deuda)} color="text-blue-400" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card label="Con nombre" value={globales.con_nombre.toLocaleString('es-CL')} />
+        <Card label="Sin nombre" value={globales.sin_nombre.toLocaleString('es-CL')} />
+        <Card label="Personas naturales" value={globales.personas.toLocaleString('es-CL')} />
+        <Card label="Empresas" value={globales.empresas.toLocaleString('es-CL')} />
       </div>
 
       <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
@@ -119,6 +183,34 @@ export default function TgrDuenoStats() {
           </table>
         </div>
       </div>
+
+      {errores_detalle.length > 0 && (
+        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+          <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">Roles con error ({errores_detalle.length})</h3>
+          <div className="overflow-x-auto max-h-80 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-[var(--c-border-card)]">
+                  <th className="py-2 pr-4">ROL</th>
+                  <th className="py-2 pr-4">Comuna</th>
+                  <th className="py-2 pr-4">Error</th>
+                  <th className="py-2 pr-4">Intentos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {errores_detalle.map(e => (
+                  <tr key={e.rol} className="border-b border-[var(--c-border-card)]">
+                    <td className="py-2 pr-4">{e.rol}</td>
+                    <td className="py-2 pr-4">{e.comuna}</td>
+                    <td className="py-2 pr-4 text-red-400">{e.error || '—'}</td>
+                    <td className="py-2 pr-4">{e.intentos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
         <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">Últimos procesados</h3>
