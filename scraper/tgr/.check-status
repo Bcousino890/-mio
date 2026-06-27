@@ -20,3 +20,5 @@ Check 2026-06-27 19:43 UTC — ~15 min más de procesamiento con 1 worker + cool
 Check 2026-06-27 19:50 UTC — estado antes de relanzar con bloqueo de imagenes/CSS/fuentes (reduce ancho de banda ~10-15x, relevante para evaluacion de proxy por GB); confirmar conteo y persistencia de bloqueos WAF.
 
 Check 2026-06-27 21:00 UTC — verificar si .env del host ya tiene SMARTPROXY_CL_HOST/PORT/USER/PASS (sincronizados desde GitHub Secrets por deploy.yml); solo confirmar presencia de las claves, NO mostrar valores.
+
+Check 2026-06-27 20:00 UTC — confirmar si SMARTPROXY_CL_HOST/PORT/USER/PASS quedaron en .env del host tras deploy de commit b772956 (codigo de proxy en tgr_scraper.py + chequeo de presencia ya agregado).
