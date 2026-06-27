@@ -24,8 +24,10 @@ import os
 import queue
 import random
 import re
+import shutil
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -655,6 +657,13 @@ class WorkerTGR:
         options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        # Perfil único por worker: con varios workers lanzando chromium en paralelo,
+        # compartir el user-data-dir por defecto (confinado por snap) provoca un
+        # conflicto de lock que termina el proceso con "Chrome instance exited".
+        profile_dir = tempfile.mkdtemp(prefix=f"tgr-chrome-{self.worker_id}-")
+        options.add_argument(f"--user-data-dir={profile_dir}")
+        options.add_argument(f"--remote-debugging-port=0")
+        self._profile_dir = profile_dir
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
         https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
@@ -673,6 +682,8 @@ class WorkerTGR:
     def detener(self):
         if self.driver:
             self.driver.quit()
+        if getattr(self, "_profile_dir", None):
+            shutil.rmtree(self._profile_dir, ignore_errors=True)
 
     def consultar_una_vez(self, rol: str, comuna: str) -> Certificado:
         rol_parts = rol.split("-")
