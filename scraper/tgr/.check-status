@@ -1,3 +1,4 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/check-tgr-status.yml.
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
+Check 2026-06-27 13:54 UTC — verificación post-relanzamiento (fix rsync).
 
