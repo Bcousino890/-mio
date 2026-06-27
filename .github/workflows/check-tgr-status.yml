@@ -120,7 +120,7 @@ jobs:
             echo "── Reproduciendo la sesión de Selenium directamente vía API HTTP de chromedriver ──"
             CHROMEDRIVER_BIN_2="/usr/bin/chromedriver"
             "$CHROMEDRIVER_BIN_2" --version
-            "$CHROMEDRIVER_BIN_2" --port=9515 --verbose --log-path=/tmp/chromedriver-diag.log &
+            "$CHROMEDRIVER_BIN_2" --port=9515 --verbose > /tmp/chromedriver-diag.log 2>&1 &
             CD_PID=$!
             sleep 2
             curl -s -X POST http://127.0.0.1:9515/session -H "Content-Type: application/json" -d "{
