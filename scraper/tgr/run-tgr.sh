@@ -31,6 +31,15 @@ if [ -z "${POSTGRES_PASSWORD:-}" ]; then
 fi
 export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
 
+echo "▶ Verificando Chromium + ChromeDriver del sistema (Selenium los necesita para los certificados TGR)..."
+if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+  apt-get update -qq && apt-get install -y -qq chromium chromium-driver
+fi
+export CHROME_BINARY="$(command -v chromium || command -v chromium-browser)"
+export CHROMEDRIVER_PATH="$(command -v chromedriver)"
+echo "  CHROME_BINARY=$CHROME_BINARY"
+echo "  CHROMEDRIVER_PATH=$CHROMEDRIVER_PATH"
+
 cd scraper/tgr
 
 if [ ! -d venv ]; then
