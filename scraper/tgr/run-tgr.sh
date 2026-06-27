@@ -38,13 +38,24 @@ echo "▶ Verificando Google Chrome del sistema (Selenium lo necesita para los c
 # necesitamos para evitar locks de perfil compartido entre workers paralelos),
 # lo que causa "Chrome instance exited" al crear la sesión de Selenium. Por
 # eso instalamos Google Chrome estable vía .deb directo (sin snap/AppArmor).
-if ! command -v google-chrome-stable >/dev/null 2>&1; then
+GOOGLE_CHROME_BIN="/usr/bin/google-chrome-stable"
+if [ ! -x "$GOOGLE_CHROME_BIN" ]; then
   apt-get update -qq
   wget -q -O /tmp/google-chrome-stable.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   apt-get install -y -qq /tmp/google-chrome-stable.deb
   rm -f /tmp/google-chrome-stable.deb
 fi
-export CHROME_BINARY="$(command -v google-chrome-stable)"
+# Usamos la ruta absoluta directamente en vez de "command -v": en runs previos,
+# "command -v google-chrome-stable" devolvió vacío justo tras la instalación
+# (el binario no estaba aún reflejado en el PATH de ese subshell), dejando
+# CHROME_BINARY="" y haciendo que Selenium cayera a su autodetección, que
+# fallaba con "no chrome binary at /usr/bin/google-chrome-stable" pese a que
+# el binario sí existía. Verificamos explícitamente con -x antes de exportar.
+if [ ! -x "$GOOGLE_CHROME_BIN" ]; then
+  echo "✗ google-chrome-stable no quedó instalado en $GOOGLE_CHROME_BIN tras la instalación"
+  exit 1
+fi
+export CHROME_BINARY="$GOOGLE_CHROME_BIN"
 # No fijamos CHROMEDRIVER_PATH: dejamos que Selenium Manager (incluido desde
 # selenium 4.6+) resuelva y descargue el chromedriver exacto para esta versión
 # de Chrome automáticamente.
