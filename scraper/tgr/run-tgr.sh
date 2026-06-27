@@ -55,7 +55,19 @@ if [ ! -x "$GOOGLE_CHROME_BIN" ]; then
   echo "✗ google-chrome-stable no quedó instalado en $GOOGLE_CHROME_BIN tras la instalación"
   exit 1
 fi
-export CHROME_BINARY="$GOOGLE_CHROME_BIN"
+# /usr/bin/google-chrome-stable es un symlink a /opt/google/chrome/google-chrome,
+# que a su vez NO es el binario real sino un script wrapper de ~1KB (configura
+# variables de entorno y hace exec del binario verdadero). ChromeDriver valida
+# que CHROME_BINARY sea un ELF de Chrome real, así que rechaza el wrapper con
+# "no chrome binary" aunque bash sí pueda ejecutarlo directamente (por eso el
+# diagnóstico de lanzarlo a mano vía bash funcionaba pero Selenium fallaba).
+# Apuntamos directo al binario real junto al wrapper.
+REAL_CHROME_BIN="$(dirname "$(readlink -f "$GOOGLE_CHROME_BIN")")/chrome"
+if [ -x "$REAL_CHROME_BIN" ]; then
+  export CHROME_BINARY="$REAL_CHROME_BIN"
+else
+  export CHROME_BINARY="$GOOGLE_CHROME_BIN"
+fi
 
 # ChromeDriver: lo fijamos explícitamente en vez de dejar que Selenium Manager
 # lo resuelva por worker. Con 4 workers en threads paralelos, cada uno invoca

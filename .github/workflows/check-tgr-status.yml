@@ -103,4 +103,10 @@ jobs:
             echo "── Probando lanzar google-chrome-stable directamente (headless, --no-sandbox) ──"
             timeout 15 "$GCS_BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir=/tmp/diag-gcs-profile --dump-dom https://example.com 2>&1 | tail -40
             echo "exit code: $?"
+
+            echo ""
+            echo "── Binario real (no wrapper) ──"
+            REAL_BIN="$(dirname "$(readlink -f "$GCS_BIN")")/chrome"
+            ls -la "$REAL_BIN" 2>&1 || echo "(no existe el binario real esperado)"
+            file "$REAL_BIN" 2>&1 || true
           EOF
