@@ -57,6 +57,9 @@ jobs:
             --exclude '.next' \
             --exclude '.env' \
             --exclude 'scraper/output' \
+            --exclude 'scraper/tgr/venv' \
+            --exclude 'scraper/tgr/data' \
+            --exclude 'scraper/tgr/roles_input_rm.csv' \
             -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }} -o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
             ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/" || exit 1
 
