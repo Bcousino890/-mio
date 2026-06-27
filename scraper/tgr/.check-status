@@ -4,4 +4,5 @@ Check 2026-06-27 17:53 UTC — log-path de chromedriver no generaba archivo; aho
 Check 2026-06-27 18:05 UTC — listando directorio completo de instalación de Chrome (icudtl.dat, *.pak, locales/) para descartar archivos de soporte faltantes/mal ubicados.
 Check 2026-06-27 18:09 UTC — nueva hipótesis: el paquete apt "chromium-driver" en Ubuntu moderno puede ser un wrapper que invoca el chromedriver del snap chromium, confinado por AppArmor bajo el perfil snap.chromium.chromium, que bloquearía acceso a /opt/google/chrome/* (fuera del sandbox) — eso explicaría el fallo instantáneo (1ms) idéntico sin importar la ruta del binario real Chrome.
 Check 2026-06-27 18:18 UTC — confirmado y corregido: chromedriver standalone oficial instalado, scraper relanzado. Verificando si ya procesa certificados.
+Check 2026-06-27 18:30 UTC — segunda verificación tras dar más tiempo al scraper: confirmar si el conteo en Postgres ya subió de 0 y si el log sigue libre de SessionNotCreatedException.
 
