@@ -53,6 +53,9 @@ jobs:
               head -60 "$LATEST_LOG"
               echo "--- primer SessionNotCreatedException con contexto ---"
               grep -n -B5 "SessionNotCreatedException\|DevToolsActivePort\|user_data_dir\|Failed to read JSON" "$LATEST_LOG" | head -60
+              echo ""
+              echo "--- snippets de página en timeouts (diagnóstico bloqueo/captcha del sitio) ---"
+              grep -n "snippet página" "$LATEST_LOG" | tail -20
             fi
 
             echo ""

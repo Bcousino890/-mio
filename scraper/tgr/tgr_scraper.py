@@ -765,6 +765,12 @@ class WorkerTGR:
 
             except TimeoutException:
                 ultimo_error = "timeout esperando resultado"
+                try:
+                    url_actual = self.driver.current_url
+                    snippet = re.sub(r"\s+", " ", self.driver.page_source)[:300]
+                    logger.warning(f"Worker {self.worker_id}: timeout en {url_actual} — snippet página: {snippet!r}")
+                except Exception:
+                    pass
             except (NoSuchElementException, StaleElementReferenceException) as e:
                 ultimo_error = f"elemento no encontrado: {e}"
             except WebDriverException as e:
