@@ -657,6 +657,15 @@ class WorkerTGR:
         options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        # La página de resultado es una tabla de texto; imágenes/CSS/fuentes no
+        # aportan datos y multiplican por 10-15x el tráfico (relevante para
+        # proxies pagados por GB y para velocidad de carga).
+        options.add_argument("--blink-settings=imagesEnabled=false")
+        options.add_experimental_option("prefs", {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.managed_default_content_settings.stylesheets": 2,
+            "profile.managed_default_content_settings.fonts": 2,
+        })
         # Perfil único por worker: con varios workers lanzando chromium en paralelo,
         # compartir el user-data-dir por defecto (confinado por snap) provoca un
         # conflicto de lock que termina el proceso con "Chrome instance exited".
