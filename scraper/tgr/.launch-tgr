@@ -1,0 +1,2 @@
+Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/scrape-tgr.yml.
+Último lanzamiento: 2026-06-27 — Región Metropolitana completa, orden Las Condes/Lo Barnechea/Vitacura primero.

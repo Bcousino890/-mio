@@ -1,0 +1,68 @@
+name: Scrape TGR (certificados de deuda — escribe en BD de producción)
+
+# Mismo patrón que scrape-salamanca-almagro.yml: SSH al VPS y lanza el scraper
+# ahí, porque solo el VPS tiene acceso a DATABASE_URL / docker exec casafari-pg
+# de producción. El job del runner solo lanza el proceso en background
+# (nohup) y termina; el scrape real (varias horas, Región Metropolitana
+# completa) sigue corriendo en el VPS de forma independiente.
+on:
+  workflow_dispatch: {}  # botón "Run workflow" manual (o trigger por API)
+  push:
+    branches:
+      - main
+    paths:
+      # La API de GitHub no permite disparar workflow_dispatch en este entorno
+      # (token sin ese scope). Este archivo centinela existe solo para poder
+      # lanzar el scrape con un push. run-tgr.sh ya tiene su propio lockfile,
+      # así que un push accidental mientras hay un scrape en curso no hace nada.
+      - 'scraper/tgr/.launch-tgr'
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Matar scrape TGR anterior (si existe)
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            cd /opt/casafari
+            echo "⚠ Matando cualquier scrape TGR anterior..."
+            pkill -9 -f "run-tgr.sh" || true
+            pkill -9 -f "tgr_scraper.py" || true
+            rm -f /tmp/casafari-scrape-tgr.lock
+            sleep 2
+          EOF
+
+      - name: Lanzar scrape TGR en background en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            mkdir -p scraper/output
+            chmod +x scraper/tgr/run-tgr.sh
+            nohup bash scraper/tgr/run-tgr.sh \
+              > "scraper/output/launch-tgr-$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &
+            PID=$!
+            disown
+            sleep 3
+            if kill -0 "$PID" 2>/dev/null; then
+              echo "▶ Scrape TGR lanzado en background en el VPS (PID $PID)"
+            else
+              echo "✗ El proceso no arrancó, revisa scraper/output/ en el VPS"
+              exit 1
+            fi
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "El scrape TGR (certificados de deuda, Región Metropolitana) quedó corriendo en background en el VPS."
+          echo "Puede tardar varias horas (miles de roles). Progreso y logs en /opt/casafari/scraper/output/ del VPS."
+          echo "Resultados visibles en https://crm.cremme.es/chile/tgr-dueno a medida que se van insertando en tgr_certificados."

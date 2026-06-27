@@ -130,7 +130,7 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'TGR DUEÑO',
       icon: Receipt,
       description: 'Certificado de deuda TGR · Región Metropolitana',
-      badge: 'PRONTO',
+      badge: 'NEW',
     },
     {
       href: '/chile/street',
