@@ -54,4 +54,11 @@ jobs:
             echo ""
             echo "── Conteo en Postgres ──"
             docker exec casafari-pg psql -U casafari -d casafari -At -c "SELECT count(*) FROM tgr_certificados;" 2>&1 || echo "No se pudo consultar Postgres"
+
+            echo ""
+            echo "── Permisos / usuario ──"
+            whoami
+            id
+            ls -la scraper/tgr/
+            ls -la scraper/tgr/data 2>&1 || echo "(no existe data/)"
           EOF
