@@ -1,0 +1,57 @@
+name: Check TGR status (diagnóstico, no escribe nada)
+
+# Mismo patrón de sentinel-push que scrape-tgr.yml: solo lee estado del VPS
+# (proceso vivo, tail del log, conteo en BD) para diagnosticar sin relanzar
+# ni tocar nada.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/tgr/.check-status'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Diagnóstico en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            cd /opt/casafari
+            echo "── Procesos run-tgr.sh / tgr_scraper.py ──"
+            ps aux | grep -E "run-tgr.sh|tgr_scraper.py" | grep -v grep || echo "(ninguno corriendo)"
+
+            echo ""
+            echo "── Lockfile ──"
+            if [ -e /tmp/casafari-scrape-tgr.lock ]; then
+              echo "Existe, PID=$(cat /tmp/casafari-scrape-tgr.lock)"
+              kill -0 "$(cat /tmp/casafari-scrape-tgr.lock)" 2>/dev/null && echo "  -> PID vivo" || echo "  -> PID muerto (lock huérfano)"
+            else
+              echo "No existe"
+            fi
+
+            echo ""
+            echo "── Último log de lanzamiento (últimas 80 líneas) ──"
+            LATEST_LOG=$(ls -t scraper/output/launch-tgr-*.log 2>/dev/null | head -1)
+            echo "Archivo: ${LATEST_LOG:-ninguno}"
+            if [ -n "$LATEST_LOG" ]; then
+              tail -80 "$LATEST_LOG"
+            fi
+
+            echo ""
+            echo "── CSV de roles exportado ──"
+            wc -l scraper/tgr/roles_input_rm.csv 2>/dev/null || echo "No existe roles_input_rm.csv"
+
+            echo ""
+            echo "── Conteo en Postgres ──"
+            docker exec casafari-pg psql -U casafari -d casafari -At -c "SELECT count(*) FROM tgr_certificados;" 2>&1 || echo "No se pudo consultar Postgres"
+          EOF
