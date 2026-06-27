@@ -86,4 +86,21 @@ jobs:
               timeout 15 "$CHROME_BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom https://example.com 2>&1 | tail -40
               echo "exit code: $?"
             fi
+
+            echo ""
+            echo "── Diagnóstico Google Chrome stable (el que usa el scraper) ──"
+            GCS_BIN="/usr/bin/google-chrome-stable"
+            ls -la "$GCS_BIN" 2>&1 || echo "(no existe el archivo)"
+            file "$GCS_BIN" 2>&1 || true
+            if [ -L "$GCS_BIN" ]; then
+              echo "Es symlink -> $(readlink -f "$GCS_BIN")"
+              ls -la "$(readlink -f "$GCS_BIN")" 2>&1 || echo "(target del symlink no existe)"
+            fi
+            echo "── ldd del binario real ──"
+            ldd "$(readlink -f "$GCS_BIN" 2>/dev/null || echo "$GCS_BIN")" 2>&1 | grep -i "not found" || echo "(sin libs faltantes según ldd)"
+            echo "── google-chrome-stable --version ──"
+            "$GCS_BIN" --version 2>&1 || echo "(falló al ejecutar --version, exit $?)"
+            echo "── Probando lanzar google-chrome-stable directamente (headless, --no-sandbox) ──"
+            timeout 15 "$GCS_BIN" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir=/tmp/diag-gcs-profile --dump-dom https://example.com 2>&1 | tail -40
+            echo "exit code: $?"
           EOF
