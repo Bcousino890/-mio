@@ -1,4 +1,4 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/check-tgr-status.yml.
 Solo lee estado del VPS (ps, lockfile, log, conteo BD) — no relanza ni modifica nada.
-Check 2026-06-27 17:13 UTC — verificación de conteo en Postgres tras 15+ min sin crashes con CHROME_BINARY correcto.
+Check 2026-06-27 17:18 UTC — diagnóstico directo de google-chrome-stable (sigue fallando "no chrome binary" pese a -x verificado).
 
