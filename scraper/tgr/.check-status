@@ -10,4 +10,5 @@ Check 2026-06-27 18:48 UTC — chequeo de seguimiento tras ~30 min más de proce
 Check 2026-06-27 18:23 UTC (resultado) — Conteo en Postgres = 8 (subió de 4). Sin SessionNotCreatedException en el scraper real. Workers 0-3 vivos, sin crashear. Throughput visible es lento: los 4 workers quedaron varios minutos reintentando timeout en los mismos 4 ROLs (101-104) antes de seguir — parece latencia/lentitud del sitio TGR ante ciertos roles, no un bug del scraper. Sigue funcionando sin errores fatales; continuar monitoreando.
 Check 2026-06-27 18:51 UTC — chequeo de seguimiento (~25 min después): confirmar avance del conteo y ausencia de errores nuevos.
 Check 2026-06-27 18:40 UTC — verificar relanzamiento con 2 workers y delay 5-10s tras detectar throttling/bloqueo del sitio con 4 workers en paralelo.
+Check 2026-06-27 19:05 UTC — dashboard muestra 28 procesados, 24 con error "timeout esperando resultado" incluso tras bajar a 2 workers; investigar log en vivo para ver si el sitio sigue bloqueando o si es otra causa (selector, captcha, etc).
 
