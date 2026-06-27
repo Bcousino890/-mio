@@ -14,3 +14,4 @@ Check 2026-06-27 19:05 UTC — dashboard muestra 28 procesados, 24 con error "ti
 
 Check 2026-06-27 19:13 UTC — scraper relanzado con diagnóstico de snippet de página activo (commit bc16bbf); revisar log en busca de líneas "snippet página" para ver el HTML real durante un timeout.
 Check 2026-06-27 19:28 UTC — ~15 min después del relanzamiento, suficiente tiempo para que ocurran timeouts reales con el diagnóstico activo; revisar snippets capturados.
+Check 2026-06-27 19:34 UTC — dashboard muestra "Scraper detenido/inactivo" (última escritura hace 2 min) tras relanzar con fix WAF (commit 3b9fea5); verificar si el proceso murió o quedó en cooldown largo, y si siguen apareciendo bloqueos "Request Rejected".
