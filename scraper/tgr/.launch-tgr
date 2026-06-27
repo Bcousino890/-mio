@@ -1,2 +1,2 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/scrape-tgr.yml.
-Último lanzamiento: 2026-06-27 14:34 UTC — relanzamiento tras fix ChromeDriver status 127 (faltaban chromium + chromium-driver del sistema y sus libs NSS/NSPR en el VPS; run-tgr.sh ahora los instala y exporta CHROME_BINARY/CHROMEDRIVER_PATH). Región Metropolitana completa, orden Las Condes/Lo Barnechea/Vitacura primero.
+Último lanzamiento: 2026-06-27 15:13 UTC — relanzamiento tras fix "Chrome instance exited" (los 4 workers compartían el user-data-dir por defecto, confinado por snap, y competían por el lock; ahora cada worker usa un tempdir único). Región Metropolitana completa, orden Las Condes/Lo Barnechea/Vitacura primero.
