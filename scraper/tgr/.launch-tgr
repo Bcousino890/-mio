@@ -1,2 +1,2 @@
 Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/scrape-tgr.yml.
-Último lanzamiento: 2026-06-27 13:48 UTC — relanzamiento tras fix de rsync (excluye scraper/tgr/{venv,data,csv} del deploy para evitar que un deploy concurrente borre la BD del scraper en curso). Región Metropolitana completa, orden Las Condes/Lo Barnechea/Vitacura primero.
+Último lanzamiento: 2026-06-27 14:07 UTC — relanzamiento tras fix fd leak sqlite3 (BaseDatos._conn() abría una conexión nueva por llamada y nunca la cerraba; con miles de llamadas desde varios hilos worker se agotaban los file descriptors del proceso y sqlite3 fallaba con "unable to open database file"). Región Metropolitana completa, orden Las Condes/Lo Barnechea/Vitacura primero.
