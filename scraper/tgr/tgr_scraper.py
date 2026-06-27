@@ -676,6 +676,15 @@ class WorkerTGR:
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
         https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if not https_proxy:
+            # Misma cuenta SmartProxy CL que usa geocode-cl.ts (SMARTPROXY_CL_*),
+            # sincronizada al .env del host por deploy.yml desde GitHub Secrets.
+            sp_host = os.environ.get("SMARTPROXY_CL_HOST")
+            sp_user = os.environ.get("SMARTPROXY_CL_USER")
+            if sp_host and sp_user:
+                sp_port = os.environ.get("SMARTPROXY_CL_PORT")
+                sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
+                https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
         if https_proxy:
             options.add_argument(f"--proxy-server={https_proxy}")
             options.add_argument("--ignore-certificate-errors")

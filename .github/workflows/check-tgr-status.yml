@@ -27,6 +27,16 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             cd /opt/casafari
+            echo "── Proxy SmartProxy CL (.env del host, solo presencia de claves) ──"
+            for k in SMARTPROXY_CL_HOST SMARTPROXY_CL_PORT SMARTPROXY_CL_USER SMARTPROXY_CL_PASS; do
+              if grep -q "^${k}=..*" .env 2>/dev/null; then
+                echo "  $k = (definida)"
+              else
+                echo "  $k = (FALTA)"
+              fi
+            done
+
+            echo ""
             echo "── Procesos run-tgr.sh / tgr_scraper.py ──"
             ps aux | grep -E "run-tgr.sh|tgr_scraper.py" | grep -v grep || echo "(ninguno corriendo)"
 
