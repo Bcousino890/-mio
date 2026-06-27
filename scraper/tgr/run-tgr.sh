@@ -31,14 +31,24 @@ if [ -z "${POSTGRES_PASSWORD:-}" ]; then
 fi
 export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
 
-echo "▶ Verificando Chromium + ChromeDriver del sistema (Selenium los necesita para los certificados TGR)..."
-if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-  apt-get update -qq && apt-get install -y -qq chromium chromium-driver
+echo "▶ Verificando Google Chrome del sistema (Selenium lo necesita para los certificados TGR)..."
+# El paquete apt "chromium" en Ubuntu es solo un wrapper que instala la versión
+# snap-confinada por Canonical. Bajo AppArmor, esa build no puede escribir en
+# rutas arbitrarias de /tmp (como el --user-data-dir único por worker que
+# necesitamos para evitar locks de perfil compartido entre workers paralelos),
+# lo que causa "Chrome instance exited" al crear la sesión de Selenium. Por
+# eso instalamos Google Chrome estable vía .deb directo (sin snap/AppArmor).
+if ! command -v google-chrome-stable >/dev/null 2>&1; then
+  apt-get update -qq
+  wget -q -O /tmp/google-chrome-stable.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  apt-get install -y -qq /tmp/google-chrome-stable.deb
+  rm -f /tmp/google-chrome-stable.deb
 fi
-export CHROME_BINARY="$(command -v chromium || command -v chromium-browser)"
-export CHROMEDRIVER_PATH="$(command -v chromedriver)"
+export CHROME_BINARY="$(command -v google-chrome-stable)"
+# No fijamos CHROMEDRIVER_PATH: dejamos que Selenium Manager (incluido desde
+# selenium 4.6+) resuelva y descargue el chromedriver exacto para esta versión
+# de Chrome automáticamente.
 echo "  CHROME_BINARY=$CHROME_BINARY"
-echo "  CHROMEDRIVER_PATH=$CHROMEDRIVER_PATH"
 
 cd scraper/tgr
 
