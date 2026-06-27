@@ -13,3 +13,4 @@ Check 2026-06-27 18:40 UTC — verificar relanzamiento con 2 workers y delay 5-1
 Check 2026-06-27 19:05 UTC — dashboard muestra 28 procesados, 24 con error "timeout esperando resultado" incluso tras bajar a 2 workers; investigar log en vivo para ver si el sitio sigue bloqueando o si es otra causa (selector, captcha, etc).
 
 Check 2026-06-27 19:13 UTC — scraper relanzado con diagnóstico de snippet de página activo (commit bc16bbf); revisar log en busca de líneas "snippet página" para ver el HTML real durante un timeout.
+Check 2026-06-27 19:28 UTC — ~15 min después del relanzamiento, suficiente tiempo para que ocurran timeouts reales con el diagnóstico activo; revisar snippets capturados.
