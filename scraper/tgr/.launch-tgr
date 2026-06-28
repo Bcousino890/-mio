@@ -7,3 +7,5 @@ Relanzamiento 2026-06-27 19:08 UTC — el snippet capturado confirmó que tesore
 Relanzamiento 2026-06-27 20:10 UTC — corregido bug real: --workers tenía default=4 en argparse, que pisaba silenciosamente el default=1 de ConfigScraper (la mitigación WAF de la ronda anterior nunca se aplicó; el scraper corrió con 4 workers en paralelo desde el relanzamiento 3b9fea5, golpeando el WAF en cada request x4). Fix en commit f097b81. Relanzando ahora con 1 worker real.
 
 Relanzamiento 2026-06-28 14:38 UTC — GitHub Secrets SMARTPROXY_CL_* confirmados creados. Relanzando scraper para activar proxy. El proceso actual (1 worker) ahora tendrá acceso a IPs rotativas SmartProxy para evitar bloqueos WAF. Esperando que el throughput se acelere dramaticamente.
+
+# Fuerza deploy.yml para sincronizar GitHub Secrets SMARTPROXY_CL_* al .env del host
