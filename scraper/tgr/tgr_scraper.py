@@ -831,14 +831,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # El snippet de página capturado en los timeouts confirmó que no es un
-    # timeout de red sino un bloqueo activo del WAF del sitio (F5 BIG-IP ASM,
-    # página "Request Rejected" con support ID) — la IP ya está marcada como
-    # bot. Bajar a 2 workers no fue suficiente porque el bloqueo es por IP,
-    # no solo por tasa. Bajamos a 1 worker y subimos aún más el delay para
-    # minimizar la huella, dejando que el cooldown largo en procesar() (ver
-    # detección de "Request Rejected") absorba los bloqueos restantes.
-    workers: int = 1
+    # Proxy SmartProxy activo: IPs rotativas evitan WAF del sitio. Con proxy,
+    # múltiples workers en paralelo ya no gatillan bloqueo de IP — cada request
+    # sale de una IP distinta. Aumentamos a 4 workers (VPS: 4 vCPU, 8 GB RAM).
+    workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
