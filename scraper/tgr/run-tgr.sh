@@ -15,9 +15,15 @@ REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
 LOCKFILE="/tmp/casafari-scrape-tgr.lock"
-if [ -e "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE" 2>/dev/null)" 2>/dev/null; then
-  echo "✗ Ya hay un scrape TGR en curso (PID $(cat "$LOCKFILE")). Abortando."
-  exit 1
+# Limpiar locks viejos de procesos muertos (prevenir bloqueos persistentes)
+if [ -e "$LOCKFILE" ]; then
+  OLD_PID=$(cat "$LOCKFILE" 2>/dev/null)
+  if ! kill -0 "$OLD_PID" 2>/dev/null; then
+    rm -f "$LOCKFILE"
+  elif [ -n "$OLD_PID" ]; then
+    echo "✗ Ya hay un scrape TGR en curso (PID $OLD_PID). Abortando."
+    exit 1
+  fi
 fi
 echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
