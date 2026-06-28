@@ -831,10 +831,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # Proxy SmartProxy activo: IPs rotativas evitan WAF del sitio. Con proxy,
-    # múltiples workers en paralelo ya no gatillan bloqueo de IP — cada request
-    # sale de una IP distinta. Aumentamos a 4 workers (VPS: 4 vCPU, 8 GB RAM).
-    workers: int = 4
+    # Scraper se volvió inactivo con 4 workers (probablemente cooldown WAF larga
+    # o problema de proxy). Bajando a 2 workers para diagnosticar estabilidad
+    # antes de intentar 4-6 de nuevo.
+    workers: int = 2
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
