@@ -675,21 +675,22 @@ class WorkerTGR:
         self._profile_dir = profile_dir
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
-        # PROXY REACTIVADO: SmartProxy CL con IPs rotativas para evitar WAF blocks.
-        # Credenciales sincronizadas desde GitHub Secrets → VPS .env.
-        https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if not https_proxy:
-            sp_host = os.environ.get("SMARTPROXY_CL_HOST")
-            sp_user = os.environ.get("SMARTPROXY_CL_USER")
-            if sp_host and sp_user:
-                sp_port = os.environ.get("SMARTPROXY_CL_PORT")
-                sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
-                https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
-        if https_proxy:
-            options.add_argument(f"--proxy-server={https_proxy}")
-            options.add_argument("--ignore-certificate-errors")
-            options.add_argument("--ssl-version-max=tls1.2")
-            options.add_argument("--disable-quic")
+        # PROXY DESACTIVADO: 6 workers + proxy agotó recursos (se detuvo).
+        # 4 workers + proxy: 0.2 reg/min (15x LENTO). 4 sin proxy: 3 reg/min (demostrado).
+        # Rollback: 4 workers sin proxy. Tiempo RM: ~6 horas (confiable).
+        # https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        # if not https_proxy:
+        #     sp_host = os.environ.get("SMARTPROXY_CL_HOST")
+        #     sp_user = os.environ.get("SMARTPROXY_CL_USER")
+        #     if sp_host and sp_user:
+        #         sp_port = os.environ.get("SMARTPROXY_CL_PORT")
+        #         sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
+        #         https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
+        # if https_proxy:
+        #     options.add_argument(f"--proxy-server={https_proxy}")
+        #     options.add_argument("--ignore-certificate-errors")
+        #     options.add_argument("--ssl-version-max=tls1.2")
+        #     options.add_argument("--disable-quic")
         service = Service(executable_path=CHROMEDRIVER_PATH) if os.path.exists(CHROMEDRIVER_PATH) else Service()
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, self.config.timeout)
@@ -829,9 +830,9 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # AJUSTE CON PROXY: 4 workers + SmartProxy CL. 6 workers agotó algo (proxy/memory).
-    # 4 sin proxy: ~3 reg/min. 4 con proxy: esperado ~4-5 reg/min (IPs rotativas evitan WAF).
-    # Si funciona: ~2-3 horas RM. Si falla: rollback a 4 sin proxy (demostrado estable).
+    # ROLLBACK: 4 workers SIN PROXY (demostrado estable, confiable).
+    # 6 + proxy: agotó recursos. 4 + proxy: 0.2 reg/min (15x LENTO vs sin proxy).
+    # Sin proxy: 3 reg/min, 0 errores. Tiempo RM: ~6 horas (realista, sin riesgos).
     workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
