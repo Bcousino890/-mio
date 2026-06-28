@@ -829,10 +829,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # ESCALADA CON PROXY: 6 workers + SmartProxy CL (IPs rotativas evitan WAF).
-    # Sin proxy: 4 workers era máximo (VPS saturation). Con proxy: podemos escalar.
-    # Esperado: ~3-4x aceleración si tesoreria.cl permite más parallelism por IP.
-    workers: int = 6
+    # AJUSTE CON PROXY: 4 workers + SmartProxy CL. 6 workers agotó algo (proxy/memory).
+    # 4 sin proxy: ~3 reg/min. 4 con proxy: esperado ~4-5 reg/min (IPs rotativas evitan WAF).
+    # Si funciona: ~2-3 horas RM. Si falla: rollback a 4 sin proxy (demostrado estable).
+    workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
