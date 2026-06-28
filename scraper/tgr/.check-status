@@ -24,3 +24,5 @@ Check 2026-06-27 21:00 UTC — verificar si .env del host ya tiene SMARTPROXY_CL
 Check 2026-06-27 20:00 UTC — confirmar si SMARTPROXY_CL_HOST/PORT/USER/PASS quedaron en .env del host tras deploy de commit b772956 (codigo de proxy en tgr_scraper.py + chequeo de presencia ya agregado).
 
 Check 2026-06-27 21:30 UTC — usuario confirma que las credenciales SmartProxy CL ya estan guardadas en el .env del VPS; verificar presencia real de las 4 claves y si el scraper relanzado (f777947, 1 worker) ya las esta usando (logs de proxy activo, ausencia de bloqueos WAF).
+
+Check 2026-06-28 14:13 UTC — el run anterior (7c2724b) fallo en 4s sin logs disponibles (probable error transitorio de SSH/runner); relanzando el diagnostico.
