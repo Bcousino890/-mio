@@ -25,3 +25,5 @@ ESCALADA A 2 WORKERS 2026-06-28 16:31 UTC — Confirmado: proxy era culpable (sc
 ESCALADA A 4 WORKERS 2026-06-28 16:47 UTC — 2 workers confirmado estable por 13 min (throughput: 15 reg/5min = 3 reg/min, ↑15% vs 1 worker). Total: 2.047 registros, 0 errores. Escalando a 4 workers para acelerar a ~6-8 reg/min (estimado).
 
 PROBLEMA CON 4 WORKERS 2026-06-28 16:50 UTC — 4 workers causó crash tras ~3 min. Scraper dejó de escribir (última consulta: 16:48, hace 2 min). Volviendo a 2 workers (demostrado estable: 3 reg/min, 0 errores). Probablemente WAF o problema de recursos con 4 workers en paralelo.
+
+REACTIVAR PROXY + ESCALAR 2026-06-28 16:52 UTC — SIN proxy: 4+ workers = WAF bloquea la IP. CON proxy (SmartProxy CL): IPs rotativas evitan bloqueos. Reactivando proxy ahora, manteniendo 2 workers iniciales, luego escalar 4→6→8 con proxy activo.
