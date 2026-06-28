@@ -9,3 +9,5 @@ Relanzamiento 2026-06-27 20:10 UTC — corregido bug real: --workers tenía defa
 Relanzamiento 2026-06-28 14:38 UTC — GitHub Secrets SMARTPROXY_CL_* confirmados creados. Relanzando scraper para activar proxy. El proceso actual (1 worker) ahora tendrá acceso a IPs rotativas SmartProxy para evitar bloqueos WAF. Esperando que el throughput se acelere dramaticamente.
 
 # Fuerza deploy.yml para sincronizar GitHub Secrets SMARTPROXY_CL_* al .env del host
+
+Relanzamiento 2026-06-28 18:10 UTC — aumentar a 4 workers con proxy SmartProxy activo. VPS: 4 vCPU, 8 GB RAM. IPs rotativas evitan WAF. Esperando aceleración 3-4x (de 3.6/min a ~12-15/min).
