@@ -829,10 +829,9 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # CRASH: 2 workers también dejó inactivo el scraper (10 min sin escritura).
-    # No es problema de workers sino algo sistemático (proxy, conexión, crash).
-    # Bajando a 1 worker como fallback para descartar concurrencia.
-    workers: int = 1
+    # CONFIRMADO: proxy era el culpable, no workers. Sin proxy = estable en 1 worker.
+    # Escalando: 1 → 2 → 4 → 6 workers (monitoreo cada 2 min).
+    workers: int = 2
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0

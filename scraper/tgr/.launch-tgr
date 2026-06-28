@@ -19,3 +19,5 @@ Relanzamiento EMERGENCIA 2026-06-28 18:16 UTC — scraper crash con 2 workers (1
 Relanzamiento DIAGNÓSTICO 2026-06-28 18:22 UTC — proxy desactivado, 1 worker, SIN SmartProxy. Verificando si scraper vuelve a escribir. Si sí = problema del proxy. Si no = crash más profundo (Selenium/Chrome/Postgres).
 
 Revisión de estado 2026-06-28 16:24 UTC — continuando monitoreo: verificando si scraper ha reasumido escritura sin proxy. Dashboard feedback necesario para diagnóstico siguiente.
+
+ESCALADA A 2 WORKERS 2026-06-28 16:31 UTC — Confirmado: proxy era culpable (scraper escribiendo sin errores en 1 worker). Escalando a 2 workers: últimos 5 min = 13 registros/procesados (2.6 reg/min). CPU/RAM normales. Relanzando con 2 workers.
