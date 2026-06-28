@@ -134,4 +134,25 @@ mv roles_input_rm.csv.tmp roles_input_rm.csv
 TOTAL=$(($(wc -l < roles_input_rm.csv) - 1))
 echo "▶ ${TOTAL} roles a procesar. Lanzando tgr_scraper.py..."
 
-./venv/bin/python tgr_scraper.py --input roles_input_rm.csv
+# LOGGING AGRESIVO: capturar TODOS los errores y output
+LOG_FILE="/opt/casafari/scraper/output/tgr-debug-$(date +%Y%m%d_%H%M%S).log"
+mkdir -p "$(dirname "$LOG_FILE")"
+
+echo "=== DEBUG LOG ===" > "$LOG_FILE"
+echo "Started: $(date -u)" >> "$LOG_FILE"
+echo "DATABASE_URL: $DATABASE_URL" >> "$LOG_FILE"
+echo "CHROME_BINARY: $CHROME_BINARY" >> "$LOG_FILE"
+echo "SMARTPROXY_CL_HOST: $SMARTPROXY_CL_HOST" >> "$LOG_FILE"
+echo "CSV rows: $TOTAL" >> "$LOG_FILE"
+echo "=== Running tgr_scraper.py ===" >> "$LOG_FILE"
+
+./venv/bin/python tgr_scraper.py --input roles_input_rm.csv 2>&1 | tee -a "$LOG_FILE"
+SCRAPER_EXIT=$?
+
+echo "=== Scraper exit code: $SCRAPER_EXIT ===" >> "$LOG_FILE"
+echo "Ended: $(date -u)" >> "$LOG_FILE"
+
+if [ $SCRAPER_EXIT -ne 0 ]; then
+  echo "✗ tgr_scraper.py failed with exit code $SCRAPER_EXIT (see $LOG_FILE)" >&2
+  exit $SCRAPER_EXIT
+fi
