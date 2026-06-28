@@ -39,3 +39,5 @@ ESCALADA CON PROXY 2026-06-28 21:00 UTC — Reactivar SmartProxy CL + 6 workers.
 AJUSTE 2026-06-28 22:02 UTC — 6 workers + proxy se detuvo tras 84 registros. Probable: conexiones proxy agotadas. Bajando a 4 workers + proxy para mantener IPs rotativas sin agotar recursos. Esperado: 4-5 reg/min (vs 3 sin proxy).
 
 ROLLBACK 2026-06-28 22:05 UTC — Proxy NO funciona: 6 workers agotó, 4 con proxy = 0.2 reg/min vs 3 sin proxy (15x lento). Desactivando proxy. Rollback: 4 workers sin proxy (demostrado estable, 3 reg/min, 0 errores). Tiempo RM: ~6 horas (confiable).
+
+FIX 2026-06-28 22:09 UTC — Lock file viejo bloqueaba nuevos lanzamientos. Actualizado run-tgr.sh para limpiar locks de procesos muertos. Relanzando scraper ahora.
