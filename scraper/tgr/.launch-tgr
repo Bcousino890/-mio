@@ -29,3 +29,5 @@ PROBLEMA CON 4 WORKERS 2026-06-28 16:50 UTC — 4 workers causó crash tras ~3 m
 REACTIVAR PROXY + ESCALAR 2026-06-28 16:52 UTC — SIN proxy: 4+ workers = WAF bloquea la IP. CON proxy (SmartProxy CL): IPs rotativas evitan bloqueos. Reactivando proxy ahora, manteniendo 2 workers iniciales, luego escalar 4→6→8 con proxy activo.
 
 Relanzamiento 2026-06-28 16:56 UTC — forzar workflow nuevamente, verificando que proxy esté correctamente configurado en .env del VPS.
+
+EMERGENCIA 2026-06-28 17:01 UTC — Scraper COMPLETAMENTE INACTIVO por 13+ min incluso SIN proxy + 1 worker. Problema SISTÉMICO en VPS (no proxy). Forzando reinicio AGRESIVO: matar -9 todos, borrar locks, relanzar.
