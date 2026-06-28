@@ -21,3 +21,5 @@ Relanzamiento DIAGNÓSTICO 2026-06-28 18:22 UTC — proxy desactivado, 1 worker,
 Revisión de estado 2026-06-28 16:24 UTC — continuando monitoreo: verificando si scraper ha reasumido escritura sin proxy. Dashboard feedback necesario para diagnóstico siguiente.
 
 ESCALADA A 2 WORKERS 2026-06-28 16:31 UTC — Confirmado: proxy era culpable (scraper escribiendo sin errores en 1 worker). Escalando a 2 workers: últimos 5 min = 13 registros/procesados (2.6 reg/min). CPU/RAM normales. Relanzando con 2 workers.
+
+ESCALADA A 4 WORKERS 2026-06-28 16:47 UTC — 2 workers confirmado estable por 13 min (throughput: 15 reg/5min = 3 reg/min, ↑15% vs 1 worker). Total: 2.047 registros, 0 errores. Escalando a 4 workers para acelerar a ~6-8 reg/min (estimado).
