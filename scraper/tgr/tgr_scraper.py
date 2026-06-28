@@ -831,10 +831,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # CONFIRMADO: 1 worker SIN proxy funciona (3 reg/min, estable por 4+ min).
-    # Escalando a 2 workers (sin proxy). Sin proxy = evitamos problema de sincronización de credenciales.
-    # Throughput esperado: ~6 reg/min.
-    workers: int = 2
+    # CONFIRMADO: 1 worker (3 reg/min) → 2 workers (3 reg/min, estable).
+    # Throughput sin cambios significativos: bottleneck en API tesoreria.cl.
+    # Escalando a 4 workers para aumentar paralelismo a pesar del bottleneck.
+    workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
