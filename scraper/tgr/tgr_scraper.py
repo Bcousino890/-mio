@@ -831,9 +831,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # DIAGNÓSTICO: desactivar proxy, bajar a 1 worker para verificar si el problema es proxy.
-    # Si funciona sin proxy = credenciales SMARTPROXY_CL_* no sincronizadas o conexión proxy falló.
-    workers: int = 1
+    # CONFIRMADO: 1 worker SIN proxy funciona (3 reg/min, estable por 4+ min).
+    # Escalando a 2 workers (sin proxy). Sin proxy = evitamos problema de sincronización de credenciales.
+    # Throughput esperado: ~6 reg/min.
+    workers: int = 2
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
