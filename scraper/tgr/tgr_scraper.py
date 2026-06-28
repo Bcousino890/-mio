@@ -829,9 +829,9 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # CONFIRMADO: proxy era culpable. 1 worker (2.6 reg/min) → 2 workers (3 reg/min, estable).
-    # Escalando a 4 workers para acelerar a ~6-8 reg/min.
-    workers: int = 4
+    # PROBLEMA CON 4 WORKERS: crasheó tras ~1 min. Volviendo a 2 workers (demostrado estable).
+    # 2 workers = 3 reg/min, sin errores.
+    workers: int = 2
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
