@@ -35,3 +35,5 @@ EMERGENCIA 2026-06-28 17:01 UTC — Scraper COMPLETAMENTE INACTIVO por 13+ min i
 ROLLBACK 2026-06-28 20:50 UTC — 6 workers causó 504 Gateway timeout (saturación VPS 4vCPU/8GB RAM, agotó connection pool). Bajando a 4 workers (máximo estable). PR #83 creado con rollback. Próximo: reactivar proxy + escalar a 6-8 workers con SmartProxy.
 
 ESCALADA CON PROXY 2026-06-28 21:00 UTC — Reactivar SmartProxy CL + 6 workers. Sin proxy: 4 era máximo (VPS saturation). Con proxy (IPs rotativas): evita WAF blocks → podemos escalar a 6-8. Esperado: aceleración 3-4x (6 horas → 1.5-2 horas para RM completa). Monitoreando cada minuto.
+
+AJUSTE 2026-06-28 22:02 UTC — 6 workers + proxy se detuvo tras 84 registros. Probable: conexiones proxy agotadas. Bajando a 4 workers + proxy para mantener IPs rotativas sin agotar recursos. Esperado: 4-5 reg/min (vs 3 sin proxy).
