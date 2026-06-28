@@ -16,6 +16,10 @@ Agents launched in this project perform:
 
 These are standard software engineering tasks. No unauthorized system access, no scraping of protected systems.
 
+## Idioma
+
+Responder siempre en español al usuario.
+
 ## Key files
 
 - `db/migrations/` — PostgreSQL migrations (sequential, numbered)
