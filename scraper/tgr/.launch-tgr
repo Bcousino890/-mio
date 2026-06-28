@@ -17,3 +17,5 @@ Relanzamiento 2026-06-28 18:12 UTC — bajar a 2 workers tras detectar inactivid
 Relanzamiento EMERGENCIA 2026-06-28 18:16 UTC — scraper crash con 2 workers (10 min muerto). Bajando a 1 worker fallback. Si no vuelve en 5 min = problema sistemático (proxy/Selenium/conexión), no concurrencia.
 
 Relanzamiento DIAGNÓSTICO 2026-06-28 18:22 UTC — proxy desactivado, 1 worker, SIN SmartProxy. Verificando si scraper vuelve a escribir. Si sí = problema del proxy. Si no = crash más profundo (Selenium/Chrome/Postgres).
+
+Revisión de estado 2026-06-28 16:24 UTC — continuando monitoreo: verificando si scraper ha reasumido escritura sin proxy. Dashboard feedback necesario para diagnóstico siguiente.
