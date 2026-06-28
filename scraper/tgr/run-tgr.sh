@@ -137,7 +137,17 @@ echo "rol,comuna" > roles_input_rm.csv.tmp
 cat roles_input_rm.csv >> roles_input_rm.csv.tmp
 mv roles_input_rm.csv.tmp roles_input_rm.csv
 
+# Verificar que CSV se generó correctamente (no vacío)
+if [ ! -s "roles_input_rm.csv" ]; then
+  echo "✗ CRÍTICO: roles_input_rm.csv vacío o no existe. Docker Postgres falló?" >&2
+  exit 1
+fi
+
 TOTAL=$(($(wc -l < roles_input_rm.csv) - 1))
+if [ "$TOTAL" -lt 1 ]; then
+  echo "✗ CRÍTICO: CSV tiene 0 roles (solo header). Abortar." >&2
+  exit 1
+fi
 echo "▶ ${TOTAL} roles a procesar. Lanzando tgr_scraper.py..."
 
 # LOGGING AGRESIVO: capturar TODOS los errores y output
