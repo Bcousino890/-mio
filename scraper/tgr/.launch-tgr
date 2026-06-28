@@ -31,3 +31,5 @@ REACTIVAR PROXY + ESCALAR 2026-06-28 16:52 UTC — SIN proxy: 4+ workers = WAF b
 Relanzamiento 2026-06-28 16:56 UTC — forzar workflow nuevamente, verificando que proxy esté correctamente configurado en .env del VPS.
 
 EMERGENCIA 2026-06-28 17:01 UTC — Scraper COMPLETAMENTE INACTIVO por 13+ min incluso SIN proxy + 1 worker. Problema SISTÉMICO en VPS (no proxy). Forzando reinicio AGRESIVO: matar -9 todos, borrar locks, relanzar.
+
+ROLLBACK 2026-06-28 20:50 UTC — 6 workers causó 504 Gateway timeout (saturación VPS 4vCPU/8GB RAM, agotó connection pool). Bajando a 4 workers (máximo estable). PR #83 creado con rollback. Próximo: reactivar proxy + escalar a 6-8 workers con SmartProxy.
