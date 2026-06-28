@@ -831,10 +831,10 @@ class WorkerTGR:
 
 @dataclass
 class ConfigScraper:
-    # CONFIRMADO: 1 worker (3 reg/min) → 2 workers (3 reg/min, estable).
-    # Throughput sin cambios significativos: bottleneck en API tesoreria.cl.
-    # Escalando a 4 workers para aumentar paralelismo a pesar del bottleneck.
-    workers: int = 4
+    # CONFIRMADO: 1→2→4 workers todos estables SIN PROXY (~2.6-3 reg/min).
+    # Bottleneck API tesoreria.cl limita throughput global. Escalando a 6 workers máximo.
+    # Esperado: ~3-4 reg/min (si API permite). Sin proxy = evita WAF blocks.
+    workers: int = 6
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
     delay_min: float = 8.0
