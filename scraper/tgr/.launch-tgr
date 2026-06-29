@@ -48,3 +48,5 @@ Mon Jun 29 02:40:23 UTC 2026
 CORRECCIÓN CRÍTICA 2026-06-29 04:12 UTC — BUG ENCONTRADO: run-tgr.sh NO estaba pasando --workers 4. Estaba usando default=1 worker (muy lento). Corregido en commit 41b3188: agregado --workers 4 al comando python tgr_scraper.py. Workflow #6 disparado para relanzar scraper con configuración correcta (4 workers, sin proxy, demostrado estable = 3 reg/min, 0 errores).
 
 WORKFLOW #6 COMPLETADO 2026-06-29 04:13:27 UTC — Selenium reinstalado, venv limpio, deps actualizadas, scraper relanzado con --workers 4 CORRECTO. Status: success. El scraper debería estar activo en VPS ahora escribiendo datos (~3 registros/minuto estimado).
+
+RE-LANZAMIENTO PROACTIVO 2026-06-29 04:16:55 UTC — Workflow #7 QUEUED. Sin confirmación del dashboard, disparando re-lanzamiento automático para asegurar que el scraper está activo. Puede deberse a: proceso stuck, crash post-lanzamiento, o timeout silencioso.
