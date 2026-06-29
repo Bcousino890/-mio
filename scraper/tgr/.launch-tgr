@@ -44,3 +44,5 @@ FIX 2026-06-28 22:09 UTC — Lock file viejo bloqueaba nuevos lanzamientos. Actu
 
 DIAGNÓSTICO 2026-06-28 22:13 UTC — Sospecha: docker exec psql falla silenciosamente → CSV vacío → scraper no tiene roles. Agregada verificación explícita: si CSV está vacío, el script falla en lugar de lanzar scraper sin datos. Esto revelará si el problema es Docker/Postgres.
 Mon Jun 29 02:40:23 UTC 2026
+
+CORRECCIÓN CRÍTICA 2026-06-29 04:12 UTC — BUG ENCONTRADO: run-tgr.sh NO estaba pasando --workers 4. Estaba usando default=1 worker (muy lento). Corregido en commit 41b3188: agregado --workers 4 al comando python tgr_scraper.py. Workflow #6 disparado para relanzar scraper con configuración correcta (4 workers, sin proxy, demostrado estable = 3 reg/min, 0 errores).
