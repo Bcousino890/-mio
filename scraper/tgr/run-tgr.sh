@@ -14,6 +14,15 @@ set -e
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
+# Los workflows que lanzan este script SSHean al VPS y ejecutan el archivo
+# ya presente en disco; si nadie actualiza ese checkout, el VPS corre código
+# desactualizado indefinidamente sin avisar (causa real de un bug de horas:
+# un fix de cargar_roles llegó a main pero el VPS seguía con el código viejo
+# porque ningún paso hacía git pull). Nos aseguramos aquí, en el propio
+# script, de estar siempre sobre el último commit de main.
+git fetch origin main
+git reset --hard origin/main
+
 LOCKFILE="/tmp/casafari-scrape-tgr.lock"
 # Limpiar locks viejos de procesos muertos (prevenir bloqueos persistentes)
 if [ -e "$LOCKFILE" ]; then
