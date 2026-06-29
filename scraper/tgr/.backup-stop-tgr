@@ -1,0 +1,3 @@
+# Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/backup-stop-tgr.yml
+# Respalda datos del scraper TGR en el VPS y detiene procesos en curso, sin relanzar nada.
+# Trigger: Mon Jun 29 05:40:00 UTC 2026 - backup + stop antes de rollback a f2ffb4f + fixes confirmados, a petición del usuario.

@@ -1,0 +1,61 @@
+name: Backup + Stop TGR (respaldo de datos y detención controlada)
+
+# Workflow de un solo propósito: respaldar los datos del scraper TGR en el
+# VPS y detener cualquier proceso en curso (run-tgr.sh, tgr_scraper.py,
+# chrome/chromedriver huérfanos), SIN relanzar nada. Pensado para usarse
+# antes de un rollback de código, para no perder datos ya recolectados.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/tgr/.backup-stop-tgr'
+
+jobs:
+  backup-stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Backup de datos y detención de procesos en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            STAMP=$(date +%Y%m%d_%H%M%S)
+            BACKUP_DIR="/opt/casafari-backups/tgr-${STAMP}"
+            mkdir -p "$BACKUP_DIR"
+
+            echo "=== Backup en $BACKUP_DIR ==="
+            cp -v scraper/tgr/data/tgr_metropolitana.db "$BACKUP_DIR/" 2>/dev/null || echo "(sin tgr_metropolitana.db)"
+            cp -v scraper/tgr/scraper_tgr.log "$BACKUP_DIR/" 2>/dev/null || echo "(sin scraper_tgr.log)"
+            cp -v scraper/tgr/roles_input_rm.csv "$BACKUP_DIR/" 2>/dev/null || echo "(sin roles_input_rm.csv)"
+            mkdir -p "$BACKUP_DIR/output"
+            cp -v scraper/output/launch-tgr-*.log "$BACKUP_DIR/output/" 2>/dev/null || echo "(sin logs de launch)"
+            cp -v scraper/output/tgr-debug-*.log "$BACKUP_DIR/output/" 2>/dev/null || echo "(sin logs de debug)"
+
+            echo ""
+            echo "=== Contenido del backup ==="
+            ls -la "$BACKUP_DIR"
+            ls -la "$BACKUP_DIR/output"
+
+            echo ""
+            echo "=== Deteniendo procesos TGR (sin relanzar) ==="
+            pkill -9 -f "run-tgr.sh" || true
+            pkill -9 -f "tgr_scraper.py" || true
+            pkill -9 -f "chromedriver-standalone/chromedriver" || true
+            pkill -9 -f "google/chrome/chrome" || true
+            rm -f /tmp/casafari-scrape-tgr.lock
+            sleep 2
+
+            echo ""
+            echo "=== Verificación: procesos restantes ==="
+            ps aux | grep -E "run-tgr|tgr_scraper|chrome" | grep -v grep || echo "(ninguno corriendo, confirmado)"
+          EOF
