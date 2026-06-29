@@ -216,7 +216,7 @@ echo "Current working directory: $(pwd)" >> "$LOG_FILE"
 echo "Python version: $(./venv/bin/python --version)" >> "$LOG_FILE"
 echo "=== Running tgr_scraper.py ===" >> "$LOG_FILE"
 
-./venv/bin/python tgr_scraper.py --input roles_input_rm.csv --workers 4 2>&1 | tee -a "$LOG_FILE"
+./venv/bin/python tgr_scraper.py --input roles_input_rm.csv --workers 1 2>&1 | tee -a "$LOG_FILE"
 SCRAPER_EXIT=$?
 
 echo "=== Scraper exit code: $SCRAPER_EXIT ===" >> "$LOG_FILE"

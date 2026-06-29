@@ -55,3 +55,5 @@ WORKFLOW #7 COMPLETADO 2026-06-29 04:17:20 UTC — Status: success. Scraper rela
 Mon Jun 29 04:30:18 UTC 2026
 
 RELANZAMIENTO DIAGNÓSTICO 2026-06-29 04:30:18 UTC — Con mejoras de diagnóstico para Docker/Postgres/pip/Python
+
+FIX RAÍZ CONFIRMADO 2026-06-29 04:45 UTC — Dashboard mostró scraper detenido 1h, 0.3% procesado, 100% de errores = WAF bloqueando Las Condes. Causa real encontrada en código: tgr_scraper.py:1244-1246 documenta que --workers default=1 PORQUE el WAF de tesoreria.cl bloquea por IP (no por tasa) — paralelismo solo acelera el bloqueo. Pero run-tgr.sh forzaba --workers 4 (regresión del commit 41b3188), pisando esa protección. Con 4 workers simultáneos + cooldown de 300-360s por intento bloqueado x4 reintentos, cada rol bloqueado dejaba a TODOS los workers dormidos ~20+ min, explicando el estancamiento total. Corregido: run-tgr.sh ahora usa --workers 1 (coincide con el default seguro del script). Matando proceso viejo (atascado en cooldowns de WAF con 4 workers) y relanzando limpio con 1 worker.
