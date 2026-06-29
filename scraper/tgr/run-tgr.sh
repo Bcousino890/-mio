@@ -163,7 +163,7 @@ echo "SMARTPROXY_CL_HOST: $SMARTPROXY_CL_HOST" >> "$LOG_FILE"
 echo "CSV rows: $TOTAL" >> "$LOG_FILE"
 echo "=== Running tgr_scraper.py ===" >> "$LOG_FILE"
 
-./venv/bin/python tgr_scraper.py --input roles_input_rm.csv 2>&1 | tee -a "$LOG_FILE"
+./venv/bin/python tgr_scraper.py --input roles_input_rm.csv --workers 4 2>&1 | tee -a "$LOG_FILE"
 SCRAPER_EXIT=$?
 
 echo "=== Scraper exit code: $SCRAPER_EXIT ===" >> "$LOG_FILE"
