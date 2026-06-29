@@ -1,0 +1,54 @@
+name: Scrape TGR — prueba acotada modo HTTP (experimental)
+
+# Botón manual ("Run workflow", elegible desde cualquier rama) para correr
+# run-tgr-http-test.sh en el VPS: una sola comuna, tiempo máximo acotado,
+# --mode http --no-save-raw-html. NO toca el flujo Selenium de producción
+# (run-tgr.sh) ni el sentinel .launch-tgr. Pensado para validar estabilidad
+# sostenida ante el WAF (F5 BIG-IP ASM) antes de cualquier corrida masiva.
+#
+# Requisito previo: el código de esta rama debe estar sincronizado en el VPS
+# (correr "Deploy a CX33" con workflow_dispatch eligiendo esta misma rama).
+on:
+  workflow_dispatch:
+    inputs:
+      comuna:
+        description: "Comuna a probar (nombre exacto en chile_comunas, ej. 'Las Condes')"
+        required: false
+        default: "Las Condes"
+      workers:
+        description: "Concurrencia HTTP (workers)"
+        required: false
+        default: "5"
+      max_seconds:
+        description: "Duración máxima de la corrida en segundos"
+        required: false
+        default: "3600"
+
+jobs:
+  test-http-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Lanzar prueba acotada en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari
+            chmod +x scraper/tgr/run-tgr-http-test.sh
+            export TGR_TEST_COMUNA="${{ inputs.comuna }}"
+            export TGR_TEST_WORKERS="${{ inputs.workers }}"
+            export TGR_TEST_MAX_SECONDS="${{ inputs.max_seconds }}"
+            bash scraper/tgr/run-tgr-http-test.sh
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "Prueba acotada HTTP terminada (o cortada por el tiempo máximo)."
+          echo "Resumen y log en /opt/casafari/scraper/output/tgr-http-test-*.log y *-resumen.txt del VPS."
