@@ -589,6 +589,13 @@ class BaseDatos:
             row = conn.execute("SELECT estado FROM certificados WHERE rol = ?", (rol,)).fetchone()
             return row[0] if row else None
 
+    def roles_procesados_estado(self) -> Dict[str, str]:
+        """Todos los (rol -> estado) en una sola consulta, para filtrar CSVs
+        grandes en memoria en vez de una consulta SQLite por fila."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT rol, estado FROM certificados").fetchall()
+            return {r[0]: r[1] for r in rows}
+
     def roles_con_error(self) -> List[Tuple[str, str]]:
         with self._conn() as conn:
             rows = conn.execute("SELECT rol, comuna FROM certificados WHERE estado = 'error'").fetchall()
@@ -1066,13 +1073,20 @@ class Orquestador:
         self._detener = threading.Event()
 
     def cargar_roles(self, csv_path: Path):
+        # ya_procesado() abre/cierra una conexión SQLite por llamada; con CSVs
+        # de ~1M filas, llamarla por fila aquí dejaba el proceso atascado
+        # minutos enteros en esta precarga (98%+ CPU, sin haber lanzado aún
+        # ningún worker/Chrome) antes de procesar un solo ROL real. Cargamos
+        # los estados ya conocidos en una sola consulta y filtramos en memoria.
+        procesados = self.db.roles_procesados_estado()
+
         filas = []
         with open(csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 rol = row["rol"].strip()
                 comuna = row["comuna"].strip()
-                if self.db.ya_procesado(rol) in ("exitosa", "sin_deuda"):
+                if procesados.get(rol) in ("exitosa", "sin_deuda"):
                     continue  # ya lo tenemos, no reconsultar
                 filas.append((rol, comuna))
 
