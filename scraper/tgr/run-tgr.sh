@@ -112,11 +112,12 @@ echo "  CHROME_BINARY=$CHROME_BINARY"
 cd scraper/tgr
 
 if [ ! -d venv ]; then
-  echo "▶ Creando virtualenv e instalando dependencias..."
+  echo "▶ Creando virtualenv..."
   python3 -m venv venv
   ./venv/bin/pip install -q --upgrade pip
-  ./venv/bin/pip install -q -r requirements.txt
 fi
+echo "▶ Instalando/actualizando dependencias del venv (idempotente, por si requirements.txt cambió desde que se creó)..."
+./venv/bin/pip install -q -r requirements.txt
 
 echo "▶ Exportando CSV de roles desde Postgres de producción (orden: Las Condes, Lo Barnechea, Vitacura, resto RM)..."
 docker exec casafari-pg psql -U casafari -d casafari -At -F',' -c "

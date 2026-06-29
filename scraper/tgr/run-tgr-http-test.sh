@@ -50,11 +50,12 @@ export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/cas
 cd scraper/tgr
 
 if [ ! -d venv ]; then
-  echo "▶ Creando virtualenv e instalando dependencias..."
+  echo "▶ Creando virtualenv..."
   python3 -m venv venv
   ./venv/bin/pip install -q --upgrade pip
-  ./venv/bin/pip install -q -r requirements.txt
 fi
+echo "▶ Instalando/actualizando dependencias del venv (idempotente, por si requirements.txt cambió desde que se creó)..."
+./venv/bin/pip install -q -r requirements.txt
 
 echo "▶ Exportando CSV de roles para comuna='${TGR_TEST_COMUNA}'..."
 docker exec casafari-pg psql -U casafari -d casafari -At -F',' -c "
