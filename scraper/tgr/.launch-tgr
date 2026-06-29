@@ -43,3 +43,5 @@ ROLLBACK 2026-06-28 22:05 UTC — Proxy NO funciona: 6 workers agotó, 4 con pro
 FIX 2026-06-28 22:09 UTC — Lock file viejo bloqueaba nuevos lanzamientos. Actualizado run-tgr.sh para limpiar locks de procesos muertos. Relanzando scraper ahora.
 
 DIAGNÓSTICO 2026-06-28 22:13 UTC — Sospecha: docker exec psql falla silenciosamente → CSV vacío → scraper no tiene roles. Agregada verificación explícita: si CSV está vacío, el script falla en lugar de lanzar scraper sin datos. Esto revelará si el problema es Docker/Postgres.
+
+Relanzamiento ÚNICO AUTORIZADO 2026-06-29 06:26 UTC — usuario aprobó explícitamente este intento conservador tras 3 bloqueos WAF confirmados de tesoreria.cl. Código en f2ffb4f + fixes + run-tgr.sh forzado a --workers 1 (commit c0d71dd, deploy confirmado success). Si vuelve "Request Rejected" inmediato, parar y reportar bloqueo persistente de IP; no reintentar en loop.
