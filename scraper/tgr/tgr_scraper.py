@@ -682,22 +682,27 @@ class WorkerTGR:
         self._profile_dir = profile_dir
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
-        # PROXY DESACTIVADO: 6 workers + proxy agotó recursos (se detuvo).
-        # 4 workers + proxy: 0.2 reg/min (15x LENTO). 4 sin proxy: 3 reg/min (demostrado).
-        # Rollback: 4 workers sin proxy. Tiempo RM: ~6 horas (confiable).
-        # https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        # if not https_proxy:
-        #     sp_host = os.environ.get("SMARTPROXY_CL_HOST")
-        #     sp_user = os.environ.get("SMARTPROXY_CL_USER")
-        #     if sp_host and sp_user:
-        #         sp_port = os.environ.get("SMARTPROXY_CL_PORT")
-        #         sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
-        #         https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
-        # if https_proxy:
-        #     options.add_argument(f"--proxy-server={https_proxy}")
-        #     options.add_argument("--ignore-certificate-errors")
-        #     options.add_argument("--ssl-version-max=tls1.2")
-        #     options.add_argument("--disable-quic")
+        # PROXY: reactivado el 2026-06-29. La IP del VPS quedó bloqueada de forma
+        # persistente por el WAF (F5 ASM) de tesoreria.cl — confirmado con 2
+        # intentos consecutivos (05:21:10 y 05:27:14, separados por el cooldown
+        # completo) que recibieron el mismo "Request Rejected" sin excepción.
+        # El rollback anterior a "sin proxy" asumía que el bloqueo era transitorio
+        # por rate-limit; con bloqueo de IP persistente, sin proxy el throughput
+        # real es 0 reg/min (peor que los 0.2 reg/min medidos con proxy), así que
+        # mantenerlo desactivado ya no es la opción más rápida.
+        https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if not https_proxy:
+            sp_host = os.environ.get("SMARTPROXY_CL_HOST")
+            sp_user = os.environ.get("SMARTPROXY_CL_USER")
+            if sp_host and sp_user:
+                sp_port = os.environ.get("SMARTPROXY_CL_PORT")
+                sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
+                https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
+        if https_proxy:
+            options.add_argument(f"--proxy-server={https_proxy}")
+            options.add_argument("--ignore-certificate-errors")
+            options.add_argument("--ssl-version-max=tls1.2")
+            options.add_argument("--disable-quic")
         service = Service(executable_path=CHROMEDRIVER_PATH) if os.path.exists(CHROMEDRIVER_PATH) else Service()
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, self.config.timeout)
@@ -1044,9 +1049,10 @@ class HTTPWorker:
 
 @dataclass
 class ConfigScraper:
-    # ROLLBACK: 4 workers SIN PROXY (demostrado estable, confiable).
-    # 6 + proxy: agotó recursos. 4 + proxy: 0.2 reg/min (15x LENTO vs sin proxy).
-    # Sin proxy: 3 reg/min, 0 errores. Tiempo RM: ~6 horas (realista, sin riesgos).
+    # 2026-06-29: proxy reactivado (ver comentario en _crear_driver) por bloqueo
+    # de IP persistente del WAF. Con proxy, más workers en paralelo saturan el
+    # mismo pool de IPs del proxy y degradan el throughput (6 workers agotó
+    # recursos, 4 cayó a 0.2 reg/min) — mantener bajo hasta medir de nuevo.
     workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
