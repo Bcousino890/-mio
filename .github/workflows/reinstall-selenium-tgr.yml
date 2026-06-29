@@ -27,10 +27,6 @@ jobs:
             echo "=== REINSTALANDO SELENIUM ==="
             cd /opt/casafari
 
-            echo "▶ Actualizando código (git pull)..."
-            git fetch origin main
-            git reset --hard origin/main
-
             echo "▶ Matando procesos anteriores..."
             pkill -9 -f "run-tgr.sh" || true
             pkill -9 -f "tgr_scraper.py" || true

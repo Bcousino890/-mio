@@ -52,9 +52,6 @@ jobs:
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
             cd /opt/casafari
-            echo "▶ Actualizando código (git pull)..."
-            git fetch origin main
-            git reset --hard origin/main
             mkdir -p scraper/output
             chmod +x scraper/tgr/run-tgr.sh
             nohup bash scraper/tgr/run-tgr.sh \
