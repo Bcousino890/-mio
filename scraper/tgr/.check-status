@@ -30,3 +30,5 @@ Check 2026-06-28 14:13 UTC — el run anterior (7c2724b) fallo en 4s sin logs di
 Check 2026-06-28 14:35 UTC — usuario confirma que los 4 GitHub Secrets SMARTPROXY_CL_* ya estan creados en GitHub. Verificar que deploy.yml los sincronizó al .env del host y que estan presentes.
 
 Check 2026-06-29 05:52 UTC — tras rollback a f2ffb4f + 2 fixes confirmados (commit f21b2d4, deploy.yml run exitoso). Verificar: commit/HEAD desplegado en el VPS, que NO existan procesos run-tgr.sh/tgr_scraper.py/chrome/chromedriver corriendo, y contenido de los archivos clave (sin proxy, sin --workers flag, sin modo HTTP) antes de relanzar.
+
+Check 2026-06-29 06:31 UTC — verificación del relanzamiento único autorizado (commit 8f616f7, --workers 1) tras 3 bloqueos WAF previos. Confirmar: log más reciente de lanzamiento (¿"Request Rejected" inmediato de nuevo o procesa?), conteo Postgres (¿subió de 2880?).
