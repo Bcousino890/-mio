@@ -1,0 +1,65 @@
+name: Reinstalar Selenium TGR (limpiar venv + verificar + relanzar)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reinstall:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Reinstalar Selenium + venv + relanzar scraper
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            echo "=== REINSTALANDO SELENIUM ==="
+            cd /opt/casafari
+
+            echo "▶ Matando procesos anteriores..."
+            pkill -9 -f "run-tgr.sh" || true
+            pkill -9 -f "tgr_scraper.py" || true
+            rm -f /tmp/casafari-scrape-tgr.lock
+
+            echo "▶ Limpiando venv..."
+            cd scraper/tgr
+            rm -rf venv
+
+            echo "▶ Creando venv limpio..."
+            python3 -m venv venv
+            ./venv/bin/pip install -q --upgrade pip
+            ./venv/bin/pip install -q -r requirements.txt
+
+            echo "▶ Verificando Selenium..."
+            ./venv/bin/python << 'PY'
+            from selenium import webdriver
+            print("✓ Selenium importado correctamente")
+            PY
+
+            echo "▶ Relanzando scraper..."
+            cd /opt/casafari
+            nohup bash scraper/tgr/run-tgr.sh > /tmp/tgr-restart.log 2>&1 &
+            SCRAPER_PID=$!
+            echo "✓ Scraper lanzado (PID: $SCRAPER_PID)"
+            sleep 5
+
+            if ps -p $SCRAPER_PID > /dev/null 2>&1 || [ -f /tmp/casafari-scrape-tgr.lock ]; then
+                echo "✓ Scraper confirmado activo"
+            else
+                echo "⚠ Scraper en background, verificando en 10s..."
+                sleep 10
+            fi
+
+            echo "=== REINSTALACIÓN COMPLETADA ==="
+          EOF
+
+      - name: Verificar estado en dashboard
+        run: |
+          echo "Scraper reinstalado. Espera ~30s a que el dashboard se actualice..."
+          echo "URL: https://crm.cremme.es/chile/tgr-dueno"
