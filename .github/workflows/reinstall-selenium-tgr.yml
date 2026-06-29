@@ -2,6 +2,11 @@ name: Reinstalar Selenium TGR (limpiar venv + verificar + relanzar)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/tgr/.reinstall-selenium'
 
 jobs:
   reinstall:
