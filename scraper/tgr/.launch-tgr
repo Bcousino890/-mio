@@ -43,3 +43,4 @@ ROLLBACK 2026-06-28 22:05 UTC — Proxy NO funciona: 6 workers agotó, 4 con pro
 FIX 2026-06-28 22:09 UTC — Lock file viejo bloqueaba nuevos lanzamientos. Actualizado run-tgr.sh para limpiar locks de procesos muertos. Relanzando scraper ahora.
 
 DIAGNÓSTICO 2026-06-28 22:13 UTC — Sospecha: docker exec psql falla silenciosamente → CSV vacío → scraper no tiene roles. Agregada verificación explícita: si CSV está vacío, el script falla en lugar de lanzar scraper sin datos. Esto revelará si el problema es Docker/Postgres.
+Mon Jun 29 02:40:23 UTC 2026
