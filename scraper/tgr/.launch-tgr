@@ -50,3 +50,5 @@ CORRECCIÓN CRÍTICA 2026-06-29 04:12 UTC — BUG ENCONTRADO: run-tgr.sh NO esta
 WORKFLOW #6 COMPLETADO 2026-06-29 04:13:27 UTC — Selenium reinstalado, venv limpio, deps actualizadas, scraper relanzado con --workers 4 CORRECTO. Status: success. El scraper debería estar activo en VPS ahora escribiendo datos (~3 registros/minuto estimado).
 
 RE-LANZAMIENTO PROACTIVO 2026-06-29 04:16:55 UTC — Workflow #7 QUEUED. Sin confirmación del dashboard, disparando re-lanzamiento automático para asegurar que el scraper está activo. Puede deberse a: proceso stuck, crash post-lanzamiento, o timeout silencioso.
+
+WORKFLOW #7 COMPLETADO 2026-06-29 04:17:20 UTC — Status: success. Scraper relanzado por segunda vez con --workers 4. Si el dashboard aún muestra "detenido", indica problema sistémico (Docker/Postgres no disponible, error en scraper, o issue no cubierto por correcciones).
