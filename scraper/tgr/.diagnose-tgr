@@ -1,3 +1,4 @@
 # Archivo centinela: cada push a este archivo (en main) dispara .github/workflows/diagnose-tgr.yml
 # Solo lectura: lista procesos, lockfile, y tails de logs reales en el VPS. No mata ni relanza nada.
 # Retry: Mon Jun 29 05:01:04 UTC 2026
+# Retry: Mon Jun 29 05:05:02 UTC 2026
