@@ -7,3 +7,4 @@
 # Retry: Mon Jun 29 05:24:30 UTC 2026 - relanzado a las 05:20:22 tras confirmar rsync completo (sin la race condition deploy-vs-relanzamiento de antes). Verificando si ahora sí pasa de cargar_roles a Selenium real.
 # Retry: Mon Jun 29 05:25:30 UTC 2026 - el diagnose anterior corrió a los 30s del relanzamiento, muy pronto. Reintentando con más tiempo transcurrido (~5min) para ver si ya hay chrome/chromedriver reales.
 # Retry: Mon Jun 29 05:31:00 UTC 2026 - fix cargar_roles confirmado OK (preload de 3s), pero primer request real bloqueado por WAF, worker en cooldown de 326s desde 05:21:10. Verificando si tras el cooldown logra avanzar o sigue bloqueado.
+# Retry: Mon Jun 29 05:29:00 UTC 2026 - cooldown debió terminar ~05:26:36. Verificando si el worker ya reintentó y si logró pasar el WAF esta vez.
