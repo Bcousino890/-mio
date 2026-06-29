@@ -2,3 +2,4 @@
 # Retry: Mon Jun 29 04:59:30 UTC 2026 - relanzamiento workers=1 no escribió nada en 6 min, forzando venv limpio para diagnosticar
 # Retry: Mon Jun 29 05:02:00 UTC 2026 - causa real encontrada: ~258 chrome/chromedriver huérfanos agotando RAM del VPS. pkill agregado, relanzando limpio.
 # Retry: Mon Jun 29 05:07:32 UTC 2026 - fix raíz real: cargar_roles hacía 1 query SQLite por cada fila del CSV (1M+), atascando el proceso minutos sin lanzar Selenium. Relanzando con fix.
+# Retry: Mon Jun 29 05:12:50 UTC 2026 - fix raíz definitivo: el VPS nunca hacía git pull, corría código viejo indefinidamente. run-tgr.sh ahora hace git reset --hard a origin/main al inicio. Relanzando con código real actualizado.
