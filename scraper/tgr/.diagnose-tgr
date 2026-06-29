@@ -5,3 +5,4 @@
 # Retry: Mon Jun 29 05:08:23 UTC 2026 - reinstall con fix cargar_roles corrió OK pero dashboard sigue igual, revisando ps aux/logs
 # Retry: Mon Jun 29 05:09:44 UTC 2026 - proceso lleva 5+ min corriendo tras fix cargar_roles, dashboard sigue sin avanzar, revisando estado real
 # Retry: Mon Jun 29 05:24:30 UTC 2026 - relanzado a las 05:20:22 tras confirmar rsync completo (sin la race condition deploy-vs-relanzamiento de antes). Verificando si ahora sí pasa de cargar_roles a Selenium real.
+# Retry: Mon Jun 29 05:25:30 UTC 2026 - el diagnose anterior corrió a los 30s del relanzamiento, muy pronto. Reintentando con más tiempo transcurrido (~5min) para ver si ya hay chrome/chromedriver reales.
