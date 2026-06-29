@@ -102,6 +102,35 @@ El default ya es `selenium` y producción sigue en `f2ffb4f`. Para descartar tod
 lo experimental: `git checkout f2ffb4f -- scraper/tgr/tgr_scraper.py` y borrar
 `tgr_http_probe.py`, o no fusionar la rama.
 
+## Prueba acotada en VPS (siguiente paso, antes de producción masiva)
+
+Antes de lanzar `--mode http` contra toda la Región Metropolitana, hay una
+corrida controlada de validación: una sola comuna, tiempo máximo acotado,
+métricas de CPU/RAM/WAF/DB. Implementada en
+`scraper/tgr/run-tgr-http-test.sh` + workflow manual
+`.github/workflows/scrape-tgr-http-test.yml` (botón "Run workflow",
+seleccionable desde esta rama sin tocar `main` ni el sentinel `.launch-tgr`).
+
+Pasos:
+1. Ejecutar **"Deploy a CX33"** (workflow_dispatch) eligiendo esta rama, para
+   sincronizar el código (incluye `run-tgr-http-test.sh`) al VPS.
+2. Ejecutar **"Scrape TGR — prueba acotada modo HTTP"** (workflow_dispatch)
+   con `comuna=Las Condes`, `workers=5`, `max_seconds=3600` (1h).
+3. El script filtra el CSV a esa comuna, corre con `--mode http
+   --no-save-raw-html`, se corta solo con `timeout` al llegar a
+   `max_seconds` (no espera a agotar la cola), y muestrea CPU/RAM cada 30s.
+4. Al terminar deja en `scraper/output/` del VPS: `tgr-http-test-*.log` (log
+   completo), `*-metrics.csv` (CPU/RAM cada 30s) y `*-resumen.txt`
+   (procesados, reg/min, errores, bloqueos WAF, tamaño BD antes/después).
+5. Si `WAF_BLOCKS = 0` y la corrida se sostuvo estable, repetir subiendo
+   `workers` a 10. Si se sostiene varias horas, escalar comuna por comuna
+   (Las Condes → Vitacura → Lo Barnechea → Colina → resto de RM) editando el
+   input `comuna` y, para el resto de RM, usando el flujo masivo normal
+   (`run-tgr.sh` con `--mode http`, pendiente de habilitar ahí cuando se
+   apruebe la corrida completa).
+6. Si aparece algún bloqueo WAF, bajar `workers` (o volver a Selenium, que
+   sigue intacto como fallback) antes de reintentar.
+
 ## Extensión a todo Chile (pendiente, no implementado)
 
 El mismo endpoint expone las 16 regiones (I–XVI); cada una tiene su propia lista
