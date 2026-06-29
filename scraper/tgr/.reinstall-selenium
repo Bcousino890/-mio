@@ -1,1 +1,2 @@
 # Retry: Mon Jun 29 04:16:48 UTC 2026
+# Retry: Mon Jun 29 04:59:30 UTC 2026 - relanzamiento workers=1 no escribió nada en 6 min, forzando venv limpio para diagnosticar
