@@ -30,6 +30,8 @@ jobs:
             echo "▶ Matando procesos anteriores..."
             pkill -9 -f "run-tgr.sh" || true
             pkill -9 -f "tgr_scraper.py" || true
+            pkill -9 -f "chromedriver-standalone/chromedriver" || true
+            pkill -9 -f "google/chrome/chrome" || true
             rm -f /tmp/casafari-scrape-tgr.lock
 
             echo "▶ Limpiando venv..."

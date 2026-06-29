@@ -28,6 +28,14 @@ fi
 echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
 
+# Cada Selenium worker deja un chrome/chromedriver huérfano si el script padre
+# se mata con pkill/kill -9 (eso no se propaga a los hijos). Tras suficientes
+# relanzamientos en el día estos huérfanos se acumulan, agotan la RAM del VPS
+# y dejan sin recursos a la sesión nueva (causa real de quedar "atascado" pese
+# a que el lanzamiento en sí se vea exitoso). Limpiar siempre al iniciar.
+pkill -9 -f "chromedriver-standalone/chromedriver" 2>/dev/null || true
+pkill -9 -f "google/chrome/chrome" 2>/dev/null || true
+
 if [ -f .env ]; then
   set -a; source .env; set +a
 fi

@@ -36,6 +36,12 @@ jobs:
             echo "⚠ Matando cualquier scrape TGR anterior..."
             pkill -9 -f "run-tgr.sh" || true
             pkill -9 -f "tgr_scraper.py" || true
+            # Los chrome/chromedriver que lanza Selenium NO tienen "tgr_scraper.py"
+            # en su línea de comando, así que los pkill de arriba nunca los tocan.
+            # Sin esto se acumulan como huérfanos en cada relanzamiento y acaban
+            # agotando la RAM del VPS, dejando sin recursos a la sesión nueva.
+            pkill -9 -f "chromedriver-standalone/chromedriver" || true
+            pkill -9 -f "google/chrome/chrome" || true
             rm -f /tmp/casafari-scrape-tgr.lock
             sleep 2
           EOF
