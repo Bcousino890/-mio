@@ -1,6 +1,0 @@
-# Retry: Mon Jun 29 04:16:48 UTC 2026
-# Retry: Mon Jun 29 04:59:30 UTC 2026 - relanzamiento workers=1 no escribió nada en 6 min, forzando venv limpio para diagnosticar
-# Retry: Mon Jun 29 05:02:00 UTC 2026 - causa real encontrada: ~258 chrome/chromedriver huérfanos agotando RAM del VPS. pkill agregado, relanzando limpio.
-# Retry: Mon Jun 29 05:07:32 UTC 2026 - fix raíz real: cargar_roles hacía 1 query SQLite por cada fila del CSV (1M+), atascando el proceso minutos sin lanzar Selenium. Relanzando con fix.
-# Retry: Mon Jun 29 05:12:50 UTC 2026 - fix raíz definitivo: el VPS nunca hacía git pull, corría código viejo indefinidamente. run-tgr.sh ahora hace git reset --hard a origin/main al inicio. Relanzando con código real actualizado.
-# Retry: Mon Jun 29 05:22:00 UTC 2026 - revertido el git reset (VPS no es repo git, es rsync via deploy.yml; ese intento rompía el lanzamiento con "not a git repository"). Causa raíz real confirmada: el rsync de deploy.yml tarda ~4-5min y los relanzamientos anteriores se disparaban antes de que terminara, así que SIEMPRE corrían con código viejo pese a que el fix de cargar_roles ya estaba en main. Esta vez se esperó a que el paso "Rsync al VPS" del deploy de f98242c terminara (confirmado completado) antes de relanzar.

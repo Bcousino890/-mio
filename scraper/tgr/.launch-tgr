@@ -43,17 +43,3 @@ ROLLBACK 2026-06-28 22:05 UTC — Proxy NO funciona: 6 workers agotó, 4 con pro
 FIX 2026-06-28 22:09 UTC — Lock file viejo bloqueaba nuevos lanzamientos. Actualizado run-tgr.sh para limpiar locks de procesos muertos. Relanzando scraper ahora.
 
 DIAGNÓSTICO 2026-06-28 22:13 UTC — Sospecha: docker exec psql falla silenciosamente → CSV vacío → scraper no tiene roles. Agregada verificación explícita: si CSV está vacío, el script falla en lugar de lanzar scraper sin datos. Esto revelará si el problema es Docker/Postgres.
-Mon Jun 29 02:40:23 UTC 2026
-
-CORRECCIÓN CRÍTICA 2026-06-29 04:12 UTC — BUG ENCONTRADO: run-tgr.sh NO estaba pasando --workers 4. Estaba usando default=1 worker (muy lento). Corregido en commit 41b3188: agregado --workers 4 al comando python tgr_scraper.py. Workflow #6 disparado para relanzar scraper con configuración correcta (4 workers, sin proxy, demostrado estable = 3 reg/min, 0 errores).
-
-WORKFLOW #6 COMPLETADO 2026-06-29 04:13:27 UTC — Selenium reinstalado, venv limpio, deps actualizadas, scraper relanzado con --workers 4 CORRECTO. Status: success. El scraper debería estar activo en VPS ahora escribiendo datos (~3 registros/minuto estimado).
-
-RE-LANZAMIENTO PROACTIVO 2026-06-29 04:16:55 UTC — Workflow #7 QUEUED. Sin confirmación del dashboard, disparando re-lanzamiento automático para asegurar que el scraper está activo. Puede deberse a: proceso stuck, crash post-lanzamiento, o timeout silencioso.
-
-WORKFLOW #7 COMPLETADO 2026-06-29 04:17:20 UTC — Status: success. Scraper relanzado por segunda vez con --workers 4. Si el dashboard aún muestra "detenido", indica problema sistémico (Docker/Postgres no disponible, error en scraper, o issue no cubierto por correcciones).
-Mon Jun 29 04:30:18 UTC 2026
-
-RELANZAMIENTO DIAGNÓSTICO 2026-06-29 04:30:18 UTC — Con mejoras de diagnóstico para Docker/Postgres/pip/Python
-
-FIX RAÍZ CONFIRMADO 2026-06-29 04:45 UTC — Dashboard mostró scraper detenido 1h, 0.3% procesado, 100% de errores = WAF bloqueando Las Condes. Causa real encontrada en código: tgr_scraper.py:1244-1246 documenta que --workers default=1 PORQUE el WAF de tesoreria.cl bloquea por IP (no por tasa) — paralelismo solo acelera el bloqueo. Pero run-tgr.sh forzaba --workers 4 (regresión del commit 41b3188), pisando esa protección. Con 4 workers simultáneos + cooldown de 300-360s por intento bloqueado x4 reintentos, cada rol bloqueado dejaba a TODOS los workers dormidos ~20+ min, explicando el estancamiento total. Corregido: run-tgr.sh ahora usa --workers 1 (coincide con el default seguro del script). Matando proceso viejo (atascado en cooldowns de WAF con 4 workers) y relanzando limpio con 1 worker.

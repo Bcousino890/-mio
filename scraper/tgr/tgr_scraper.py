@@ -682,27 +682,22 @@ class WorkerTGR:
         self._profile_dir = profile_dir
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
-        # PROXY: reactivado el 2026-06-29. La IP del VPS quedó bloqueada de forma
-        # persistente por el WAF (F5 ASM) de tesoreria.cl — confirmado con 2
-        # intentos consecutivos (05:21:10 y 05:27:14, separados por el cooldown
-        # completo) que recibieron el mismo "Request Rejected" sin excepción.
-        # El rollback anterior a "sin proxy" asumía que el bloqueo era transitorio
-        # por rate-limit; con bloqueo de IP persistente, sin proxy el throughput
-        # real es 0 reg/min (peor que los 0.2 reg/min medidos con proxy), así que
-        # mantenerlo desactivado ya no es la opción más rápida.
-        https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if not https_proxy:
-            sp_host = os.environ.get("SMARTPROXY_CL_HOST")
-            sp_user = os.environ.get("SMARTPROXY_CL_USER")
-            if sp_host and sp_user:
-                sp_port = os.environ.get("SMARTPROXY_CL_PORT")
-                sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
-                https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
-        if https_proxy:
-            options.add_argument(f"--proxy-server={https_proxy}")
-            options.add_argument("--ignore-certificate-errors")
-            options.add_argument("--ssl-version-max=tls1.2")
-            options.add_argument("--disable-quic")
+        # PROXY DESACTIVADO: 6 workers + proxy agotó recursos (se detuvo).
+        # 4 workers + proxy: 0.2 reg/min (15x LENTO). 4 sin proxy: 3 reg/min (demostrado).
+        # Rollback: 4 workers sin proxy. Tiempo RM: ~6 horas (confiable).
+        # https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        # if not https_proxy:
+        #     sp_host = os.environ.get("SMARTPROXY_CL_HOST")
+        #     sp_user = os.environ.get("SMARTPROXY_CL_USER")
+        #     if sp_host and sp_user:
+        #         sp_port = os.environ.get("SMARTPROXY_CL_PORT")
+        #         sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
+        #         https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
+        # if https_proxy:
+        #     options.add_argument(f"--proxy-server={https_proxy}")
+        #     options.add_argument("--ignore-certificate-errors")
+        #     options.add_argument("--ssl-version-max=tls1.2")
+        #     options.add_argument("--disable-quic")
         service = Service(executable_path=CHROMEDRIVER_PATH) if os.path.exists(CHROMEDRIVER_PATH) else Service()
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, self.config.timeout)
@@ -840,219 +835,11 @@ class WorkerTGR:
         return cert
 
 
-# Mapa comuna (sin tilde, mayúsculas) -> valor TGR del <select>, Región
-# Metropolitana. Capturado del propio begin.do (region=13). Se usa como fuente
-# PRIMARIA porque begin.do es intermitente (a veces devuelve la lista vacía si
-# se golpea repetido); el fetch en vivo queda como complemento best-effort.
-# OJO: TGR escribe las comunas SIN tilde ("NUNOA", "MAIPU", "PENALOLEN").
-COMUNAS_TGR_RM: Dict[str, str] = {
-    "ALHUE": "109", "BUIN": "103", "CALERA DE TANGO": "99", "CERRILLOS": "333",
-    "CERRO NAVIA": "324", "COLINA": "76", "CONCHALI": "75", "CURACAVI": "83",
-    "EL BOSQUE": "338", "EL MONTE": "89", "ESTACION CENTRAL": "328",
-    "HUECHURABA": "334", "INDEPENDENCIA": "330", "ISLA DE MAIPO": "87",
-    "LA CISTERNA": "96", "LA FLORIDA": "93", "LA GRANJA": "97", "LA PINTANA": "327",
-    "LA REINA": "92", "LAMPA": "78", "LAS CONDES": "71", "LO BARNECHEA": "332",
-    "LO ESPEJO": "337", "LO PRADO": "325", "MACUL": "323", "MAIPU": "94",
-    "MARIA PINTO": "90", "MELIPILLA": "88", "NUNOA": "91", "PADRE HURTADO": "339",
-    "PAINE": "104", "PEDRO AGUIRRE CERDA": "336", "PENAFLOR": "85",
-    "PENALOLEN": "322", "PIRQUE": "101", "PROVIDENCIA": "72", "PUDAHUEL": "82",
-    "PUENTE ALTO": "100", "QUILICURA": "79", "QUINTA NORMAL": "81",
-    "RECOLETA": "329", "RENCA": "77", "SAN BERNARDO": "98", "SAN JOAQUIN": "335",
-    "SAN JOSE DE MAIPO": "102", "SAN MIGUEL": "95", "SAN PEDRO": "108",
-    "SAN RAMON": "326", "SANTIAGO": "70", "TALAGANTE": "86", "TIL-TIL": "80",
-    "VITACURA": "331",
-}
-
-
-def _norm_comuna(s: str) -> str:
-    """Normaliza nombre de comuna: sin tilde/diacríticos, mayúsculas, espacios
-    colapsados. Permite matchear 'Ñuñoa'/'Maipú' del CSV contra 'NUNOA'/'MAIPU'
-    de TGR."""
-    import unicodedata
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r"\s+", " ", s).strip().upper()
-
-
-class HTTPWorker:
-    """Worker que consulta TraerCertificadoDeudasAction.do por HTTP directo,
-    sin Selenium. Reusa parsear_resultado() — el MISMO parser que el modo
-    Selenium, sin duplicar lógica.
-
-    Habilitado por un hallazgo verificado (ver tgr_http_probe.py y
-    docs/TGR-HTTP-MODE.md): el servidor NO valida g-recaptcha-response
-    server-side, así que se envía vacío. No hay bypass de captcha — el control
-    simplemente no se aplica del lado servidor. El certificado vuelve como PDF
-    base64 embebido en el HTML, idéntico a lo que ve Selenium.
-
-    Mantiene la MISMA interfaz que WorkerTGR (iniciar/detener/procesar) para
-    que el Orquestador sea agnóstico al modo.
-    """
-    BASE = "https://www.tesoreria.cl/CertDeudasRolCutAixWeb"
-    URL_FORM = BASE + "/Controller.jpf?RUT=0&DV=0&EMAIL="
-    URL_BEGIN = BASE + "/begin.do"
-    URL_POST = BASE + "/TraerCertificadoDeudasAction.do"
-
-    def __init__(self, worker_id: int, db: "BaseDatos", config: "ConfigScraper"):
-        self.worker_id = worker_id
-        self.db = db
-        self.config = config
-        self.session = None
-        self.comuna_map: Dict[str, str] = {}
-
-    def iniciar(self):
-        # Base confiable: mapa hardcodeado (keys ya normalizadas sin tilde).
-        self.comuna_map = dict(COMUNAS_TGR_RM)
-        self._nueva_sesion()
-        logger.info(
-            f"HTTPWorker {self.worker_id}: sesión iniciada "
-            f"({len(self.comuna_map)} comunas mapeadas)"
-        )
-
-    def _nueva_sesion(self):
-        import requests
-        s = requests.Session()
-        s.headers.update({
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "es-CL,es;q=0.9",
-        })
-        # GET inicial: cookies de sesión (JSESSIONID) y del WAF F5 (TS*).
-        s.get(self.URL_FORM, timeout=30)
-        # begin.do con region=13 repuebla el <select> de comuna. Es intermitente
-        # (a veces devuelve lista vacía), así que solo COMPLEMENTA el mapa base.
-        try:
-            r = s.post(
-                self.URL_BEGIN,
-                data={"region": REGION_METROPOLITANA_VALUE},
-                headers={"Content-Type": "application/x-www-form-urlencoded",
-                         "Referer": self.URL_BEGIN},
-                timeout=30,
-            )
-            for nombre, val in self._parse_comunas(r.text).items():
-                self.comuna_map.setdefault(nombre, val)
-        except Exception:
-            pass  # el mapa hardcodeado basta
-        self.session = s
-
-    @staticmethod
-    def _parse_comunas(html: str) -> Dict[str, str]:
-        mapa: Dict[str, str] = {}
-        for val, txt in re.findall(r'<option value="(\d+)"[^>]*>([^<]+)', html):
-            texto = txt.replace("&nbsp;", " ")
-            # Los <option> de región traen "[REGION ...]" en el texto; las comunas
-            # no. Filtramos por ese marcador (no por prefijo romano: "VITACURA"
-            # empieza con "VI" y se excluía por error).
-            if "[REGION" in texto.upper():
-                continue
-            nombre = _norm_comuna(re.sub(r"\s*\(\d+\)\s*$", "", texto))
-            if nombre:
-                mapa.setdefault(nombre, val)
-        return mapa
-
-    def detener(self):
-        if self.session:
-            self.session.close()
-
-    def _comuna_valor(self, comuna: str) -> Optional[str]:
-        cu = _norm_comuna(comuna)
-        if cu in self.comuna_map:
-            return self.comuna_map[cu]
-        for nombre, val in self.comuna_map.items():
-            if nombre.startswith(cu):
-                return val
-        return None
-
-    def consultar_una_vez(self, rol: str, comuna: str) -> Certificado:
-        rol_parts = rol.split("-")
-        if len(rol_parts) != 3:
-            cert = Certificado(rol=rol, comuna=comuna)
-            cert.estado = "error"
-            cert.error = f"Formato de ROL inválido: {rol}"
-            return cert
-        _, numero_rol, subrol = rol_parts
-
-        comuna_val = self._comuna_valor(comuna)
-        if not comuna_val:
-            cert = Certificado(rol=rol, comuna=comuna)
-            cert.estado = "error"
-            cert.error = f"No se encontró la comuna {comuna!r} en el mapa TGR"
-            return cert
-
-        payload = {
-            "region": REGION_METROPOLITANA_VALUE,
-            "comuna": comuna_val,
-            "rol": numero_rol,
-            "subRol": subrol,
-            "g-recaptcha-response": "",  # el server no lo valida (ver docs)
-        }
-        r = self.session.post(
-            self.URL_POST, data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded",
-                     "Origin": "https://www.tesoreria.cl",
-                     "Referer": self.URL_BEGIN},
-            timeout=self.config.timeout,
-        )
-        if "Request Rejected" in r.text or "support ID is" in r.text:
-            cert = Certificado(rol=rol, comuna=comuna)
-            cert.estado = "error"
-            cert.error = "bloqueado por WAF del sitio (Request Rejected)"
-            return cert
-        return parsear_resultado(r.text, rol, comuna)
-
-    def procesar(self, rol: str, comuna: str) -> Certificado:
-        ultimo_error = ""
-        for intento in range(1, self.config.max_reintentos + 1):
-            try:
-                if self.config.delay_max > 0:
-                    time.sleep(random.uniform(self.config.delay_min, self.config.delay_max))
-                cert = self.consultar_una_vez(rol, comuna)
-                cert.intentos = intento
-                if cert.estado in ("exitosa", "sin_deuda"):
-                    return cert
-                ultimo_error = cert.error or "resultado vacío/no reconocido"
-                if "WAF" in ultimo_error:
-                    # Mismo criterio que el modo Selenium: cooldown largo y
-                    # sesión nueva (IP/cookies) en vez de reintentar de inmediato.
-                    cooldown = 300 + random.uniform(0, 60)
-                    logger.warning(
-                        f"HTTPWorker {self.worker_id}: ROL {rol} bloqueado por WAF. "
-                        f"Cooldown {cooldown:.0f}s + sesión nueva..."
-                    )
-                    try:
-                        self._nueva_sesion()
-                    except Exception:
-                        pass
-                    time.sleep(cooldown)
-                    continue
-            except Exception as e:  # noqa: BLE001
-                ultimo_error = f"{type(e).__name__}: {e}"
-                try:
-                    self._nueva_sesion()
-                except Exception:
-                    pass
-
-            backoff = (2 ** intento) + random.uniform(0, 1)
-            logger.warning(
-                f"HTTPWorker {self.worker_id}: ROL {rol} falló intento "
-                f"{intento}/{self.config.max_reintentos} ({ultimo_error}). "
-                f"Reintentando en {backoff:.1f}s..."
-            )
-            time.sleep(backoff)
-
-        cert = Certificado(rol=rol, comuna=comuna)
-        cert.estado = "error"
-        cert.intentos = self.config.max_reintentos
-        cert.error = ultimo_error
-        return cert
-
-
 @dataclass
 class ConfigScraper:
-    # 2026-06-29: proxy reactivado (ver comentario en _crear_driver) por bloqueo
-    # de IP persistente del WAF. Con proxy, más workers en paralelo saturan el
-    # mismo pool de IPs del proxy y degradan el throughput (6 workers agotó
-    # recursos, 4 cayó a 0.2 reg/min) — mantener bajo hasta medir de nuevo.
+    # ROLLBACK: 4 workers SIN PROXY (demostrado estable, confiable).
+    # 6 + proxy: agotó recursos. 4 + proxy: 0.2 reg/min (15x LENTO vs sin proxy).
+    # Sin proxy: 3 reg/min, 0 errores. Tiempo RM: ~6 horas (realista, sin riesgos).
     workers: int = 4
     max_reintentos: int = 4
     rondas_retry_fallidos: int = 2
@@ -1061,11 +848,6 @@ class ConfigScraper:
     timeout: int = 25
     headless: bool = True
     export_cada_n: int = 200
-    # Modo experimental: "selenium" (estable, default) | "http" (directo, ~90x).
-    mode: str = "selenium"
-    # raw_html infla SQLite (~11KB/PDF base64 × 1M roles ≈ 11GB). Por defecto se
-    # mantiene (compat con --reparse); --no-save-raw-html lo omite en éxitos.
-    save_raw_html: bool = True
 
 
 class Orquestador:
@@ -1111,10 +893,7 @@ class Orquestador:
         logger.info(f"Cargados {len(fallidos)} ROLs previamente fallidos para reintentar")
 
     def _loop_worker(self, worker_id: int):
-        if self.config.mode == "http":
-            worker = HTTPWorker(worker_id, self.db, self.config)
-        else:
-            worker = WorkerTGR(worker_id, self.db, self.config)
+        worker = WorkerTGR(worker_id, self.db, self.config)
         worker.iniciar()
         try:
             while not self._detener.is_set():
@@ -1124,10 +903,6 @@ class Orquestador:
                     break
 
                 cert = worker.procesar(rol, comuna)
-                # raw_html solo se conserva en errores (para diagnóstico) o si
-                # se pidió explícitamente; en éxitos se omite para no inflar la BD.
-                if not self.config.save_raw_html and cert.estado != "error":
-                    cert.raw_html = ""
                 self.db.guardar(cert)
 
                 with self.lock_stats:
@@ -1269,35 +1044,16 @@ def main():
     parser.add_argument("--retry-failed", action="store_true", help="Reintenta todos los ROLs marcados como error")
     parser.add_argument("--reparse", action="store_true", help="Re-extrae datos desde raw_html guardado, sin red")
     parser.add_argument("--no-headless", action="store_true")
-    parser.add_argument("--mode", choices=["selenium", "http"], default="selenium",
-                        help="selenium (estable, default) | http (directo, sin navegador, ~90x más rápido)")
-    parser.add_argument("--delay-min", type=float, default=None,
-                        help="Delay mínimo entre consultas (s). http puede usar 0")
-    parser.add_argument("--delay-max", type=float, default=None,
-                        help="Delay máximo entre consultas (s). http puede usar 0")
-    parser.add_argument("--no-save-raw-html", action="store_true",
-                        help="No guardar raw_html en éxitos (ahorra ~11GB en RM completa). raw_html se conserva siempre en errores")
     args = parser.parse_args()
 
     if args.test_fixture:
         ok = correr_test_fixture()
         sys.exit(0 if ok else 1)
 
-    # Defaults de delay según modo: selenium gentil (8-15s, evita WAF de navegador);
-    # http rápido (0s, el endpoint aguanta concurrencia sin bloqueo — ver benchmark).
-    if args.delay_min is None:
-        args.delay_min = 0.0 if args.mode == "http" else 8.0
-    if args.delay_max is None:
-        args.delay_max = 0.0 if args.mode == "http" else 15.0
-
     config = ConfigScraper(
         workers=args.workers,
         max_reintentos=args.max_reintentos,
         headless=not args.no_headless,
-        mode=args.mode,
-        delay_min=args.delay_min,
-        delay_max=args.delay_max,
-        save_raw_html=not args.no_save_raw_html,
     )
 
     orquestador = Orquestador(config)
