@@ -42,10 +42,7 @@ jobs:
             ./venv/bin/pip install -q -r requirements.txt
 
             echo "▶ Verificando Selenium..."
-            ./venv/bin/python << 'PY'
-            from selenium import webdriver
-            print("✓ Selenium importado correctamente")
-            PY
+            ./venv/bin/python -c "from selenium import webdriver; print('✓ Selenium importado correctamente')"
 
             echo "▶ Relanzando scraper..."
             cd /opt/casafari
