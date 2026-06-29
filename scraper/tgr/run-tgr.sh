@@ -118,8 +118,35 @@ if [ ! -d venv ]; then
 fi
 echo "▶ Instalando/actualizando dependencias del venv (idempotente, por si requirements.txt cambió desde que se creó)..."
 ./venv/bin/pip install -q -r requirements.txt
+if [ $? -ne 0 ]; then
+  echo "✗ CRÍTICO: pip install falló. Probando reinstalación limpia del venv..." >&2
+  rm -rf venv
+  python3 -m venv venv
+  ./venv/bin/pip install -q --upgrade pip
+  ./venv/bin/pip install -q -r requirements.txt
+  if [ $? -ne 0 ]; then
+    echo "✗ CRÍTICO: pip install sigue fallando tras venv limpio" >&2
+    exit 1
+  fi
+fi
+echo "  ✓ Dependencias instaladas correctamente"
 
 echo "▶ Exportando CSV de roles desde Postgres de producción (orden: Las Condes, Lo Barnechea, Vitacura, resto RM)..."
+# Diagnóstico: verificar que Docker está disponible
+if ! command -v docker &> /dev/null; then
+  echo "✗ CRÍTICO: Docker no está instalado o no está en PATH" >&2
+  exit 1
+fi
+
+# Diagnóstico: verificar que el contenedor está corriendo
+if ! docker exec casafari-pg pg_isready -U casafari -d casafari > /dev/null 2>&1; then
+  echo "✗ CRÍTICO: No puedo conectar a casafari-pg. Contenedor no está accesible o Postgres no responde." >&2
+  docker ps -a | grep casafari || echo "  (casafari-pg no aparece en docker ps)"
+  exit 1
+fi
+
+echo "  ✓ Docker Postgres accesible"
+
 docker exec casafari-pg psql -U casafari -d casafari -At -F',' -c "
   SELECT r.sii_comuna_code || '-' || r.rol, c.name
   FROM sii_roles_cl r
@@ -133,6 +160,11 @@ docker exec casafari-pg psql -U casafari -d casafari -At -F',' -c "
       ELSE 3
     END, c.name, r.manzana, r.predio
 " > roles_input_rm.csv
+DOCKER_EXIT=$?
+if [ $DOCKER_EXIT -ne 0 ]; then
+  echo "✗ CRÍTICO: docker exec psql falló con código $DOCKER_EXIT" >&2
+  exit $DOCKER_EXIT
+fi
 
 echo "rol,comuna" > roles_input_rm.csv.tmp
 cat roles_input_rm.csv >> roles_input_rm.csv.tmp
@@ -151,6 +183,24 @@ if [ "$TOTAL" -lt 1 ]; then
 fi
 echo "▶ ${TOTAL} roles a procesar. Lanzando tgr_scraper.py..."
 
+# Diagnóstico: verificar que Python puede importar módulos locales
+echo "▶ Verificando que Python puede importar módulos locales..."
+./venv/bin/python -c "
+import sys
+sys.path.insert(0, '.')
+from comunas_config import COMUNAS_METROPOLITANA_ORDEN
+print(f'  ✓ comunas_config importado correctamente ({len(COMUNAS_METROPOLITANA_ORDEN)} comunas)')
+try:
+  from selenium import webdriver
+  print('  ✓ selenium importado correctamente')
+except Exception as e:
+  print(f'  ✗ Error importando selenium: {e}')
+  sys.exit(1)
+" || {
+  echo "✗ CRÍTICO: Error importando módulos Python" >&2
+  exit 1
+}
+
 # LOGGING AGRESIVO: capturar TODOS los errores y output
 LOG_FILE="/opt/casafari/scraper/output/tgr-debug-$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -159,8 +209,11 @@ echo "=== DEBUG LOG ===" > "$LOG_FILE"
 echo "Started: $(date -u)" >> "$LOG_FILE"
 echo "DATABASE_URL: $DATABASE_URL" >> "$LOG_FILE"
 echo "CHROME_BINARY: $CHROME_BINARY" >> "$LOG_FILE"
+echo "CHROMEDRIVER_PATH: $CHROMEDRIVER_PATH" >> "$LOG_FILE"
 echo "SMARTPROXY_CL_HOST: $SMARTPROXY_CL_HOST" >> "$LOG_FILE"
 echo "CSV rows: $TOTAL" >> "$LOG_FILE"
+echo "Current working directory: $(pwd)" >> "$LOG_FILE"
+echo "Python version: $(./venv/bin/python --version)" >> "$LOG_FILE"
 echo "=== Running tgr_scraper.py ===" >> "$LOG_FILE"
 
 ./venv/bin/python tgr_scraper.py --input roles_input_rm.csv --workers 4 2>&1 | tee -a "$LOG_FILE"
