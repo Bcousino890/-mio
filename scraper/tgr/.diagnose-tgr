@@ -9,3 +9,4 @@
 # Retry: Mon Jun 29 05:31:00 UTC 2026 - fix cargar_roles confirmado OK (preload de 3s), pero primer request real bloqueado por WAF, worker en cooldown de 326s desde 05:21:10. Verificando si tras el cooldown logra avanzar o sigue bloqueado.
 # Retry: Mon Jun 29 05:29:00 UTC 2026 - cooldown debió terminar ~05:26:36. Verificando si el worker ya reintentó y si logró pasar el WAF esta vez.
 # Retry: Mon Jun 29 05:33:00 UTC 2026 - usuario reporta dashboard "inactivo hace 35 min" (consistente con ultima_consulta=04:49:20Z). Verificando ps aux en vivo: ¿el proceso sigue corriendo, se colgó en el cooldown, o murió?
+# Retry: Mon Jun 29 05:35:00 UTC 2026 - cooldown del primer intento (intento 1) terminó ~05:26:36. Verificando si intento 2 también fue bloqueado por WAF (IP bloqueada persistente, sin proxy activo) o si esta vez pasó.
