@@ -2,3 +2,4 @@
 # Solo lectura: lista procesos, lockfile, y tails de logs reales en el VPS. No mata ni relanza nada.
 # Retry: Mon Jun 29 05:01:04 UTC 2026
 # Retry: Mon Jun 29 05:05:02 UTC 2026
+# Retry: Mon Jun 29 05:08:23 UTC 2026 - reinstall con fix cargar_roles corrió OK pero dashboard sigue igual, revisando ps aux/logs
