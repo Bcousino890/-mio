@@ -100,6 +100,10 @@ export default function TgrDuenoStats() {
     const fetchStats = async () => {
       try {
         const res = await fetch('/api/chile/tgr-stats')
+        if (!res.ok && res.headers.get('content-type')?.includes('text/html')) {
+          if (!cancelled) setError(`HTTP ${res.status} — el servidor devolvió HTML (revisa los logs de Next.js)`)
+          return
+        }
         const data = await res.json()
         if (cancelled) return
         if (data.success) {
@@ -108,8 +112,8 @@ export default function TgrDuenoStats() {
         } else {
           setError(data.error ?? 'Error desconocido')
         }
-      } catch {
-        if (!cancelled) setError('Error de conexión')
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? `Error de conexión: ${err.message}` : 'Error de conexión')
       }
     }
     fetchStats()

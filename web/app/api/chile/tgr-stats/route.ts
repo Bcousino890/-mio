@@ -3,19 +3,11 @@ import { Pool } from 'pg'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Heurística simple para distinguir persona natural vs empresa por el nombre
-// que devuelve el certificado TGR (no hay campo estructurado para esto).
 const PATRONES_EMPRESA = [
   'S.A.', 'SPA', 'LTDA', 'EIRL', 'E.I.R.L', 'SOCIEDAD', 'LIMITADA',
   'INMOBILIARIA', 'INVERSIONES', 'COMERCIAL', 'CONSTRUCTORA', 'INC.',
-  'CORP', 'COMPAÑIA', 'COMPAÑÍA', 'FONDO', 'INMOBILIARIA',
+  'CORP', 'COMPAÑIA', 'COMPAÑÍA', 'FONDO',
 ]
-
-function esEmpresa(nombre: string | null): boolean {
-  if (!nombre) return false
-  const n = nombre.toUpperCase()
-  return PATRONES_EMPRESA.some((p) => n.includes(p))
-}
 
 export async function GET() {
   try {
@@ -62,7 +54,16 @@ export async function GET() {
         SELECT MAX(fecha_consulta) AS ultima, COUNT(*) FILTER (WHERE fecha_consulta > now() - interval '5 minutes') AS recientes
         FROM tgr_certificados
       `),
-      pool.query(`SELECT nombre FROM tgr_certificados WHERE nombre IS NOT NULL AND nombre != ''`),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE nombre IS NOT NULL AND nombre != '' AND (
+            ${PATRONES_EMPRESA.map((_, i) => `UPPER(nombre) LIKE $${i + 1}`).join(' OR ')}
+          )) AS empresas,
+          COUNT(*) FILTER (WHERE nombre IS NOT NULL AND nombre != '' AND NOT (
+            ${PATRONES_EMPRESA.map((_, i) => `UPPER(nombre) LIKE $${i + 1}`).join(' OR ')}
+          )) AS personas
+        FROM tgr_certificados
+      `, PATRONES_EMPRESA.map(p => `%${p}%`)),
       pool.query(`
         SELECT rol, comuna, estado, fecha_consulta, revisado, revisado_at, revisado_nota
         FROM tgr_certificados
@@ -77,12 +78,8 @@ export async function GET() {
     const esperados = Number(esperadosRes.rows[0].total)
     const total = Number(g.total)
 
-    let personas = 0
-    let empresas = 0
-    for (const r of nombresRes.rows) {
-      if (esEmpresa(r.nombre)) empresas++
-      else personas++
-    }
+    const personas = Number(nombresRes.rows[0].personas)
+    const empresas = Number(nombresRes.rows[0].empresas)
 
     const ultimaConsulta = hb.ultima as Date | null
     const segundosDesdeUltima = ultimaConsulta ? (Date.now() - new Date(ultimaConsulta).getTime()) / 1000 : null
