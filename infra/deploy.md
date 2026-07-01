@@ -141,3 +141,5 @@ $COMPOSE down
 - Los certificados TLS de casafari-mio viven en
   `/etc/casafari-ssl/crm.cremme.es/` dentro del contenedor compartido,
   separados de los de los demás dominios.
+
+<!-- retry-deploy: forzar redeploy tras fallo de ssh-keyscan en el run anterior -->
