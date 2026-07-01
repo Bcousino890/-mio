@@ -98,18 +98,25 @@ export default function StreetPage() {
   const [mapZoomLevel, setMapZoomLevel] = useState(12)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // ── búsqueda con debounce ────────────────────────────────────────────────
   const runSearch = useCallback(async (q: string) => {
-    if (q.length < 3) { setResults([]); setSearchError(null); return }
+    if (q.length < 2) { setResults([]); setSearchError(null); return }
     setSearching(true)
     setSearchError(null)
     try {
-      const res = await fetch(`/api/chile/sii-search?q=${encodeURIComponent(q)}&limit=30`)
+      const res = await fetch(`/api/chile/sii-search?q=${encodeURIComponent(q)}&limit=50`)
       const data = await res.json()
-      if (data.success) setResults(data.results)
-      else setSearchError(data.error ?? 'Error en búsqueda')
+      if (data.success) {
+        const sorted = (data.results || []).sort((a: SiiResult, b: SiiResult) => {
+          if (a.direccion && !b.direccion) return -1
+          if (!a.direccion && b.direccion) return 1
+          return 0
+        })
+        setResults(sorted)
+      } else {
+        setSearchError(data.error ?? 'No se encontraron resultados')
+      }
     } catch {
-      setSearchError('Error de conexión')
+      setSearchError('Error al conectar — intenta nuevamente')
     } finally {
       setSearching(false)
     }
@@ -117,7 +124,7 @@ export default function StreetPage() {
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => runSearch(query), 350)
+    debounceRef.current = setTimeout(() => runSearch(query), 280)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [query, runSearch])
 
@@ -191,37 +198,43 @@ export default function StreetPage() {
             <span className="ml-auto text-[10px] text-slate-600 bg-[var(--c-hover)] px-1.5 py-0.5 rounded">9.4M roles</span>
           </div>
 
-          {/* buscador */}
           <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 pointer-events-none" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Dirección o rol (ej: 795-198)"
-              className="w-full pl-8 pr-8 py-2 text-xs rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors"
+              placeholder="Dir./rol: 'Av. Apoquindo 3600' o '795-198'"
+              className="w-full pl-8 pr-8 py-2.5 text-xs rounded-lg bg-[var(--c-hover)] border border-[var(--c-border)] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-500/30 transition-all"
               autoFocus
+              spellCheck="false"
             />
             {query && (
               <button
                 onClick={() => { setQuery(''); setResults([]); clearSelection() }}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+                title="Limpiar búsqueda"
               >
-                <X size={12} />
+                <X size={13} />
               </button>
             )}
           </div>
 
           {searching && (
-            <div className="flex items-center gap-1.5 mt-2 text-[11px] text-slate-500">
-              <Loader2 size={11} className="animate-spin" />
-              Buscando…
+            <div className="flex items-center gap-2 mt-2.5 text-[11px] text-blue-400">
+              <Loader2 size={12} className="animate-spin" />
+              <span>Buscando predios…</span>
             </div>
           )}
           {searchError && (
-            <div className="flex items-center gap-1.5 mt-2 text-[11px] text-red-400">
-              <AlertCircle size={11} />
-              {searchError}
+            <div className="flex items-start gap-2 mt-2.5 text-[11px] text-amber-500">
+              <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+              <span>{searchError}</span>
+            </div>
+          )}
+          {query.length > 0 && query.length < 2 && !searching && (
+            <div className="mt-2.5 text-[11px] text-slate-600">
+              Escribe al menos 2 caracteres para buscar
             </div>
           )}
         </div>
@@ -229,102 +242,116 @@ export default function StreetPage() {
         {/* ── ficha del predio seleccionado ────────────────────────────── */}
         {selected ? (
           <div className="flex-1 overflow-y-auto">
-            <div className="px-4 py-3 border-b border-[var(--c-border-card)] flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Predio</span>
-              <button onClick={clearSelection} className="text-slate-500 hover:text-slate-300">
-                <ChevronLeft size={14} />
+            <div className="px-4 py-3 border-b border-[var(--c-border-card)] flex items-center justify-between bg-[var(--c-hover)]/30">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Predio Seleccionado</span>
+              <button
+                onClick={clearSelection}
+                className="text-slate-500 hover:text-slate-300 transition-colors p-1 hover:bg-[var(--c-hover)] rounded"
+                title="Volver"
+              >
+                <ChevronLeft size={15} />
               </button>
             </div>
 
-            <div className="p-4 space-y-4">
-              {/* encabezado */}
-              <div>
-                <div className="flex items-start gap-2 mb-1">
-                  <div className="mt-0.5 text-blue-400">
-                    {DESTINO_ICON[selected.codigo_destino_principal ?? ''] ?? <Landmark size={12} />}
+            <div className="p-4 space-y-3.5">
+              <div className="bg-[var(--c-hover)]/40 rounded-lg px-3 py-3 border border-[var(--c-border)]/30">
+                <div className="flex items-start gap-2.5">
+                  <div className="mt-0.5 text-blue-400 flex-shrink-0">
+                    {DESTINO_ICON[selected.codigo_destino_principal ?? ''] ?? <Landmark size={13} />}
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-200 leading-tight">
-                      {selected.direccion ?? 'Sin dirección'}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-50 leading-tight break-words">
+                      {selected.direccion ?? (
+                        <span className="text-slate-500 italic font-normal">Sin dirección registrada</span>
+                      )}
                     </p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {selected.comuna_nombre} · Rol {selected.sii_comuna_code}-{selected.rol}
+                    <p className="text-xs text-slate-400 mt-1.5 font-medium">
+                      {selected.comuna_nombre}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5 font-mono bg-black/20 px-2 py-1 rounded mt-1.5 inline-block">
+                      Rol {selected.sii_comuna_code}-{selected.rol}
                     </p>
                   </div>
                 </div>
 
                 {geocoding && (
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
-                    <Loader2 size={10} className="animate-spin" />
-                    Geolocalización vía OpenStreetMap…
+                  <div className="flex items-center gap-1.5 text-[10px] text-blue-400 mt-2.5 pt-2 border-t border-[var(--c-border)]/20">
+                    <Loader2 size={10} className="animate-spin flex-shrink-0" />
+                    <span>Localizando coordenadas exactas…</span>
                   </div>
                 )}
                 {pinGeojson && (
-                  <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 mt-1">
-                    <MapPin size={10} />
-                    Polígono exacto del predio disponible
+                  <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 mt-2.5 pt-2 border-t border-[var(--c-border)]/20">
+                    <MapPin size={10} className="flex-shrink-0" />
+                    <span>Polígono catastral exacto disponible</span>
                   </div>
                 )}
                 {!geocoding && !pinCoords && !selected.lat && (
-                  <div className="flex items-center gap-1.5 text-[10px] text-amber-600 mt-1">
-                    <AlertCircle size={10} />
-                    Sin coordenadas — pendiente de GeoPackages catastral.cl
+                  <div className="flex items-start gap-1.5 text-[10px] text-amber-500 mt-2.5 pt-2 border-t border-[var(--c-border)]/20">
+                    <AlertCircle size={10} className="flex-shrink-0 mt-0.5" />
+                    <span>Mostrando centro de {selected.comuna_nombre} — coordenadas exactas pendientes</span>
                   </div>
                 )}
               </div>
 
-              {/* destino */}
               {selected.codigo_destino_principal && (
-                <div className="rounded-lg bg-[var(--c-hover)] px-3 py-2 flex items-center gap-2">
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2.5 flex items-center gap-2">
                   <span className="text-blue-400">
-                    {DESTINO_ICON[selected.codigo_destino_principal] ?? <Landmark size={13} />}
+                    {DESTINO_ICON[selected.codigo_destino_principal] ?? <Landmark size={14} />}
                   </span>
-                  <div>
-                    <p className="text-[10px] text-slate-500">Destino</p>
-                    <p className="text-xs font-medium text-slate-200">
+                  <div className="flex-1">
+                    <p className="text-[9px] text-blue-400 font-semibold uppercase tracking-wide">Uso del Suelo</p>
+                    <p className="text-xs font-semibold text-slate-100 mt-0.5">
                       {DESTINO[selected.codigo_destino_principal] ?? selected.codigo_destino_principal}
                     </p>
                   </div>
                 </div>
               )}
 
-              {/* avalúos */}
-              <div className="grid grid-cols-2 gap-2">
-                {selected.avaluo_fiscal_total != null && (
-                  <div className="rounded-lg bg-[var(--c-hover)] px-3 py-2">
-                    <p className="text-[10px] text-slate-500 mb-0.5">Avalúo fiscal</p>
-                    <p className="text-xs font-semibold text-emerald-400">{formatCLP(selected.avaluo_fiscal_total)}</p>
+              <div className="space-y-2">
+                {(selected.avaluo_fiscal_total || selected.superficie_terreno_m2 || selected.avaluo_exento) && (
+                  <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2.5">
+                    <p className="text-[9px] text-emerald-400 font-semibold uppercase tracking-wide mb-1.5">Valuación</p>
+                    <div className="space-y-1">
+                      {selected.avaluo_fiscal_total != null && (
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[10px] text-slate-400">Avalúo fiscal:</span>
+                          <span className="text-xs font-semibold text-emerald-300">{formatCLP(selected.avaluo_fiscal_total)}</span>
+                        </div>
+                      )}
+                      {selected.avaluo_exento != null && selected.avaluo_exento > 0 && (
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[10px] text-slate-400">Avalúo exento:</span>
+                          <span className="text-xs font-semibold text-amber-300">{formatCLP(selected.avaluo_exento)}</span>
+                        </div>
+                      )}
+                      {selected.superficie_terreno_m2 != null && (
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[10px] text-slate-400">Superficie:</span>
+                          <span className="text-xs font-semibold text-slate-200">{formatNum(selected.superficie_terreno_m2)} m²</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
-                {selected.avaluo_exento != null && selected.avaluo_exento > 0 && (
-                  <div className="rounded-lg bg-[var(--c-hover)] px-3 py-2">
-                    <p className="text-[10px] text-slate-500 mb-0.5">Avalúo exento</p>
-                    <p className="text-xs font-semibold text-amber-400">{formatCLP(selected.avaluo_exento)}</p>
-                  </div>
-                )}
-                {selected.superficie_terreno_m2 != null && (
-                  <div className="rounded-lg bg-[var(--c-hover)] px-3 py-2">
-                    <p className="text-[10px] text-slate-500 mb-0.5">Superficie terreno</p>
-                    <p className="text-xs font-semibold text-slate-200">{formatNum(selected.superficie_terreno_m2)} m²</p>
-                  </div>
-                )}
+
                 {selected.contribucion_semestral != null && (
-                  <div className="rounded-lg bg-[var(--c-hover)] px-3 py-2">
-                    <p className="text-[10px] text-slate-500 mb-0.5">Contribución sem.</p>
-                    <p className="text-xs font-semibold text-slate-200">{formatCLP(selected.contribucion_semestral)}</p>
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2.5">
+                    <p className="text-[9px] text-amber-400 font-semibold uppercase tracking-wide mb-1.5">Contribución Predial</p>
+                    <p className="text-sm font-bold text-amber-200">{formatCLP(selected.contribucion_semestral)}</p>
+                    <p className="text-[9px] text-slate-500 mt-0.5">Semestral</p>
                   </div>
                 )}
               </div>
 
-              {/* enlace SII */}
               <a
                 href={`https://zeus.sii.cl/cvc_cgi/staj/PJBD2400`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-[11px] text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex items-center justify-center gap-2 text-[11px] font-semibold text-white bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 rounded-lg px-3 py-2.5 transition-all hover:shadow-lg"
               >
-                <ExternalLink size={11} />
-                Ver en SII
+                <ExternalLink size={13} />
+                Ver detalles en SII
               </a>
             </div>
           </div>
@@ -352,26 +379,43 @@ export default function StreetPage() {
               <button
                 key={r.id}
                 onClick={() => selectResult(r)}
-                className="w-full text-left px-4 py-3 border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] transition-colors group"
+                className="w-full text-left px-4 py-2.5 border-b border-[var(--c-border)]/40 hover:bg-[var(--c-hover)]/60 transition-colors group"
               >
-                <div className="flex items-start gap-2">
-                  <MapPin size={12} className="mt-0.5 text-blue-400 flex-shrink-0 group-hover:text-blue-300" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-slate-200 truncate">
-                      {r.direccion ?? `Rol ${r.rol}`}
-                    </p>
+                <div className="flex items-start gap-2.5">
+                  <div className="flex-shrink-0 mt-0.5">
+                    {DESTINO_ICON[r.codigo_destino_principal ?? ''] ? (
+                      <span className="text-blue-400 group-hover:text-blue-300 transition-colors">
+                        {DESTINO_ICON[r.codigo_destino_principal ?? '']}
+                      </span>
+                    ) : (
+                      <MapPin size={12} className="text-blue-400 group-hover:text-blue-300 transition-colors" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2 justify-between">
+                      <p className="text-xs font-semibold text-slate-100 truncate">
+                        {r.direccion ? (
+                          r.direccion.length > 35 ? r.direccion.slice(0, 35) + '…' : r.direccion
+                        ) : (
+                          <span className="text-slate-500 italic">Sin dirección</span>
+                        )}
+                      </p>
+                      <span className="text-[9px] text-slate-500 whitespace-nowrap flex-shrink-0 font-mono">
+                        {r.sii_comuna_code}-{r.rol}
+                      </span>
+                    </div>
                     <p className="text-[10px] text-slate-500 mt-0.5">
-                      {r.comuna_nombre} · {r.sii_comuna_code}-{r.rol}
+                      {r.comuna_nombre}
                       {r.codigo_destino_principal && (
-                        <span className="ml-1.5 text-slate-600">
-                          · {DESTINO[r.codigo_destino_principal] ?? r.codigo_destino_principal}
-                        </span>
+                        <> · {DESTINO[r.codigo_destino_principal] ?? r.codigo_destino_principal}</>
                       )}
                     </p>
-                    {r.avaluo_fiscal_total && (
-                      <p className="text-[10px] text-emerald-500 mt-0.5">
-                        {formatCLP(r.avaluo_fiscal_total)}
-                        {r.superficie_terreno_m2 && ` · ${formatNum(r.superficie_terreno_m2)} m²`}
+                    {(r.avaluo_fiscal_total || r.superficie_terreno_m2) && (
+                      <p className="text-[10px] text-emerald-500/80 mt-1">
+                        {r.avaluo_fiscal_total && formatCLP(r.avaluo_fiscal_total)}
+                        {r.superficie_terreno_m2 && (
+                          <> · {formatNum(r.superficie_terreno_m2)} m²</>
+                        )}
                       </p>
                     )}
                   </div>
@@ -418,25 +462,22 @@ export default function StreetPage() {
           } : null}
         />
 
-        {/* badge zoom — aparece cuando el zoom es bajo */}
         {mapZoomLevel < 15 && !selected && (
-          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1000] bg-black/70 backdrop-blur border border-white/10 text-white/80 text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-lg pointer-events-none">
-            <MapPin size={11} className="text-blue-400" />
-            Acerca el mapa para ver los predios
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1000] bg-gradient-to-r from-blue-600 to-blue-500 backdrop-blur border border-blue-400/40 text-white text-[11px] font-semibold px-4 py-2 rounded-full flex items-center gap-2 shadow-lg pointer-events-none animate-pulse">
+            <MapPin size={12} />
+            Acerca el mapa para ver los predios (zoom {mapZoomLevel})
           </div>
         )}
 
-        {/* badge sin datos de ubicación */}
         {!pinCoords && selected && !geocoding && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-amber-900/80 backdrop-blur border border-amber-700/50 text-amber-200 text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-lg">
-            <AlertCircle size={11} />
-            Sin coordenadas exactas — mostrando centro de {selected.comuna_nombre}
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[1000] bg-gradient-to-r from-amber-600 to-amber-500 backdrop-blur border border-amber-400/40 text-white text-[11px] font-semibold px-4 py-2 rounded-full flex items-center gap-2 shadow-lg">
+            <AlertCircle size={12} />
+            Mostrando centro de {selected.comuna_nombre} — coordenadas exactas pendientes
           </div>
         )}
 
-        {/* créditos */}
-        <div className="absolute bottom-6 right-4 z-[1000] text-[10px] text-white/50 bg-black/30 backdrop-blur px-2 py-1 rounded">
-          Datos: SII catastral.cl S2-2025 · Mapa: Esri / OSM
+        <div className="absolute bottom-6 right-4 z-[1000] text-[10px] text-white/60 bg-black/40 backdrop-blur px-2.5 py-1.5 rounded-lg border border-white/10">
+          Datos: SII catastral.cl · Mapa: Esri
         </div>
       </div>
     </div>

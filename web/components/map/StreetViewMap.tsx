@@ -28,7 +28,7 @@ function loadLeaflet() {
   return leafletPromise
 }
 
-const MIN_ZOOM_PARCELS = 15  // solo cargar predios con zoom ≥ 15
+const MIN_ZOOM_PARCELS = 15
 
 export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onParcelClick, onZoomChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,7 +46,6 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
   const onZoomChangeRef = useRef(onZoomChange)
   onZoomChangeRef.current = onZoomChange
 
-  // Cargar predios del viewport
   async function loadParcels() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const map = mapRef.current as any
@@ -63,27 +62,25 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
       const data = await res.json()
       if (!data.success || !data.features?.length) return
 
-      // Eliminar capa anterior
       if (parcelLayerRef.current) { parcelLayerRef.current.remove(); parcelLayerRef.current = null }
 
       const layer = L.geoJSON({ type: 'FeatureCollection', features: data.features }, {
         style: {
-          color: '#ffffff',
-          weight: 1.5,
+          color: '#fbbf24',
+          weight: 1,
           fillColor: '#3b82f6',
-          fillOpacity: 0.08,
-          opacity: 0.7,
+          fillOpacity: 0.06,
+          opacity: 0.9,
         },
         onEachFeature(feature: any, flayer: any) {
           flayer.on('click', () => {
             const p = feature.properties
             onParcelClickRef.current?.({ rol: p.rol, sii_comuna_code: p.sii_comuna_code, comuna_name: p.comuna_name })
-            // Resaltar predio clicado
-            flayer.setStyle({ fillOpacity: 0.35, color: '#3b82f6', weight: 2.5 })
-            setTimeout(() => flayer.setStyle({ fillOpacity: 0.08, color: '#ffffff', weight: 1.5 }), 2000)
+            flayer.setStyle({ fillOpacity: 0.3, color: '#3b82f6', weight: 2 })
+            setTimeout(() => flayer.setStyle({ fillOpacity: 0.06, color: '#fbbf24', weight: 1 }), 1500)
           })
-          flayer.on('mouseover', () => flayer.setStyle({ fillOpacity: 0.2, color: '#60a5fa', weight: 2 }))
-          flayer.on('mouseout',  () => flayer.setStyle({ fillOpacity: 0.08, color: '#ffffff', weight: 1.5 }))
+          flayer.on('mouseover', () => flayer.setStyle({ fillOpacity: 0.15, color: '#60a5fa', weight: 1.5 }))
+          flayer.on('mouseout',  () => flayer.setStyle({ fillOpacity: 0.06, color: '#fbbf24', weight: 1 }))
         },
       }).addTo(map)
 
@@ -105,18 +102,29 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
         zoom,
         zoomControl: true,
         attributionControl: true,
+        preferCanvas: true,
+        inertia: true,
+        inertiaDeceleration: 3500,
       })
 
-      // Satélite ESRI
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        { attribution: 'Esri, Maxar', maxZoom: 20 }
+        {
+          attribution: 'Esri, Maxar',
+          maxZoom: 21,
+          maxNativeZoom: 20,
+          className: 'satellite-layer'
+        }
       ).addTo(map)
 
-      // Etiquetas encima del satélite
       L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-        { maxZoom: 20, opacity: 0.85 }
+        {
+          maxZoom: 21,
+          maxNativeZoom: 20,
+          opacity: 0.9,
+          className: 'labels-layer'
+        }
       ).addTo(map)
 
       mapRef.current = map
