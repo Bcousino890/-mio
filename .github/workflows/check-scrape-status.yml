@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Probar la URL pública real (desde internet, no desde el VPS)
+        continue-on-error: true
         run: |
           echo "── GET https://crm.cremme.es/api/listings?limit=2 ──"
           curl -sS -i -m 20 "https://crm.cremme.es/api/listings?limit=2" | head -c 2000
