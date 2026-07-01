@@ -11,6 +11,7 @@ on:
     branches:
       - main
       - claude/tender-hypatia-av518f
+      - claude/crm-anuncios-investigation-mxbtsn
     paths:
       - 'scraper/.check-status'
 
