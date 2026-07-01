@@ -24,13 +24,6 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
 # standalone output incluye un server.js mínimo con sus propias dependencias.
-# OJO con el orden: este COPY --from=builder va ANTES del RUN apt-get de
-# abajo a propósito. Sin una dependencia real hacia el stage "builder",
-# BuildKit no sabe que este stage debe esperarlo y lo agenda en paralelo —
-# el `npm run build` de "builder" (pesado) corriendo a la vez que este
-# apt-get instala ~140 paquetes (geopandas + chromium) fue justo lo que
-# tumbó un deploy en el VPS (8GB RAM, compartido con Postgres y otros
-# contenedores) con exit code 137 (OOM). Copiar primero fuerza el orden.
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static     ./.next/static
 COPY --from=builder /app/public           ./public
@@ -50,17 +43,28 @@ COPY --from=builder /app/public           ./public
 # GeoAlchemy2 también vía pip: gdf.to_postgis() lo requiere para mapear la
 # columna geometry a un tipo PostGIS, y Debian bookworm no empaqueta
 # "python3-geoalchemy2" (solo está en sid/trixie, igual que pyarrow).
-#
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    unzip python3 python3-geopandas python3-pandas python3-pip \
+    python3-sqlalchemy libpq-dev \
+  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary GeoAlchemy2 \
+  && rm -rf /var/lib/apt/lists/*
+
 # chromium: necesario para la consulta on-demand del Certificado de Deuda TGR
 # (web/lib/tgr.ts, vía playwright-core) — corre en ESTE contenedor, distinto
 # del VPS host donde scraper/tgr/run-tgr.sh instala su propio Google Chrome
 # para el scraper masivo por lotes. El paquete apt de Debian (a diferencia
 # del de Ubuntu, que reenvía al snap confinado por AppArmor) es un binario
 # normal, sin restricciones de sandbox.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    unzip python3 python3-geopandas python3-pandas python3-pip \
-    python3-sqlalchemy libpq-dev chromium \
-  && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary GeoAlchemy2 \
+#
+# En un RUN aparte, NO combinado con el apt-get de geopandas de arriba: dos
+# deploys seguidos murieron con exit 137 (OOM) instalando ambos juntos en una
+# sola transacción — reordenar los stages para que no corrieran en paralelo
+# con `npm run build` no lo arregló, así que el problema real es el pico de
+# memoria del propio `apt-get` procesando triggers (ca-certificates,
+# fontconfig, ldconfig, mime-info) sobre las ~180 paquetes de golpe. Partirlo
+# en dos transacciones más chicas reduce ese pico en el VPS de 8GB compartido
+# con Postgres y otros contenedores.
+RUN apt-get update && apt-get install -y --no-install-recommends chromium \
   && rm -rf /var/lib/apt/lists/*
 
 ENV CHROME_BINARY=/usr/bin/chromium
