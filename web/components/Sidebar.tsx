@@ -21,6 +21,7 @@ import {
   Eye,
   UserSearch,
   Receipt,
+  Contact,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -124,6 +125,13 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'Dueños',
       icon: UserSearch,
       description: 'Buscar propietario · RUT · teléfonos',
+    },
+    {
+      href: '/dealer',
+      label: 'Dealer',
+      icon: Contact,
+      description: 'DealerNet · credenciales, RUT y Buscador Múltiple',
+      badge: 'NEW',
     },
     {
       href: '/chile/tgr-dueno',

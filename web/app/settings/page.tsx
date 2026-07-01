@@ -3,7 +3,6 @@ import { Settings } from 'lucide-react'
 import IngestPanel from '@/components/admin/IngestPanel'
 import GeocodeRolesPanel from '@/components/admin/GeocodeRolesPanel'
 import ProxyConfigPanel from '@/components/admin/ProxyConfigPanel'
-import DealerNetPanel from '@/components/admin/DealerNetPanel'
 
 export default function SettingsPage() {
   return (
@@ -11,7 +10,6 @@ export default function SettingsPage() {
       <div className="space-y-4">
         <IngestPanel />
         <ProxyConfigPanel />
-        <DealerNetPanel />
         <GeocodeRolesPanel />
 
         <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">
