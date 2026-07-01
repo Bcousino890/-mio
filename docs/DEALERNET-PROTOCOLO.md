@@ -102,3 +102,11 @@ teléfonos/emails/direcciones confirmadas.
 Implementado en `web/lib/dealernet.ts` como `queryDealernetBuscadorMultiple`
 y expuesto en `web/app/api/chile/dealernet-buscar/route.ts` +
 `web/components/chile/DuenoLookup.tsx`.
+
+## 3. Pestaña "Dealer" en la app
+
+Toda la funcionalidad de DealerNet (config de credenciales + búsqueda por
+RUT + Buscador Múltiple por dirección/rol) está consolidada en una sola
+pantalla: `/dealer` (`web/app/dealer/page.tsx`), con item propio en el
+sidebar. Antes las credenciales (`DealerNetPanel`) vivían sueltas en
+`/settings` — se movieron aquí para no duplicar la config en dos lugares.
