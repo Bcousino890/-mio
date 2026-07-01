@@ -23,6 +23,18 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
+# standalone output incluye un server.js mínimo con sus propias dependencias.
+# OJO con el orden: este COPY --from=builder va ANTES del RUN apt-get de
+# abajo a propósito. Sin una dependencia real hacia el stage "builder",
+# BuildKit no sabe que este stage debe esperarlo y lo agenda en paralelo —
+# el `npm run build` de "builder" (pesado) corriendo a la vez que este
+# apt-get instala ~140 paquetes (geopandas + chromium) fue justo lo que
+# tumbó un deploy en el VPS (8GB RAM, compartido con Postgres y otros
+# contenedores) con exit code 137 (OOM). Copiar primero fuerza el orden.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static     ./.next/static
+COPY --from=builder /app/public           ./public
+
 # unzip: la subida SII y la ingesta de catastral.cl extraen .zip a disco vía
 # CLI en vez de cargarlos completos en memoria con una librería JS (soporta
 # archivos grandes). python3-geopandas/pandas: ingesta de GeoParquet con
@@ -38,6 +50,7 @@ ENV PORT=3000
 # GeoAlchemy2 también vía pip: gdf.to_postgis() lo requiere para mapear la
 # columna geometry a un tipo PostGIS, y Debian bookworm no empaqueta
 # "python3-geoalchemy2" (solo está en sid/trixie, igual que pyarrow).
+#
 # chromium: necesario para la consulta on-demand del Certificado de Deuda TGR
 # (web/lib/tgr.ts, vía playwright-core) — corre en ESTE contenedor, distinto
 # del VPS host donde scraper/tgr/run-tgr.sh instala su propio Google Chrome
@@ -51,11 +64,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 ENV CHROME_BINARY=/usr/bin/chromium
-
-# standalone output incluye un server.js mínimo con sus propias dependencias
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static     ./.next/static
-COPY --from=builder /app/public           ./public
 
 EXPOSE 3000
 CMD ["node", "server.js"]
