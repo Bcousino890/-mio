@@ -1,5 +1,6 @@
 'use client'
 
+import 'leaflet/dist/leaflet.css'
 import { useEffect, useRef } from 'react'
 
 interface Props {
@@ -8,97 +9,110 @@ interface Props {
   zoom?: number
 }
 
-declare global {
-  interface Window {
-    L: any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let leafletPromise: Promise<any> | null = null
+function loadLeaflet() {
+  if (!leafletPromise) {
+    leafletPromise = import('leaflet').then((L) => { (window as any).L = L; return L })
   }
+  return leafletPromise
 }
+
+const BLUE_ICON_URL =
+  'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4IiBmaWxsPSIjMzM5OWYzIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg=='
 
 export default function GoogleMapsView({ selectedRol, center, zoom = 15 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markerRef = useRef<any>(null)
 
   const lat = selectedRol?.lat ?? center?.lat ?? -33.4095
   const lng = selectedRol?.lng ?? center?.lng ?? -70.5677
 
+  // Init — se monta una sola vez. Antes esto inyectaba <script src="unpkg...">
+  // en cada montaje (dependiente de red externa, sin control de caché del
+  // bundler, y sin fallback si unpkg.com estaba lento/caído: el mapa se
+  // quedaba en blanco indefinidamente). Usar el paquete 'leaflet' ya
+  // bundleado con la app carga siempre desde el propio build, tan rápido
+  // como cualquier otro componente de la página.
   useEffect(() => {
-    if (!containerRef.current) return
+    if (!containerRef.current || mapRef.current) return
+    let cancelled = false
 
-    // Load Leaflet CSS/JS
-    const loadMap = async () => {
-      if (!window.L) {
-        const link = document.createElement('link')
-        link.rel = 'stylesheet'
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-        document.head.appendChild(link)
+    loadLeaflet().then((L) => {
+      if (cancelled || !containerRef.current || mapRef.current) return
 
-        const script = document.createElement('script')
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
-        script.onload = () => {
-          initMap()
-        }
-        document.body.appendChild(script)
-      } else {
-        initMap()
-      }
-    }
+      const map = L.map(containerRef.current, {
+        center: [lat, lng],
+        zoom,
+        zoomControl: true,
+        attributionControl: true,
+      })
 
-    const initMap = () => {
-      if (mapRef.current) return
+      // Satélite (Esri World Imagery) + capa de límites/nombres encima, mismo
+      // esquema que el Visor Catastral (/chile/street) — antes esta ficha
+      // solo tenía calles OSM, sin opción de ver la imagen satelital.
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { attribution: 'Esri, Maxar', maxZoom: 21, maxNativeZoom: 20 }
+      ).addTo(map)
 
-      const L = window.L
-      const map = L.map(containerRef.current).setView([lat, lng], zoom)
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 21, maxNativeZoom: 20, opacity: 0.9 }
+      ).addTo(map)
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map)
-
-      const blueIcon = L.icon({
-        iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4IiBmaWxsPSIjMzM5OWYzIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==',
+      const icon = L.icon({
+        iconUrl: BLUE_ICON_URL,
         iconSize: [24, 24],
         iconAnchor: [12, 12],
         popupAnchor: [0, -12],
       })
-
-      const marker = L.marker([lat, lng], { icon: blueIcon })
+      const marker = L.marker([lat, lng], { icon })
         .addTo(map)
         .bindPopup(`<div style="font-size:12px;color:#333"><strong>${selectedRol?.direccion || 'Ubicación'}</strong><br/>${lat.toFixed(6)}, ${lng.toFixed(6)}</div>`)
         .openPopup()
 
       markerRef.current = marker
       mapRef.current = map
-    }
 
-    loadMap()
+      // El contenedor puede montarse con tamaño 0 si el panel padre todavía
+      // está animando su transición de ancho/alto — sin este invalidateSize
+      // el mapa queda con tiles a medio cargar o en gris hasta el próximo
+      // resize manual de la ventana.
+      requestAnimationFrame(() => map.invalidateSize())
+    })
 
     return () => {
-      // Don't destroy map on unmount — keep it persistent
+      cancelled = true
+      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null }
     }
-  }, [lat, lng, selectedRol?.direccion, zoom])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // Update marker position when selectedRol changes
+  // Actualiza posición del marcador y centro cuando cambia el rol seleccionado
   useEffect(() => {
-    if (mapRef.current && markerRef.current) {
-      const L = window.L
-      mapRef.current.removeLayer(markerRef.current)
+    const map = mapRef.current
+    const L = (window as any).L
+    if (!map || !L) return
 
-      const blueIcon = L.icon({
-        iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI4IiBmaWxsPSIjMzM5OWYzIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
-        popupAnchor: [0, -12],
-      })
+    if (markerRef.current) { map.removeLayer(markerRef.current); markerRef.current = null }
 
-      const marker = L.marker([lat, lng], { icon: blueIcon })
-        .addTo(mapRef.current)
-        .bindPopup(`<div style="font-size:12px;color:#333"><strong>${selectedRol?.direccion || 'Ubicación'}</strong><br/>${lat.toFixed(6)}, ${lng.toFixed(6)}</div>`)
-        .openPopup()
+    const icon = L.icon({
+      iconUrl: BLUE_ICON_URL,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+      popupAnchor: [0, -12],
+    })
+    const marker = L.marker([lat, lng], { icon })
+      .addTo(map)
+      .bindPopup(`<div style="font-size:12px;color:#333"><strong>${selectedRol?.direccion || 'Ubicación'}</strong><br/>${lat.toFixed(6)}, ${lng.toFixed(6)}</div>`)
+      .openPopup()
 
-      markerRef.current = marker
-      mapRef.current.setView([lat, lng], zoom, { animate: true })
-    }
+    markerRef.current = marker
+    map.setView([lat, lng], zoom, { animate: true })
   }, [lat, lng, selectedRol?.direccion, zoom])
 
   return <div ref={containerRef} className="w-full h-full" />

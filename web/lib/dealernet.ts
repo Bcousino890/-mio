@@ -48,6 +48,29 @@ export const BUSCADOR_MULTIPLE_TIPOS = [
 
 export type BuscadorMultipleTipo = (typeof BUSCADOR_MULTIPLE_TIPOS)[number]
 
+// Códigos de retorno documentados en DEALERNET-PROTOCOLO.md. DealerNet
+// siempre responde HTTP 200 con esta info dentro del XML, incluso cuando la
+// consulta falló (credenciales, cuenta, formato) — si no se revisa, el
+// llamador ve "0 candidatos"/"0 teléfonos" indistinguible de una búsqueda
+// real sin resultados, que es justo el bug reportado ("buscar dueño no
+// funciona" sin ningún mensaje de por qué).
+export const DEALERNET_RETCODE_MESSAGES: Record<number, string> = {
+  0: 'Consulta exitosa',
+  1: 'Cuenta de usuario no definida en DealerNet',
+  2: 'Cuenta de usuario bloqueada en DealerNet',
+  3: 'Cuenta de usuario no habilitada para este servicio (producto no contratado)',
+  4: 'Clave de DealerNet inválida',
+  5: 'Tipo de consulta inválido',
+  6: 'RUT inválido',
+  99: 'Error interno de DealerNet',
+  999: 'Falta un parámetro obligatorio en la consulta',
+}
+
+export function dealernetRetcodeMessage(retcode: number | null): string | null {
+  if (retcode == null || retcode === 0) return null
+  return DEALERNET_RETCODE_MESSAGES[retcode] ?? `DealerNet devolvió retcode ${retcode}`
+}
+
 export const DEFAULT_DEALERNET_PRODUCTS: string[] = [
   DEALERNET_PRODUCTS.CONTACTABILIDAD,
   DEALERNET_PRODUCTS.VERIFICACION_MULTIPLE,
@@ -416,7 +439,14 @@ export async function queryDealernetBuscadorMultiple(
   if (!user || !pass) {
     throw new Error('DEALERNET_USER / DEALERNET_PASSWORD no configurados en el entorno')
   }
-  const body = buildBuscadorMultipleXml(tipbusq, args, user, pass)
+  // Para tipbusq="rol"/"direccion" el protocolo espera "valor, comuna" — si el
+  // usuario pega texto con espacios dobles (ej. tras una coma) o espacios al
+  // borde, el matching fuzzy de DealerNet para comuna puede no encontrar
+  // coincidencia y devolver 0 candidatos sin que sea un error real de
+  // DealerNet. Normalizamos espacios para no depender de que el usuario
+  // tipee perfecto.
+  const normalizedArgs = args.trim().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ')
+  const body = buildBuscadorMultipleXml(tipbusq, normalizedArgs, user, pass)
   const res = await fetch(DEALERNET_WSDL_URL, {
     method: 'POST',
     headers: {

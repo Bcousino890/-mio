@@ -38,11 +38,19 @@ ENV PORT=3000
 # GeoAlchemy2 también vía pip: gdf.to_postgis() lo requiere para mapear la
 # columna geometry a un tipo PostGIS, y Debian bookworm no empaqueta
 # "python3-geoalchemy2" (solo está en sid/trixie, igual que pyarrow).
+# chromium: necesario para la consulta on-demand del Certificado de Deuda TGR
+# (web/lib/tgr.ts, vía playwright-core) — corre en ESTE contenedor, distinto
+# del VPS host donde scraper/tgr/run-tgr.sh instala su propio Google Chrome
+# para el scraper masivo por lotes. El paquete apt de Debian (a diferencia
+# del de Ubuntu, que reenvía al snap confinado por AppArmor) es un binario
+# normal, sin restricciones de sandbox.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip python3 python3-geopandas python3-pandas python3-pip \
-    python3-sqlalchemy libpq-dev \
+    python3-sqlalchemy libpq-dev chromium \
   && pip3 install --no-cache-dir --break-system-packages pyarrow psycopg2-binary GeoAlchemy2 \
   && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_BINARY=/usr/bin/chromium
 
 # standalone output incluye un server.js mínimo con sus propias dependencias
 COPY --from=builder /app/.next/standalone ./
