@@ -6,6 +6,7 @@ import {
   queryDealernet,
   DEFAULT_DEALERNET_PRODUCTS,
   DEALERNET_PRODUCTS,
+  dealernetRetcodeMessage,
   type DealernetPhone,
 } from '@/lib/dealernet'
 
@@ -164,6 +165,19 @@ export async function POST(request: NextRequest) {
     }
 
     await client.query('COMMIT')
+
+    // DealerNet responde HTTP 200 aun cuando la consulta falló (cuenta no
+    // habilitada, clave inválida, etc.) — igual que en dealernet-buscar. Se
+    // guarda el retcode/retmsg en BD para auditoría, pero se reporta el error
+    // real al cliente en vez de un "0 teléfonos" silencioso.
+    const retcodeError = dealernetRetcodeMessage(lookup.retcode)
+    if (retcodeError) {
+      return NextResponse.json({
+        success: false,
+        error: `DealerNet: ${retcodeError}${lookup.retmsg ? ` (${lookup.retmsg})` : ''}`,
+        retcode: lookup.retcode,
+      }, { status: 502 })
+    }
 
     return NextResponse.json({
       success: true,

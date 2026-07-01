@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   queryDealernetBuscadorMultiple,
   BUSCADOR_MULTIPLE_TIPOS,
+  dealernetRetcodeMessage,
   type BuscadorMultipleTipo,
 } from '@/lib/dealernet'
 
@@ -30,6 +31,19 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await queryDealernetBuscadorMultiple(tipbusq as BuscadorMultipleTipo, args)
+
+    // DealerNet responde HTTP 200 aun cuando la consulta falló (credenciales,
+    // cuenta no habilitada para el producto 3460, parámetro inválido, etc.) —
+    // sin este chequeo, cualquier error se veía en la UI como "Sin candidatos
+    // para esta búsqueda", indistinguible de una búsqueda real sin resultados.
+    const retcodeError = dealernetRetcodeMessage(result.retcode)
+    if (retcodeError) {
+      return NextResponse.json(
+        { success: false, error: `DealerNet: ${retcodeError}${result.retmsg ? ` (${result.retmsg})` : ''}`, retcode: result.retcode },
+        { status: 502 }
+      )
+    }
+
     return NextResponse.json({
       success: true,
       retcode: result.retcode,

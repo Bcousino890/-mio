@@ -7,7 +7,7 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
-  Phone, MessageCircle
+  Phone, MessageCircle, Landmark
 } from 'lucide-react'
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
@@ -151,6 +151,13 @@ export default function CatastroPage() {
   const [dealernetRutInput, setDealernetRutInput] = useState('')
   // Default: solo directorio teléfonos (más barato); usuario puede añadir más
   const [dealernetProducts, setDealernetProducts] = useState<string[]>(['3410'])
+  // TGR — certificado de deuda + nombre del dueño, consulta automática on-demand
+  const [tgrCert, setTgrCert] = useState<any>(null)
+  const [tgrLoading, setTgrLoading] = useState(false)
+  const [tgrError, setTgrError] = useState<string | null>(null)
+  const [tgrCandidatos, setTgrCandidatos] = useState<any[] | null>(null)
+  const [tgrCandidatosLoading, setTgrCandidatosLoading] = useState(false)
+  const [tgrCandidatosError, setTgrCandidatosError] = useState<string | null>(null)
   // Building units state
   const [buildingUnits, setBuildingUnits] = useState<any[]>([])
   const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
@@ -268,6 +275,77 @@ export default function CatastroPage() {
       })
       .catch(() => {})
   }, [selectedRol, zone.siiCode])
+
+  // Certificado TGR ya guardado en BD para este rol (bulk scraper o consulta
+  // on-demand previa) — se muestra de inmediato, sin golpear tesoreria.cl.
+  useEffect(() => {
+    setTgrCert(null)
+    setTgrError(null)
+    setTgrCandidatos(null)
+    setTgrCandidatosError(null)
+    if (!selectedRol || !zone.siiCode) return
+    fetch(`/api/chile/tgr-lookup?rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
+      .then(r => r.json())
+      .then(d => { if (d.success && d.certificado) setTgrCert(d.certificado) })
+      .catch(() => {})
+  }, [selectedRol, zone.siiCode])
+
+  // Dispara la consulta automática al formulario de TGR (Certificado de Deuda)
+  // para el rol seleccionado — reemplaza el flujo manual de abrir tesoreria.cl
+  // y tipear el rol a mano. Puede tardar ~10-25s porque corre un navegador
+  // headless de verdad contra el sitio de Tesorería.
+  const consultarTgrAhora = useCallback((force = false) => {
+    if (!selectedRol || !zone.siiCode) return
+    setTgrLoading(true)
+    setTgrError(null)
+    fetch('/api/chile/tgr-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rol: selectedRol.rol, comuna: zone.comuna, sii_comuna_code: zone.siiCode, force }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setTgrCert(d.certificado)
+        } else {
+          setTgrError(d.error ?? 'No se pudo consultar TGR')
+          if (d.certificado) setTgrCert(d.certificado)
+        }
+      })
+      .catch(() => setTgrError('Error de red al consultar TGR'))
+      .finally(() => setTgrLoading(false))
+  }, [selectedRol, zone.siiCode, zone.comuna])
+
+  // Con el nombre que entregó TGR, busca candidatos a RUT en DealerNet
+  // (Buscador Múltiple, tipbusq=nombre) para completar automáticamente el
+  // campo de RUT y poder pedir teléfono/contactabilidad sin escribir nada.
+  const buscarContactoPorNombreTgr = useCallback(() => {
+    const nombre = tgrCert?.nombre?.trim()
+    if (!nombre) return
+    setTgrCandidatosLoading(true)
+    setTgrCandidatosError(null)
+    setTgrCandidatos(null)
+    fetch('/api/chile/dealernet-buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipbusq: 'nombre', args: nombre }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.success) {
+          setTgrCandidatosError(d.error ?? 'Error al buscar candidatos')
+          return
+        }
+        setTgrCandidatos(d.candidatos ?? [])
+      })
+      .catch(() => setTgrCandidatosError('Error de red al buscar candidatos'))
+      .finally(() => setTgrCandidatosLoading(false))
+  }, [tgrCert])
+
+  const usarCandidatoTgr = useCallback((c: any) => {
+    if (c.rut == null || !c.dv) return
+    setDealernetRutInput(`${c.rut}-${c.dv}`)
+  }, [])
 
   const searchDealernet = useCallback((rutOverride?: string) => {
     if (!selectedRol || !zone.siiCode) return
@@ -813,14 +891,96 @@ export default function CatastroPage() {
                           </div>
                         )}
 
-                        <a
-                          href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-blue-400 hover:text-blue-300"
-                        >
-                          Consultar en TGR (Rol {rolDetail.rol?.rol ?? '—'}) <ExternalLink size={12} />
-                        </a>
+                        <div className="pt-2 border-t border-[var(--c-border-card)]/40 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-slate-600">Certificado TGR (Rol {rolDetail.rol?.rol ?? '—'})</span>
+                            <div className="flex items-center gap-1.5">
+                              <a
+                                href="https://www.tgr.cl/tramites-tgr/certificado-de-deuda-de-contribuciones/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] text-slate-600 hover:text-slate-400 inline-flex items-center gap-0.5"
+                                title="Abrir el sitio de TGR manualmente"
+                              >
+                                manual <ExternalLink size={9} />
+                              </a>
+                              <button
+                                onClick={() => consultarTgrAhora(!!tgrCert)}
+                                disabled={tgrLoading}
+                                className="flex items-center gap-1.5 text-[11px] font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white px-2.5 py-1 rounded-lg transition-colors"
+                              >
+                                {tgrLoading ? <RefreshCw size={11} className="animate-spin" /> : <Landmark size={11} />}
+                                {tgrLoading ? 'Consultando…' : tgrCert ? 'Reconsultar' : 'Consultar en TGR (automático)'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {tgrError && (
+                            <p className="text-[11px] text-red-400">{tgrError}</p>
+                          )}
+
+                          {tgrCert && (
+                            <div className="rounded-lg bg-slate-900/40 border border-slate-800/50 px-2.5 py-2 space-y-1.5">
+                              {tgrCert.nombre && (
+                                <div>
+                                  <p className="text-[10px] text-slate-600">Nombre (TGR)</p>
+                                  <p className="text-[11px] text-slate-200 font-medium">{tgrCert.nombre}</p>
+                                </div>
+                              )}
+                              <p className="text-[10px] text-slate-500">
+                                {tgrCert.tiene_deuda
+                                  ? `Con deuda${tgrCert.total_deuda_no_vencida ? ` · ${fmtCLP(Number(tgrCert.total_deuda_no_vencida))}` : ''}`
+                                  : tgrCert.estado === 'sin_deuda' ? 'Sin deuda registrada' : `Estado: ${tgrCert.estado}`}
+                              </p>
+
+                              {tgrCert.nombre && (
+                                <button
+                                  onClick={buscarContactoPorNombreTgr}
+                                  disabled={tgrCandidatosLoading}
+                                  className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 disabled:opacity-40"
+                                >
+                                  {tgrCandidatosLoading ? <RefreshCw size={11} className="animate-spin" /> : <Search size={11} />}
+                                  Buscar RUT / contacto con este nombre
+                                </button>
+                              )}
+
+                              {tgrCandidatosError && (
+                                <p className="text-[11px] text-red-400">{tgrCandidatosError}</p>
+                              )}
+
+                              {tgrCandidatos && (
+                                tgrCandidatos.length === 0 ? (
+                                  <p className="text-[10px] text-slate-600">Sin candidatos para este nombre en DealerNet</p>
+                                ) : (
+                                  <div className="space-y-1">
+                                    {tgrCandidatos.map((c, i) => (
+                                      <button
+                                        key={i}
+                                        onClick={() => usarCandidatoTgr(c)}
+                                        disabled={c.rut == null || !c.dv}
+                                        className="w-full flex items-center gap-2 text-left rounded-lg border border-slate-800/50 bg-slate-900/30 hover:border-emerald-700/60 hover:bg-emerald-950/20 px-2 py-1.5 transition-colors disabled:opacity-40"
+                                      >
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-[11px] text-slate-200 font-medium truncate">
+                                            {c.razonSocial || `${c.nombres ?? ''} ${c.apellidos ?? ''}`.trim() || 'Sin nombre'}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500">
+                                            {c.rut != null ? `RUT ${c.rut.toLocaleString('es-CL')}-${c.dv}` : 'Sin RUT'}
+                                          </p>
+                                        </div>
+                                        {c.probabilidad && (
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 flex-shrink-0">
+                                            {c.probabilidad}{c.similitud != null ? ` ${c.similitud}%` : ''}
+                                          </span>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
