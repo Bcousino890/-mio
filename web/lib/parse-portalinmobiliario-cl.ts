@@ -215,18 +215,36 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
     const headerAddress = comps.header?.link_label?.label?.text?.replace(/^,\s*/, '').trim()
     const address = itemAddress || headerAddress || null
 
-    const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
-    const photos: string[] = []
-    const seenPhotos = new Set<string>()
-    const addPhoto = (url?: string | null) => { if (url && !seenPhotos.has(url)) { seenPhotos.add(url); photos.push(url) } }
-    if (gallery?.primary?.src) addPhoto(gallery.primary.src)
-    for (const p of gallery?.secondary ?? []) addPhoto(p?.src)
-    if (photos.length === 0) {
-      for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|webp))"/g)) addPhoto(m[1])
-      if (photos.length === 0) {
-        for (const m of html.matchAll(/(https?:\/\/http2\.mlstatic\.com\/[^\s"']+\.(?:jpg|webp))/g)) addPhoto(m[1])
+    // TODAS las fotos del anuncio, no solo el mosaico de portada:
+    // gallery_mosaic trae ~5 imágenes; el carrusel completo (20-40 fotos)
+    // aparece repetido por el blob/HTML en variantes de tamaño de la misma
+    // imagen (D_NQ_NP_2X_<id>-O.webp, D_NQ_NP_<id>-F.webp, ...). Se dedupe
+    // por el <id> y se prefiere la variante más grande.
+    const photoById = new Map<string, { url: string; rank: number }>()
+    const photoOrder: string[] = []
+    const addPhoto = (url?: string | null) => {
+      if (!url) return
+      // id estable de la imagen: lo que queda al quitar prefijos de tamaño y
+      // el sufijo de variante (-O/-F/-V/-R...) — ej. "601011-MLC69497908626_052023"
+      const m = url.match(/\/D_(?:NQ_NP_)?(?:2X_)?([\w.-]+?)(?:-[A-Z])?\.(?:jpg|jpeg|webp)/i)
+      const id = m ? m[1] : url
+      // logos/avatares de vendedor no siguen el patrón D_ — fuera
+      if (!m && !/mlstatic\.com\/D_/i.test(url)) return
+      const rank = (url.includes('2X_') ? 2 : 0) + (/-[FO]\.(?:jpg|jpeg|webp)/i.test(url) ? 1 : 0)
+      const existing = photoById.get(id)
+      if (!existing) {
+        photoById.set(id, { url, rank })
+        photoOrder.push(id)
+      } else if (rank > existing.rank) {
+        photoById.set(id, { url, rank })
       }
     }
+    const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
+    if (gallery?.primary?.src) addPhoto(gallery.primary.src)
+    for (const p of gallery?.secondary ?? []) addPhoto(p?.src)
+    for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp))"/gi)) addPhoto(m[1])
+    for (const m of html.matchAll(/(https?:\/\/http2\.mlstatic\.com\/[^\s"'\\)]+\.(?:jpg|jpeg|webp))/gi)) addPhoto(m[1])
+    const photos: string[] = photoOrder.map((id) => photoById.get(id)!.url)
 
     const advertiser_name = sellerProfile?.seller_name?.title?.text ?? null
     const sellerType = eventData?.seller_type ?? null
@@ -255,7 +273,7 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       latitude, longitude,
       address, comuna,
       advertiser_name, advertiser_type,
-      photos: photos.slice(0, 30),
+      photos: photos.slice(0, 40),
       description,
       ...specs,
     }

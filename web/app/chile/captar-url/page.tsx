@@ -492,7 +492,7 @@ export default function CaptarUrlPage() {
 
           {/* ── Ficha del anuncio ── */}
           <div className="rounded-2xl overflow-hidden ring-1 ring-white/5 bg-[var(--c-card)]">
-            <div className="relative h-64 bg-[var(--c-card)] overflow-hidden">
+            <div className="relative h-[480px] bg-[var(--c-card)] overflow-hidden">
               {captacion.latitude && captacion.longitude ? (
                 <ListingMatchMap
                   listingLat={Number(captacion.latitude)}
