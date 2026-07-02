@@ -47,17 +47,22 @@ export function visualVerificationAvailable(): boolean {
 /**
  * Puntúa visualmente los topN candidatos contra las fotos del anuncio.
  * Devuelve un veredicto por rol; los roles sin coordenadas se omiten.
+ * @param selectedPhotoUrls Fotos seleccionadas por el usuario (opcionalmente). Si se proporciona, se usan en lugar de las primeras 4.
  */
 export async function verifyCandidatesVisually(
   photos: string[],
   candidates: ScoredCandidate[],
   context: { title?: string | null; description?: string | null; has_pool?: boolean; property_type?: string | null },
   topN = 4,
+  selectedPhotoUrls?: string[],
 ): Promise<VisualVerdict[]> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) throw new Error('OPENROUTER_API_KEY no configurada — la verificación visual requiere IA')
 
-  const usablePhotos = photos.slice(0, 4)
+  // Si hay fotos seleccionadas por el usuario, úsalas; sino, fallback a 4 primeras
+  const usablePhotos = selectedPhotoUrls && selectedPhotoUrls.length > 0
+    ? selectedPhotoUrls.slice(0, 25)
+    : photos.slice(0, 4)
   if (usablePhotos.length === 0) throw new Error('El anuncio no tiene fotos para comparar')
 
   const top = candidates.filter((c) => c.lat != null && c.lng != null).slice(0, topN)
