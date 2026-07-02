@@ -29,7 +29,10 @@ BEGIN
   SELECT COUNT(*) INTO v_total FROM sii_roles_cl WHERE sii_comuna_code IN ('13101', '14201', '15108', '15160', '15161');
   SELECT COUNT(*) INTO v_with_coords FROM sii_roles_cl WHERE sii_comuna_code IN ('13101', '14201', '15108', '15160', '15161') AND lat IS NOT NULL AND lng IS NOT NULL;
 
-  RAISE NOTICE 'Coordinate population complete: % of % roles have coords (%.1%)', v_with_coords, v_total, ROUND(100.0 * v_with_coords / NULLIF(v_total, 0), 1);
+  -- Ojo con el formato de RAISE: cada % suelto es un placeholder y %% es un
+  -- % literal — el "(%.1%)" original tenía 4 placeholders para 3 argumentos y
+  -- rompía la migración entera (el script de deploy antiguo tragaba el error).
+  RAISE NOTICE 'Coordinate population complete: % of % roles have coords (% %%)', v_with_coords, v_total, ROUND(100.0 * v_with_coords / NULLIF(v_total, 0), 1);
 END $$;
 
 COMMIT;

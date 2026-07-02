@@ -2,16 +2,22 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # casafari-mio · post-deploy.sh — aplicar migraciones SQL tras deploy
 # ─────────────────────────────────────────────────────────────────────────────
-# Ejecuta TODAS las migraciones en /db/migrations/ en orden (0001, 0002, ...).
-# Se llama automáticamente tras deploy.sh.
+# Aplica las migraciones de /db/migrations/ que aún no estén registradas en la
+# tabla schema_migrations, en orden por nombre de archivo, UNA sola vez cada
+# una y con ON_ERROR_STOP.
 #
-# Corre los psql DENTRO del contenedor de Postgres (docker compose exec) en vez
-# de contra el host: el VPS no tiene el cliente `psql` instalado, y el puerto
-# publicado en el host (5433, ver docker-compose.yml) no coincide con el que
-# documenta .env.example (5432) — ambos motivos hacían que esto fallara en
-# silencio en TODOS los deploys hasta ahora (el error quedaba enmascarado por
-# `|| true` en deploy.sh). Dentro del contenedor no hay que lidiar con ninguno
-# de los dos: se habla con Postgres por su puerto interno de siempre.
+# Por qué el tracking con schema_migrations (y no re-ejecutar todo):
+#   - La versión anterior corría CADA archivo DOS veces (una piped a
+#     `grep "already exists"` y, si no matcheaba, otra "de verdad") — las
+#     migraciones de datos se ejecutaban doble en cada deploy.
+#   - Sin ON_ERROR_STOP, un error a mitad de archivo dejaba migraciones
+#     aplicadas a medias sin que el deploy fallara.
+#   La primera pasada tras este cambio re-aplica los archivos existentes una
+#   última vez (son idempotentes: CREATE IF NOT EXISTS / ON CONFLICT) y los
+#   registra; desde ahí, cada deploy solo ejecuta lo nuevo.
+#
+# Corre los psql DENTRO del contenedor de Postgres (docker compose exec): el
+# VPS no tiene cliente psql y el puerto host (5433) no es el estándar.
 #
 # Uso:
 #   bash infra/post-deploy.sh
@@ -35,7 +41,7 @@ if [ -z "${POSTGRES_PASSWORD:-}" ]; then
   exit 1
 fi
 
-PSQL="$COMPOSE exec -T -e PGPASSWORD=$POSTGRES_PASSWORD postgres psql -U casafari -d casafari"
+PSQL="$COMPOSE exec -T -e PGPASSWORD=$POSTGRES_PASSWORD postgres psql -U casafari -d casafari -v ON_ERROR_STOP=1 -q"
 
 echo "▶ Esperando a que PostgreSQL esté listo..."
 for i in {1..30}; do
@@ -49,28 +55,37 @@ for i in {1..30}; do
   sleep 1
 done
 
+# Tabla de tracking (idempotente)
+$PSQL -c "CREATE TABLE IF NOT EXISTS schema_migrations (
+  filename   text PRIMARY KEY,
+  applied_at timestamptz NOT NULL DEFAULT now()
+)" >/dev/null
+
 echo ""
-echo "▶ Aplicando migraciones en orden..."
+echo "▶ Aplicando migraciones pendientes..."
 cd "$MIGRATIONS_DIR"
 
-# Se descubren dinámicamente TODOS los *.sql presentes (orden numérico por
-# nombre de archivo) en vez de mantener a mano una lista — una lista fija se
-# queda desactualizada en silencio: migraciones nuevas simplemente no corren,
-# sin ningún error ni warning (pasó con 0016-0021, nunca llegaron a producción).
+APPLIED=0
+SKIPPED=0
 for FILE in $(ls *.sql 2>/dev/null | sort); do
-  echo "▶ Aplicando: $FILE"
+  ALREADY=$($PSQL -tA -c "SELECT 1 FROM schema_migrations WHERE filename = '$FILE'" | tr -d '[:space:]')
+  if [ "$ALREADY" = "1" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
 
+  echo "▶ Aplicando: $FILE"
   # El volumen ../db/migrations:/migrations:ro expone el mismo archivo dentro
   # del contenedor con el mismo nombre.
-  if $PSQL -f "/migrations/$FILE" 2>&1 | grep -q "already exists"; then
-    echo "  ℹ️  (ya existe, saltando)"
-  elif $PSQL -f "/migrations/$FILE"; then
+  if $PSQL -f "/migrations/$FILE"; then
+    $PSQL -c "INSERT INTO schema_migrations (filename) VALUES ('$FILE') ON CONFLICT DO NOTHING" >/dev/null
+    APPLIED=$((APPLIED + 1))
     echo "  ✅ Ok"
   else
-    echo "  ❌ Error aplicando $FILE"
+    echo "  ❌ Error aplicando $FILE — deploy detenido (no se registró como aplicada)"
     exit 1
   fi
 done
 
 echo ""
-echo "✅ Todas las migraciones aplicadas"
+echo "✅ Migraciones: $APPLIED aplicadas, $SKIPPED ya registradas"

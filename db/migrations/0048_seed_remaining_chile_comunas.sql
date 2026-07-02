@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0033 · Completar chile_comunas con las 346 comunas de Chile
+-- 0048 (antes 0033, número duplicado) · Completar chile_comunas con las 346 comunas de Chile
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 0020 solo sembró las 52 comunas de la Región Metropolitana de Santiago (más
 -- 4 comunas sueltas de otras regiones). La ingesta de GeoParquet de

@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+import { pool } from '@/lib/db'
 
 /**
  * GET /api/chile/parcels-bbox?bbox=lng1,lat1,lng2,lat2&comuna=15160&limit=2000

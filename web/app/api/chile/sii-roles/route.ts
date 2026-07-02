@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import { pool } from '@/lib/db'
 
 // Misma tabla que `SII_DESTINO_LABELS` en scraper/lib/sii-catastro-cl.mjs —
 // duplicada acá porque web/ y scraper/ son proyectos Node separados.

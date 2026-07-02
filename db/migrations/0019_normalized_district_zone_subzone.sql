@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS districts (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_districts_code     ON districts(code);
+-- code debe ser único: el seed de abajo usa ON CONFLICT (code), que sin este
+-- índice único fallaba SIEMPRE (los 21 distritos nunca llegaron a insertarse
+-- con el script de deploy antiguo, que tragaba el error).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_districts_code ON districts(code);
 CREATE INDEX IF NOT EXISTS idx_districts_slug     ON districts(slug);
 CREATE INDEX IF NOT EXISTS idx_districts_city     ON districts(city);
 
@@ -63,6 +66,17 @@ CREATE TABLE IF NOT EXISTS zones (
 
   UNIQUE (district_id, slug)
 );
+
+-- La tabla zones YA existe desde 0002 (jerarquía antigua de 4 niveles), así
+-- que el CREATE TABLE IF NOT EXISTS de arriba se salta y las columnas nuevas
+-- hay que añadirlas explícitamente — sin esto, los índices/seeds de abajo
+-- fallaban en silencio con el script de deploy antiguo (que tragaba errores).
+ALTER TABLE zones ADD COLUMN IF NOT EXISTS district_id uuid REFERENCES districts(id) ON DELETE CASCADE;
+ALTER TABLE zones ADD COLUMN IF NOT EXISTS slug text;
+ALTER TABLE zones ADD COLUMN IF NOT EXISTS geom geometry(MultiPolygon, 4326);
+ALTER TABLE zones ADD COLUMN IF NOT EXISTS description text;
+-- ON CONFLICT (district_id, slug) de los seeds necesita este índice único
+CREATE UNIQUE INDEX IF NOT EXISTS uq_zones_district_slug ON zones(district_id, slug);
 
 CREATE INDEX IF NOT EXISTS idx_zones_district           ON zones(district_id);
 CREATE INDEX IF NOT EXISTS idx_zones_slug              ON zones(slug);
@@ -155,11 +169,14 @@ ON CONFLICT (code) DO NOTHING;
 -- ─── SEED: Zonas (barrios) principales - SALAMANCA ─────────────────────────
 -- Nota: Idealista expone Salamanca como un barrio, pero internamente tiene
 -- subareas. Aquí creamos una zona "Barrio de Salamanca" con sus subzonas.
-INSERT INTO zones (name, district_id, slug, idealista_slug, is_scrape_target, description)
-  SELECT 'Barrio de Salamanca', id, 'barrio-salamanca', 'madrid/barrio-de-salamanca', true,
+-- Los idealista_slug de estos seeds ya existen desde 0002 (con level de la
+-- jerarquía antigua y sin district_id/slug): en vez de duplicar la zona, se
+-- vincula la fila existente al distrito nuevo.
+INSERT INTO zones (level, name, district_id, slug, idealista_slug, is_scrape_target, description)
+  SELECT 'barrio', 'Barrio de Salamanca', id, 'barrio-salamanca', 'madrid/barrio-de-salamanca', true,
          'Zona residencial de lujo con Paseo de Recoletos'
   FROM districts WHERE code = '004'
-ON CONFLICT (district_id, slug) DO NOTHING;
+ON CONFLICT (idealista_slug) DO UPDATE SET district_id = EXCLUDED.district_id, slug = EXCLUDED.slug;
 
 -- Subzonas dentro de Salamanca
 INSERT INTO subzones (name, zone_id, slug, is_scrape_target, description)
@@ -179,11 +196,11 @@ ON CONFLICT (zone_id, slug) DO NOTHING;
 
 
 -- ─── SEED: Zonas principales - CHAMBERÍ ──────────────────────────────────
-INSERT INTO zones (name, district_id, slug, idealista_slug, is_scrape_target, description)
-  SELECT 'Chamberí Centro', id, 'chamberi-centro', 'madrid/chamberi', true,
+INSERT INTO zones (level, name, district_id, slug, idealista_slug, is_scrape_target, description)
+  SELECT 'barrio', 'Chamberí Centro', id, 'chamberi-centro', 'madrid/chamberi', true,
          'Centro del distrito, zona residencial'
   FROM districts WHERE code = '005'
-ON CONFLICT (district_id, slug) DO NOTHING;
+ON CONFLICT (idealista_slug) DO UPDATE SET district_id = EXCLUDED.district_id, slug = EXCLUDED.slug;
 
 -- Subzonas dentro de Chamberí
 INSERT INTO subzones (name, zone_id, slug, is_scrape_target, description)
@@ -208,11 +225,11 @@ ON CONFLICT (zone_id, slug) DO NOTHING;
 
 
 -- ─── SEED: Zonas principales - RETIRO ────────────────────────────────────
-INSERT INTO zones (name, district_id, slug, idealista_slug, is_scrape_target, description)
-  SELECT 'Retiro Centro', id, 'retiro-centro', 'madrid/retiro', true,
+INSERT INTO zones (level, name, district_id, slug, idealista_slug, is_scrape_target, description)
+  SELECT 'barrio', 'Retiro Centro', id, 'retiro-centro', 'madrid/retiro', true,
          'Parque del Retiro y zonas adyacentes'
   FROM districts WHERE code = '003'
-ON CONFLICT (district_id, slug) DO NOTHING;
+ON CONFLICT (idealista_slug) DO UPDATE SET district_id = EXCLUDED.district_id, slug = EXCLUDED.slug;
 
 INSERT INTO subzones (name, zone_id, slug, is_scrape_target, description)
   SELECT 'Ibiza', id, 'ibiza', false, 'Barrio de Ibiza'

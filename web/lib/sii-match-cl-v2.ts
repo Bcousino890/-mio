@@ -412,3 +412,171 @@ export function scoreCandidates(listing: ParsedListing, candidates: SiiCandidate
     })
     .sort((a, b) => b.match_score - a.match_score)
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// V3: PROBABILIDAD CALIBRADA (log-odds, estilo Fellegi-Sunter)
+// ──────────────────────────────────────────────────────────────────────────
+// El score V2 pasa la suma ponderada por sigmoid(x*2), pero la suma máxima
+// alcanzable con sus pesos es ~0.43 → sigmoid tope ≈ 0.70: el umbral
+// 'confirmed' (0.92) era inalcanzable y TODO match quedaba como candidato.
+// V3 acumula evidencia en log-odds sin tope artificial: dirección exacta +
+// distancia + m² consistentes sí llegan a >0.95, y la probabilidad resultante
+// es interpretable ("92%" significa evidencia realmente fuerte).
+
+export interface MatchSignalV3 {
+  signal: string
+  value: string
+  log_odds: number
+}
+
+export interface MatchResultV3 {
+  probability: number // 0..1 calibrada
+  confidence_level: 'confirmed' | 'high_candidate' | 'candidate' | 'rejected'
+  log_odds: number
+  signals: MatchSignalV3[]
+  explanation: string
+}
+
+// Prior escéptico: sin ninguna evidencia, un candidato arbitrario de la
+// comuna NO es la propiedad (probabilidad base ~23%).
+const V3_PRIOR = -1.2
+
+function addressEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  const listingAddr = normalizeAddress(listing.address_full ?? listing.address ?? null)
+  const candidateAddr = normalizeAddress(candidate.direccion)
+  if (!listingAddr || !candidateAddr) return { signal: 'direccion', value: 'sin datos', log_odds: 0 }
+
+  if (listingAddr === candidateAddr) return { signal: 'direccion', value: 'idéntica', log_odds: 4.2 }
+
+  const l = extractAddressComponents(listingAddr)
+  const c = extractAddressComponents(candidateAddr)
+  if (l.vía && c.vía && l.número != null && c.número != null && l.vía === c.vía) {
+    const diff = Math.abs(l.número - c.número)
+    if (diff === 0) return { signal: 'direccion', value: 'vía + número exactos', log_odds: 4.2 }
+    if (diff <= 4) return { signal: 'direccion', value: `vía exacta, número ±${diff}`, log_odds: 2.2 }
+    if (diff <= 20) return { signal: 'direccion', value: `vía exacta, número ±${diff}`, log_odds: 1.0 }
+    return { signal: 'direccion', value: `vía exacta, número lejano (±${diff})`, log_odds: 0.2 }
+  }
+
+  // Similitud trigram calculada en Postgres (similarity()) cuando está disponible
+  if (candidate.text_sim != null) {
+    if (candidate.text_sim >= 0.75) return { signal: 'direccion', value: `similitud ${candidate.text_sim.toFixed(2)}`, log_odds: 1.2 }
+    if (candidate.text_sim >= 0.55) return { signal: 'direccion', value: `similitud ${candidate.text_sim.toFixed(2)}`, log_odds: 0.5 }
+    if (candidate.text_sim <= 0.25) return { signal: 'direccion', value: `similitud baja ${candidate.text_sim.toFixed(2)}`, log_odds: -0.6 }
+  }
+  return { signal: 'direccion', value: 'sin coincidencia clara', log_odds: -0.2 }
+}
+
+function distanceEvidence(candidate: SiiCandidateRow): MatchSignalV3 {
+  const d = candidate.distance_m
+  if (d == null) return { signal: 'distancia', value: 'sin coordenadas', log_odds: 0 }
+  if (d <= 15) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 2.2 }
+  if (d <= 50) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 1.4 }
+  if (d <= 120) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0.7 }
+  if (d <= 300) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0 }
+  if (d <= 600) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.6 }
+  return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -1.4 }
+}
+
+function builtAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  const sqm = listing.sqm ?? listing.sqm_util
+  const built = candidate.superficie_construida_m2
+  if (!sqm || !built) return { signal: 'sup_construida', value: 'sin datos', log_odds: 0 }
+  const diff = Math.abs(sqm - built) / sqm
+  const label = `anuncio ${sqm} m² vs SII ${built} m²`
+  if (diff <= 0.08) return { signal: 'sup_construida', value: label, log_odds: 1.6 }
+  if (diff <= 0.2) return { signal: 'sup_construida', value: label, log_odds: 0.8 }
+  if (diff <= 0.4) return { signal: 'sup_construida', value: label, log_odds: 0 }
+  if (diff <= 0.7) return { signal: 'sup_construida', value: label, log_odds: -1.0 }
+  return { signal: 'sup_construida', value: label, log_odds: -1.8 }
+}
+
+function landAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  // Solo aporta para casas/terrenos: en deptos el terreno es del edificio entero.
+  const type = listing.property_type?.toLowerCase() ?? ''
+  const isLandRelevant = type.includes('casa') || type.includes('terreno') || type.includes('parcela')
+  const sqm = listing.sqm
+  const land = candidate.superficie_terreno_m2
+  if (!isLandRelevant || !sqm || !land) return { signal: 'sup_terreno', value: 'no aplica', log_odds: 0 }
+  const diff = Math.abs(sqm - land) / sqm
+  const label = `anuncio ${sqm} m² vs terreno ${land} m²`
+  if (diff <= 0.1) return { signal: 'sup_terreno', value: label, log_odds: 1.0 }
+  if (diff <= 0.3) return { signal: 'sup_terreno', value: label, log_odds: 0.4 }
+  if (diff <= 0.7) return { signal: 'sup_terreno', value: label, log_odds: 0 }
+  return { signal: 'sup_terreno', value: label, log_odds: -0.6 }
+}
+
+function destinoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  if (!candidate.codigo_destino_principal || !listing.property_type) {
+    return { signal: 'destino_sii', value: 'sin datos', log_odds: 0 }
+  }
+  const excluded = getExcludedDestinos(listing.property_type)
+  if (excluded.includes(candidate.codigo_destino_principal)) {
+    return { signal: 'destino_sii', value: `incompatible (${candidate.codigo_destino_principal})`, log_odds: -2.5 }
+  }
+  const allowed = PROPERTY_TYPE_MAPPING[listing.property_type.toLowerCase()] || []
+  if (allowed.includes(candidate.codigo_destino_principal)) {
+    return { signal: 'destino_sii', value: `compatible (${candidate.codigo_destino_principal})`, log_odds: 0.4 }
+  }
+  return { signal: 'destino_sii', value: candidate.codigo_destino_principal, log_odds: 0 }
+}
+
+function avaluoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  // Solo venta en CLP: el precio de venta suele estar entre 1× y ~4× el avalúo
+  // fiscal. Un ratio absurdo delata un candidato equivocado (ej. matchear un
+  // sitio eriazo barato con una casa de lujo).
+  if (listing.operation !== 'sale' || !listing.price_raw || !candidate.avaluo_fiscal_total) {
+    return { signal: 'avaluo_vs_precio', value: 'no aplica', log_odds: 0 }
+  }
+  let priceClp = listing.price_raw
+  if (listing.currency === 'UF') priceClp = listing.price_raw * 38_000 // aproximación conservadora
+  const ratio = priceClp / candidate.avaluo_fiscal_total
+  const label = `ratio ${ratio.toFixed(1)}×`
+  if (ratio >= 0.9 && ratio <= 4.5) return { signal: 'avaluo_vs_precio', value: label, log_odds: 0.3 }
+  if (ratio < 0.4 || ratio > 10) return { signal: 'avaluo_vs_precio', value: label, log_odds: -0.8 }
+  return { signal: 'avaluo_vs_precio', value: label, log_odds: 0 }
+}
+
+export function scoreCandidateV3(listing: ParsedListing, candidate: SiiCandidateRow): MatchResultV3 {
+  const signals = [
+    addressEvidence(listing, candidate),
+    distanceEvidence(candidate),
+    builtAreaEvidence(listing, candidate),
+    landAreaEvidence(listing, candidate),
+    destinoEvidence(listing, candidate),
+    avaluoEvidence(listing, candidate),
+  ]
+  const logOdds = V3_PRIOR + signals.reduce((s, x) => s + x.log_odds, 0)
+  const probability = 1 / (1 + Math.exp(-logOdds))
+
+  let confidence_level: MatchResultV3['confidence_level']
+  if (probability >= 0.92) confidence_level = 'confirmed'
+  else if (probability >= 0.8) confidence_level = 'high_candidate'
+  else if (probability >= 0.65) confidence_level = 'candidate'
+  else confidence_level = 'rejected'
+
+  const top = [...signals].sort((a, b) => Math.abs(b.log_odds) - Math.abs(a.log_odds)).slice(0, 3)
+    .filter((s) => s.log_odds !== 0)
+    .map((s) => `${s.signal}: ${s.value}`)
+    .join(' · ')
+
+  return {
+    probability,
+    confidence_level,
+    log_odds: logOdds,
+    signals,
+    explanation: top || 'sin señales',
+  }
+}
+
+export function scoreCandidatesV3(
+  listing: ParsedListing,
+  candidates: SiiCandidateRow[],
+): Array<SiiCandidateRow & { match_score: number; match_result_v3: MatchResultV3 }> {
+  return candidates
+    .map((candidate) => {
+      const result = scoreCandidateV3(listing, candidate)
+      return { ...candidate, match_score: result.probability, match_result_v3: result }
+    })
+    .sort((a, b) => b.match_score - a.match_score)
+}

@@ -4,7 +4,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ResponsiveContainer,
 } from 'recharts'
-import type { PriceEvent } from '@/lib/mock-listings'
+import type { PriceEvent } from '@/lib/types'
 import { useTheme } from '@/components/ThemeProvider'
 
 interface Props {

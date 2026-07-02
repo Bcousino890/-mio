@@ -6,7 +6,7 @@ import PropertyCard from '@/components/PropertyCard'
 import FilterPanel from '@/components/filters/FilterPanel'
 import { mockListings } from '@/lib/mock-listings'
 import { SlidersHorizontal, Map, LayoutList, ChevronDown, Search, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
-import type { Listing } from '@/lib/mock-listings'
+import type { Listing } from '@/lib/types'
 import type { FilterState } from '@/components/filters/FilterPanel'
 
 const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })

@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+import { pool } from '@/lib/db'
 
 // Viewport-based loading: max features per request to keep responses <5MB
 const MAX_FEATURES = 25000

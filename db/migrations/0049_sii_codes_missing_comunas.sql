@@ -1,4 +1,4 @@
--- 0034 · Poblar sii_comuna_code para comunas que no lo tenían
+-- 0049 (antes 0034, número duplicado) · Poblar sii_comuna_code para comunas que no lo tenían
 -- Códigos extraídos de los nombres de archivo parquet de catastral.cl
 UPDATE chile_comunas SET sii_comuna_code = '6110' WHERE name = 'San Vicente de Tagua Tagua' AND (sii_comuna_code IS NULL OR sii_comuna_code = '');
 UPDATE chile_comunas SET sii_comuna_code = '6102' WHERE name = 'Machalí'                    AND (sii_comuna_code IS NULL OR sii_comuna_code = '');

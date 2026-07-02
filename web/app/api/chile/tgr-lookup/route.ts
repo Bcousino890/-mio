@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { pool } from '@/lib/db'
 import { consultarTgrRol, tgrCooldownRemainingMs } from '@/lib/tgr'
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 // Mismo esquema de "rol" que usa scraper/tgr/run-tgr.sh al exportar el CSV
 // para el scraper masivo: sii_comuna_code + "-" + rol (manzana-predio). Usar
