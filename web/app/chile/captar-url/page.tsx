@@ -8,7 +8,7 @@ import {
   Link2, Search, MapPin, Layers, ExternalLink, AlertCircle, CheckCircle2,
   RefreshCw, Phone, User, FileCheck2, Landmark, ShieldCheck, Copy,
   MessageCircle, ChevronRight, Clock, ChevronLeft, Sparkles, Waves,
-  Building, Compass, Calendar, Car, Archive, Home,
+  Building, Compass, Calendar, Car, Archive, Home, Check, Plus,
 } from 'lucide-react'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
@@ -19,6 +19,16 @@ const DESTINO_LABELS: Record<string, string> = {
 }
 
 type StepState = 'pending' | 'running' | 'done' | 'review' | 'error'
+
+/** Máximo de fotos que se envían al modelo de visión (espejo de MAX_VISUAL_PHOTOS del backend). */
+const MAX_IA_PHOTOS = 25
+
+interface VisualUsageInfo {
+  photos_used: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  cost_usd: number | null
+}
 
 interface Captacion {
   id: string
@@ -37,6 +47,7 @@ interface Captacion {
   latitude: number | null
   longitude: number | null
   photos: string[] | null
+  selected_photo_urls: string[] | null
   raw_extracted: Record<string, unknown> | null
   sii_rol: string | null
   sii_direccion: string | null
@@ -165,6 +176,24 @@ export default function CaptarUrlPage() {
   const [photoIdx, setPhotoIdx] = useState(0)
   const [visualRunning, setVisualRunning] = useState(false)
   const [visualError, setVisualError] = useState<string | null>(null)
+  const [selectedPhotos, setSelectedPhotos] = useState<string[]>([])
+  const [visualUsage, setVisualUsage] = useState<VisualUsageInfo | null>(null)
+
+  // Al cargar una captación nueva, restaurar la selección de fotos guardada en DB
+  useEffect(() => {
+    setSelectedPhotos(Array.isArray(captacion?.selected_photo_urls) ? captacion.selected_photo_urls : [])
+    setVisualUsage(null)
+    setPhotoIdx(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [captacion?.id])
+
+  const togglePhoto = (photoUrl: string) => {
+    setSelectedPhotos((prev) => {
+      if (prev.includes(photoUrl)) return prev.filter((p) => p !== photoUrl)
+      if (prev.length >= MAX_IA_PHOTOS) return prev
+      return [...prev, photoUrl]
+    })
+  }
 
   // ── Etapa 3+4 auto-encadenadas ─────────────────────────────────────────────
   const runDealernet = useCallback(async (id: string) => {
@@ -278,10 +307,15 @@ export default function CaptarUrlPage() {
     setVisualRunning(true)
     setVisualError(null)
     try {
-      const res = await fetch(`/api/chile/captar/${captacion.id}/visual`, { method: 'POST' })
+      const res = await fetch(`/api/chile/captar/${captacion.id}/visual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photoUrls: selectedPhotos }),
+      })
       const data = await res.json()
       if (data.success && data.captacion) {
         setCaptacion(data.captacion)
+        if (data.visual_usage) setVisualUsage(data.visual_usage)
         // Si la verificación visual auto-confirmó el rol, continuar el pipeline
         if (data.captacion.sii_rol && !data.captacion.needs_review && !data.captacion.owner_name) {
           await runTgr(data.captacion.id)
@@ -572,19 +606,62 @@ export default function CaptarUrlPage() {
             </div>
           </div>
 
-          {/* ── Galería de fotos del anuncio ── */}
-          {(captacion.photos?.length ?? 0) > 0 && (
+          {/* ── Galería de fotos del anuncio + selector para IA ── */}
+          {(captacion.photos?.length ?? 0) > 0 && (() => {
+            const currentPhoto = captacion.photos![Math.min(photoIdx, captacion.photos!.length - 1)]
+            const currentSelected = selectedPhotos.includes(currentPhoto)
+            return (
             <div>
-              <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold mb-3">
-                Fotos del anuncio ({captacion.photos!.length}) — compara piscina, techo y entorno con el satélite
-              </p>
+              <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold">
+                  Fotos del anuncio ({captacion.photos!.length}) — marca las que mejor identifican la propiedad desde el aire
+                </p>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[11px] px-2 py-1 rounded-lg border ${
+                    selectedPhotos.length > 0
+                      ? 'border-violet-800/60 bg-violet-950/30 text-violet-300'
+                      : 'border-[var(--c-border-card)] bg-slate-900/30 text-slate-500'
+                  }`}>
+                    {selectedPhotos.length > 0
+                      ? `${selectedPhotos.length}/${MAX_IA_PHOTOS} para IA`
+                      : 'sin selección → IA usa las 4 primeras'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPhotos(captacion.photos!.slice(0, MAX_IA_PHOTOS))}
+                    className="text-[11px] text-slate-400 hover:text-slate-200 border border-[var(--c-border-card)] hover:border-slate-600 px-2 py-1 rounded-lg transition-colors"
+                  >
+                    Primeras {Math.min(MAX_IA_PHOTOS, captacion.photos!.length)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPhotos([])}
+                    disabled={selectedPhotos.length === 0}
+                    className="text-[11px] text-slate-400 hover:text-slate-200 disabled:opacity-40 border border-[var(--c-border-card)] hover:border-slate-600 px-2 py-1 rounded-lg transition-colors"
+                  >
+                    Ninguna
+                  </button>
+                </div>
+              </div>
               <div className="rounded-2xl overflow-hidden ring-1 ring-white/5 bg-black relative">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={captacion.photos![Math.min(photoIdx, captacion.photos!.length - 1)]}
+                  src={currentPhoto}
                   alt={`Foto ${photoIdx + 1}`}
                   className="w-full h-80 object-contain bg-black"
                 />
+                <button
+                  type="button"
+                  onClick={() => togglePhoto(currentPhoto)}
+                  className={`absolute top-3 left-3 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1.5 rounded-lg backdrop-blur-sm transition-colors ${
+                    currentSelected
+                      ? 'bg-violet-600/90 text-white hover:bg-violet-500'
+                      : 'bg-black/50 text-white/80 hover:bg-black/70 hover:text-white'
+                  }`}
+                >
+                  {currentSelected ? <Check size={12} /> : <Plus size={12} />}
+                  {currentSelected ? 'Incluida en análisis IA' : 'Incluir en análisis IA'}
+                </button>
                 {captacion.photos!.length > 1 && (
                   <>
                     <button
@@ -607,22 +684,41 @@ export default function CaptarUrlPage() {
               </div>
               {captacion.photos!.length > 1 && (
                 <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
-                  {captacion.photos!.map((p, i) => (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      key={p}
-                      src={p}
-                      alt=""
-                      onClick={() => setPhotoIdx(i)}
-                      className={`h-14 w-20 object-cover rounded-lg cursor-pointer flex-shrink-0 border-2 transition-all ${
-                        i === photoIdx ? 'border-blue-500' : 'border-transparent opacity-60 hover:opacity-100'
-                      }`}
-                    />
-                  ))}
+                  {captacion.photos!.map((p, i) => {
+                    const isSel = selectedPhotos.includes(p)
+                    return (
+                      <div key={p} className="relative flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={p}
+                          alt=""
+                          onClick={() => setPhotoIdx(i)}
+                          className={`h-14 w-20 object-cover rounded-lg cursor-pointer border-2 transition-all ${
+                            i === photoIdx ? 'border-blue-500'
+                            : isSel ? 'border-violet-500 opacity-90'
+                            : 'border-transparent opacity-60 hover:opacity-100'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); togglePhoto(p) }}
+                          title={isSel ? 'Quitar del análisis IA' : 'Incluir en análisis IA'}
+                          className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center transition-colors ${
+                            isSel
+                              ? 'bg-violet-600 text-white hover:bg-violet-500'
+                              : 'bg-black/60 text-white/70 hover:bg-black/80 hover:text-white'
+                          }`}
+                        >
+                          {isSel ? <Check size={11} /> : <Plus size={11} />}
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
-          )}
+            )
+          })()}
 
           {/* ── Candidatos SII ── */}
           <div>
@@ -642,16 +738,26 @@ export default function CaptarUrlPage() {
                     onClick={runVisual}
                     disabled={visualRunning}
                     className="flex items-center gap-1.5 text-[11px] font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-2.5 py-1.5 rounded-lg transition-colors flex-shrink-0"
-                    title="Compara las fotos del anuncio con el satélite de cada candidato (piscina, techo, entorno) usando IA"
+                    title="Compara las fotos del anuncio con el satélite de cada candidato (piscina, techo, entorno) usando IA. Marca fotos en la galería para elegir cuáles se envían."
                   >
                     {visualRunning ? <RefreshCw size={11} className="animate-spin" /> : <Sparkles size={11} />}
-                    {visualRunning ? 'Comparando fotos ↔ satélite…' : 'Verificación visual IA'}
+                    {visualRunning
+                      ? 'Comparando fotos ↔ satélite…'
+                      : `Verificación visual IA (${selectedPhotos.length > 0 ? `${selectedPhotos.length} fotos` : '4 fotos auto'})`}
                   </button>
                 )}
               </div>
             </div>
             {visualError && (
               <p className="text-[11px] text-red-400 mb-2 flex items-center gap-1.5"><AlertCircle size={11} /> {visualError}</p>
+            )}
+            {visualUsage && !visualError && (
+              <p className="text-[11px] text-slate-500 mb-2 flex items-center gap-1.5">
+                <Sparkles size={11} className="text-violet-400" />
+                Último análisis: {visualUsage.photos_used} foto{visualUsage.photos_used !== 1 ? 's' : ''} del anuncio
+                {visualUsage.prompt_tokens != null && ` · ${(visualUsage.prompt_tokens + (visualUsage.completion_tokens ?? 0)).toLocaleString('es-CL')} tokens`}
+                {visualUsage.cost_usd != null && ` · $${visualUsage.cost_usd.toFixed(4)} USD`}
+              </p>
             )}
 
             {!captacion.sii_comuna_code ? (

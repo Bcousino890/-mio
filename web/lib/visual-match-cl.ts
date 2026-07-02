@@ -5,8 +5,9 @@
 //
 // Filosofía de costos del proyecto (docs/PLAN-MAESTRO.md): la IA es fallback,
 // no camino principal. Esto solo corre cuando el match determinista queda en
-// needs_review (<92%) o el usuario lo pide, con un modelo de visión barato y
-// máximo ~4 fotos + topN recortes por llamada.
+// needs_review (<92%) o el usuario lo pide, con un modelo de visión barato.
+// El usuario puede seleccionar en la UI qué fotos enviar (máx 25, resolución
+// completa); sin selección se envían las 4 primeras + topN recortes satelitales.
 import type { ScoredCandidate } from '@/lib/captar-pipeline'
 
 const OPENROUTER_BASE = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
@@ -18,6 +19,22 @@ export interface VisualVerdict {
   score: number // -1 (contradice) .. 1 (coincide fuerte)
   reasons: string
 }
+
+/** Consumo real de la llamada al modelo de visión (transparencia de costos). */
+export interface VisualUsage {
+  photos_used: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  cost_usd: number | null // coste reportado por OpenRouter (créditos = USD)
+}
+
+export interface VisualVerificationResult {
+  verdicts: VisualVerdict[]
+  usage: VisualUsage
+}
+
+/** Máximo de fotos por llamada; suficiente para cubrir exterior + entorno sin diluir la atención del modelo. */
+export const MAX_VISUAL_PHOTOS = 25
 
 function tileXY(lat: number, lng: number, zoom: number): { x: number; y: number } {
   const n = 2 ** zoom
@@ -47,7 +64,9 @@ export function visualVerificationAvailable(): boolean {
 /**
  * Puntúa visualmente los topN candidatos contra las fotos del anuncio.
  * Devuelve un veredicto por rol; los roles sin coordenadas se omiten.
- * @param selectedPhotoUrls Fotos seleccionadas por el usuario (opcionalmente). Si se proporciona, se usan en lugar de las primeras 4.
+ * @param selectedPhotoUrls Fotos elegidas por el usuario en el selector de la UI.
+ *   Si vienen, se envían esas (a resolución completa, máx MAX_VISUAL_PHOTOS);
+ *   si no, fallback al comportamiento histórico: las 4 primeras del anuncio.
  */
 export async function verifyCandidatesVisually(
   photos: string[],
@@ -55,13 +74,12 @@ export async function verifyCandidatesVisually(
   context: { title?: string | null; description?: string | null; has_pool?: boolean; property_type?: string | null },
   topN = 4,
   selectedPhotoUrls?: string[],
-): Promise<VisualVerdict[]> {
+): Promise<VisualVerificationResult> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) throw new Error('OPENROUTER_API_KEY no configurada — la verificación visual requiere IA')
 
-  // Si hay fotos seleccionadas por el usuario, úsalas; sino, fallback a 4 primeras
   const usablePhotos = selectedPhotoUrls && selectedPhotoUrls.length > 0
-    ? selectedPhotoUrls.slice(0, 25)
+    ? selectedPhotoUrls.slice(0, MAX_VISUAL_PHOTOS)
     : photos.slice(0, 4)
   if (usablePhotos.length === 0) throw new Error('El anuncio no tiene fotos para comparar')
 
@@ -74,8 +92,9 @@ export async function verifyCandidatesVisually(
     {
       type: 'text',
       text:
-        `Eres un verificador catastral. Te doy (A) fotos de un anuncio inmobiliario en Chile y (B) recortes satelitales de ${top.length} parcelas candidatas.\n` +
+        `Eres un verificador catastral. Te doy (A) ${usablePhotos.length} fotos de un anuncio inmobiliario en Chile y (B) recortes satelitales de ${top.length} parcelas candidatas.\n` +
         `Anuncio: ${context.title ?? ''} · tipo: ${context.property_type ?? 'desconocido'}${context.has_pool ? ' · el anuncio menciona PISCINA' : ''}\n` +
+        `Las fotos pueden incluir interiores (cocina, baños, dormitorios): IGNÓRALAS. Céntrate solo en lo verificable desde el satélite: fachada, techo, piscina, jardín, quincho, cancha y forma del terreno.\n` +
         `Para CADA candidata evalúa la coherencia visual con las fotos: piscina (existe/forma/posición), techo (color y material: teja roja mediterránea, plano, zinc gris...), tamaño y forma de la construcción, entorno (árboles, quincho, cancha).\n` +
         `Responde SOLO JSON válido: [{"rol": "...", "score": -1..1, "reasons": "breve, en español"}] — score 1 = las fotos claramente corresponden a esa parcela, 0 = no se puede saber, -1 = claramente contradice (ej: fotos con piscina y la parcela no tiene).`,
     },
@@ -95,6 +114,7 @@ export async function verifyCandidatesVisually(
       model: VISION_MODEL,
       messages: [{ role: 'user', content }],
       temperature: 0,
+      usage: { include: true }, // OpenRouter devuelve tokens + coste real de la llamada
     }),
     signal: AbortSignal.timeout(60000),
   })
@@ -102,16 +122,25 @@ export async function verifyCandidatesVisually(
   const data = await res.json()
   const raw: string = data?.choices?.[0]?.message?.content ?? ''
 
+  const usage: VisualUsage = {
+    photos_used: usablePhotos.length,
+    prompt_tokens: typeof data?.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : null,
+    completion_tokens: typeof data?.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : null,
+    cost_usd: typeof data?.usage?.cost === 'number' ? data.usage.cost : null,
+  }
+
   // El modelo puede envolver el JSON en ```json ... ```
   const jsonText = raw.match(/\[[\s\S]*\]/)?.[0]
   if (!jsonText) throw new Error('La IA no devolvió un JSON interpretable')
   const parsed = JSON.parse(jsonText) as Array<{ rol?: string; score?: number; reasons?: string }>
 
-  return parsed
+  const verdicts = parsed
     .filter((v) => typeof v.rol === 'string')
     .map((v) => ({
       rol: String(v.rol),
       score: Math.max(-1, Math.min(1, Number(v.score) || 0)),
       reasons: String(v.reasons ?? '').slice(0, 300),
     }))
+
+  return { verdicts, usage }
 }

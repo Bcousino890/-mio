@@ -366,6 +366,7 @@ export interface CaptacionRow {
   latitude: number | null
   longitude: number | null
   photos: unknown
+  selected_photo_urls: unknown // string[] — fotos elegidas por el usuario para la verificación visual
   raw_extracted: Record<string, unknown> | null
   sii_rol: string | null
   sii_direccion: string | null
@@ -594,6 +595,7 @@ export interface MatchStageResult {
   captacion: CaptacionRow
   decision: MatchDecision
   candidates: ScoredCandidate[]
+  visual_usage?: import('@/lib/visual-match-cl').VisualUsage
 }
 
 export async function matchRol(captacionId: string): Promise<MatchStageResult> {
@@ -651,8 +653,13 @@ export async function matchRol(captacionId: string): Promise<MatchStageResult> {
  * satélite de cada candidato (piscina, techo/teja, entorno) y re-puntúa.
  * Puede subir un match dudoso por encima del 92% (auto-confirmación) o
  * hundir candidatos que contradicen las fotos.
+ *
+ * @param selectedPhotoUrls Fotos elegidas por el usuario en la UI. Solo se
+ *   aceptan URLs que pertenezcan al anuncio; la selección se persiste en
+ *   selected_photo_urls (aunque falle el modelo) y se reutiliza en siguientes
+ *   análisis. Array vacío = limpiar selección (vuelve al fallback de 4 fotos).
  */
-export async function verifyVisual(captacionId: string): Promise<MatchStageResult> {
+export async function verifyVisual(captacionId: string, selectedPhotoUrls?: string[]): Promise<MatchStageResult> {
   const c = await getCaptacion(captacionId)
   if (!c) throw new Error('Captación no encontrada')
   const prevCandidates = (c.candidates ?? []) as ScoredCandidate[]
@@ -663,12 +670,33 @@ export async function verifyVisual(captacionId: string): Promise<MatchStageResul
   const raw = (c.raw_extracted ?? {}) as Record<string, unknown>
   const photos: string[] = Array.isArray(c.photos) ? (c.photos as string[]) : []
 
-  const verdicts = await verifyCandidatesVisually(photos, prevCandidates, {
-    title: c.title,
-    description: (raw.description as string) ?? null,
-    has_pool: raw.has_pool === true,
-    property_type: c.property_type,
-  })
+  // Selección de fotos: solo URLs que realmente pertenecen al anuncio (nunca
+  // se envían URLs arbitrarias al modelo). Nueva selección > selección guardada.
+  const photoSet = new Set(photos)
+  let selection: string[]
+  if (selectedPhotoUrls) {
+    selection = selectedPhotoUrls.filter((u) => photoSet.has(u))
+    await pool.query(
+      `UPDATE captaciones_cl SET selected_photo_urls = $2, updated_at = now() WHERE id = $1`,
+      [captacionId, JSON.stringify(selection)],
+    )
+  } else {
+    const saved = Array.isArray(c.selected_photo_urls) ? (c.selected_photo_urls as string[]) : []
+    selection = saved.filter((u) => photoSet.has(u))
+  }
+
+  const { verdicts, usage } = await verifyCandidatesVisually(
+    photos,
+    prevCandidates,
+    {
+      title: c.title,
+      description: (raw.description as string) ?? null,
+      has_pool: raw.has_pool === true,
+      property_type: c.property_type,
+    },
+    4,
+    selection.length > 0 ? selection : undefined,
+  )
 
   const byRol = new Map(verdicts.map((v) => [v.rol, v]))
   const listing = captacionToParsedListing(c)
@@ -709,7 +737,7 @@ export async function verifyVisual(captacionId: string): Promise<MatchStageResul
     ],
   )
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
-  return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored }
+  return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored, visual_usage: usage }
 }
 
 /** Selección manual de rol entre los candidatos guardados. */
