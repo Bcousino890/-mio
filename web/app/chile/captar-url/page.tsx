@@ -240,7 +240,7 @@ export default function CaptarUrlPage() {
   return (
     <PageShell
       title="Captar desde URL"
-      subtitle="URL de Portal Inmobiliario → dueño (TGR) → rol + dirección exacta → teléfonos (DealerNet)"
+      subtitle="URL de Portal Inmobiliario → rol + dirección exacta → dueño (TGR) → teléfonos (DealerNet)"
       action={
         <Link
           href="/chile/captacion"
@@ -277,17 +277,15 @@ export default function CaptarUrlPage() {
         </p>
       </form>
 
-      {/* Stepper — orden visual pedido por el usuario: Dueño (2) antes que
-          Rol (3). La EJECUCIÓN interna no cambia: el rol se resuelve primero
-          porque el certificado TGR se consulta con rol + comuna. */}
+      {/* Stepper */}
       <div className="flex gap-2 mb-6">
         <Step n={1} label="Extraer anuncio" state={s1} detail={captacion ? (captacion.title ?? captacion.source_url) : null} />
-        <Step n={2} label="Dueño (TGR)" state={s3}
-          detail={captacion?.owner_name ?? captacion?.tgr_error ?? null} />
-        <Step n={3} label="Rol + dirección exacta" state={s2}
+        <Step n={2} label="Rol + dirección exacta" state={s2}
           detail={captacion?.sii_rol
             ? `${captacion.sii_rol} · ${matchPct}%${captacion.match_verified ? ' · verificado TGR' : ''}`
             : captacion?.review_reason ?? null} />
+        <Step n={3} label="Dueño (TGR)" state={s3}
+          detail={captacion?.owner_name ?? captacion?.tgr_error ?? null} />
         <Step n={4} label="Teléfonos (DealerNet)" state={s4}
           detail={captacion?.dealernet_status === 'ok' ? `${phones.length} teléfono${phones.length !== 1 ? 's' : ''}` : captacion?.dealernet_error ?? null} />
       </div>
