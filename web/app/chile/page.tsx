@@ -3,7 +3,7 @@ import Link from 'next/link'
 import PageShell from '@/components/PageShell'
 import { Globe, Star, MapPinned, Upload, CheckCircle2, Circle, Database } from 'lucide-react'
 import { CHILE_COMUNAS, CHILE_PRIORITY_COMUNAS, CHILE_REGIONS, groupByRegion } from '@/lib/chile-zones'
-import { Pool } from 'pg'
+import { pool } from '@/lib/db'
 
 interface CoverageRow {
   sii_comuna_code: string
@@ -13,7 +13,6 @@ interface CoverageRow {
 
 async function getSiiCoverage(): Promise<CoverageRow[]> {
   if (!process.env.DATABASE_URL) return []
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL })
   try {
     const res = await pool.query(
       `SELECT r.sii_comuna_code, count(*) AS roles, c.name
@@ -34,8 +33,6 @@ async function getSiiCoverage(): Promise<CoverageRow[]> {
       )
       return res2.rows.map((r) => ({ sii_comuna_code: r.sii_comuna_code, roles: Number(r.roles), name: null }))
     } catch { return [] }
-  } finally {
-    await pool.end()
   }
 }
 

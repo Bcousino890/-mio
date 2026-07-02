@@ -2,6 +2,11 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // pdf-parse (pdfjs-dist) y playwright-core no sobreviven el bundling de
+  // webpack (pdfjs revienta con "Object.defineProperty called on non-object"
+  // al compilar cualquier ruta que importe lib/tgr.ts) — se cargan como
+  // require() externo de Node en runtime.
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'playwright-core'],
   // El tracer de archivos de Next (@vercel/nft) sigue requires estáticos,
   // pero playwright-core carga varios de sus módulos (registro de
   // navegadores, protocolo, utilsBundle) con requires calculados en

@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import { useEffect, useRef } from 'react'
-import type { Listing } from '@/lib/mock-listings'
+import type { Listing } from '@/lib/types'
 import type { GeoShapeFilter } from '@/components/filters/FilterPanel'
 
 interface Props {

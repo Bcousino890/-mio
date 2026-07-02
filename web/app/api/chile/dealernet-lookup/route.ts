@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { pool } from '@/lib/db'
 import {
   parseRut,
   isValidRut,
@@ -11,8 +11,6 @@ import {
 } from '@/lib/dealernet'
 
 const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 // Mismo teléfono puede salir de varios productos (3407/3408/3410) — para la
 // UI lo mostramos una vez, marcando todas las fuentes que lo confirmaron.

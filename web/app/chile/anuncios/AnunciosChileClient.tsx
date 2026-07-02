@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
 import { SlidersHorizontal, Map, ChevronDown, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
-import type { Listing } from '@/lib/mock-listings'
+import type { Listing } from '@/lib/types'
 
 const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })
 

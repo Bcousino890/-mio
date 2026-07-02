@@ -103,15 +103,14 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       href: '/chile/oportunidades',
       label: 'Oportunidades',
       icon: TrendingUp,
-      description: 'Precio bajo UF/m² por zona',
-      badge: 'PRONTO',
+      description: 'Precio bajo mediana $/m² por comuna',
     },
     {
       href: '/chile/captacion',
       label: 'Captación',
       icon: Users,
-      description: 'Particulares · exclusivas rotas',
-      badge: 'PRONTO',
+      description: 'Pipeline URL → rol → dueño → teléfonos',
+      badge: 'NEW',
     },
     {
       href: '/chile/captar-url',
@@ -162,7 +161,14 @@ export default function Sidebar() {
   // El visor catastral ocupa toda la pantalla — ocultar sidebar completamente
   if (pathname.startsWith('/chile/street')) return null
 
-  const country = pathname.startsWith('/chile') ? 'cl' : 'es'
+  // País por pertenencia a los módulos, no por prefijo: /dealer y /settings son
+  // módulos de Chile aunque su ruta no empiece con /chile — con el prefijo, al
+  // entrar a ellos la sidebar saltaba a los módulos de España.
+  const matchesModule = (m: ModuleItem) => pathname === m.href || pathname.startsWith(m.href + '/')
+  const country: 'es' | 'cl' = pathname.startsWith('/chile') ? 'cl'
+    : MODULES_BY_COUNTRY.es.some(matchesModule) ? 'es'
+    : MODULES_BY_COUNTRY.cl.some(matchesModule) ? 'cl'
+    : 'es'
   const modules = MODULES_BY_COUNTRY[country]
   const countryMeta = COUNTRIES.find((c) => c.id === country)!
 
@@ -278,7 +284,7 @@ export default function Sidebar() {
           <span>Configuración</span>
         </Link>
         <p className="px-3 pt-2 text-[10px] text-slate-700">
-          DB: 204.168.174.0:5433
+          casafari-mio · {countryMeta.city}
         </p>
       </div>
     </aside>

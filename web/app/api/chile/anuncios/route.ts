@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import { pool } from '@/lib/db'
 
 const SORT_CLAUSES: Record<string, string> = {
   recent: 'l.last_seen_at DESC',

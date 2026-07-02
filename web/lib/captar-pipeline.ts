@@ -1,0 +1,926 @@
+// Orquestador del pipeline de captación Chile (URL → Rol → Dueño → Teléfonos).
+//
+// Cada etapa es idempotente, persiste su resultado en captaciones_cl y puede
+// reintentar sin duplicar trabajo:
+//   1. extractListing        — parsea el anuncio y registra la captación
+//   2. matchRol              — resuelve rol SII + dirección exacta (prob. ≥92%
+//                              para auto-confirmar; el resto queda en revisión)
+//   3. lookupOwnerTgr        — nombre del dueño vía certificado TGR (con cache)
+//   4. lookupContactsDealernet — RUT + teléfonos vía DealerNet
+//
+// La regla dura del match está en decideMatch(): nunca se auto-confirma un rol
+// con evidencia mediocre; y aunque se auto-confirme, la dirección del
+// certificado TGR se cruza después contra la dirección SII — si no calzan, la
+// captación vuelve a revisión (ver crossCheckTgrAddress).
+import { pool } from '@/lib/db'
+import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
+import {
+  scoreCandidatesV3,
+  type MatchResultV3,
+  type ParsedListing,
+  type SiiCandidateRow,
+} from '@/lib/sii-match-cl-v2'
+// OJO: lib/tgr.ts se importa DINÁMICAMENTE dentro de lookupOwnerTgr — su
+// import estático arrastra pdf-parse/pdfjs-dist y playwright-core a TODO el
+// bundle del pipeline (y pdfjs revienta el runtime de webpack en dev). Solo
+// se carga cuando de verdad hay que consultar TGR en vivo (cache miss).
+import {
+  queryDealernet,
+  queryDealernetBuscadorMultiple,
+  dealernetRetcodeMessage,
+  computeRutDv,
+  DEFAULT_DEALERNET_PRODUCTS,
+  type DealernetCandidato,
+} from '@/lib/dealernet'
+
+// ─── Umbrales del match (regla pedida por el usuario: 90-95%+, ideal 100%) ───
+export const AUTO_CONFIRM_PROBABILITY = 0.92 // prob. mínima para auto-confirmar
+export const AUTO_CONFIRM_MARGIN = 0.15      // ventaja mínima sobre el 2º candidato
+export const REVIEW_PROBABILITY = 0.65       // debajo de esto ni siquiera es candidato
+const TGR_CACHE_DAYS = 90
+const OWNER_NAME_MATCH_THRESHOLD = 0.85
+
+// ─── Comunas Portal Inmobiliario → código SII ────────────────────────────────
+// Fallback estático, alineado con chile_comunas (los códigos reales confirmados
+// en 0024/0025/0026 — el mapa anterior de parse-listing tenía 5 de 8 códigos
+// equivocados, p.ej. Vitacura 15131 en vez de 15160, y la búsqueda de roles
+// devolvía siempre 0 candidatos). La fuente de verdad es la BD: ver
+// resolveComunaFromDb().
+export const SLUG_TO_SII: Record<string, { siiCode: string; label: string }> = {
+  vitacura: { siiCode: '15160', label: 'Vitacura' },
+  'las-condes': { siiCode: '15108', label: 'Las Condes' },
+  'lo-barnechea': { siiCode: '15161', label: 'Lo Barnechea' },
+  colina: { siiCode: '14201', label: 'Colina' },
+  providencia: { siiCode: '13123', label: 'Providencia' },
+  nunoa: { siiCode: '13120', label: 'Ñuñoa' },
+  'la-reina': { siiCode: '13113', label: 'La Reina' },
+  santiago: { siiCode: '13101', label: 'Santiago' },
+}
+
+// Cache en memoria de chile_comunas (≤346 filas) para resolver por nombre sin
+// depender del mapa estático.
+let comunaCacheAt = 0
+let comunaCache: Array<{ slug: string; name: string; siiCode: string }> = []
+
+export async function resolveComunaFromDb(
+  name: string | null | undefined,
+): Promise<{ siiCode: string; label: string; slug: string } | null> {
+  if (!name) return null
+  const now = Date.now()
+  if (now - comunaCacheAt > 10 * 60_000 || comunaCache.length === 0) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT name, sii_comuna_code FROM chile_comunas WHERE sii_comuna_code IS NOT NULL AND sii_comuna_code <> ''`,
+      )
+      comunaCache = rows.map((r) => ({ slug: normalizeToSlug(r.name), name: r.name, siiCode: r.sii_comuna_code }))
+      comunaCacheAt = now
+    } catch {
+      // sin BD se usa el mapa estático
+    }
+  }
+  const slug = normalizeToSlug(name)
+  // Preferir la coincidencia más larga ("lo-barnechea" antes que "colina"
+  // dentro de un slug largo tipo "casa-la-colina-lo-barnechea")
+  const hit = comunaCache
+    .filter((c) => slug === c.slug || slug.includes(c.slug) || c.slug.includes(slug))
+    .sort((a, b) => b.slug.length - a.slug.length)[0]
+  return hit ? { siiCode: hit.siiCode, label: hit.name, slug: hit.slug } : null
+}
+
+/** Resolución con BD primero y mapa estático como fallback. */
+export async function resolveComunaAsync(
+  name: string | null | undefined,
+): Promise<{ siiCode: string; label: string; slug: string } | null> {
+  return (await resolveComunaFromDb(name)) ?? resolveComuna(name)
+}
+
+function stripAccents(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+}
+
+function normalizeToSlug(s: string): string {
+  return stripAccents(s).toLowerCase().trim().replace(/\s+/g, '-')
+}
+
+export function resolveComuna(name: string | null | undefined): { siiCode: string; label: string; slug: string } | null {
+  if (!name) return null
+  const slug = normalizeToSlug(name)
+  for (const [key, val] of Object.entries(SLUG_TO_SII)) {
+    if (slug.includes(key) || key.includes(slug)) {
+      return { ...val, slug: key }
+    }
+  }
+  return null
+}
+
+export function extractFromSlug(url: string): Record<string, string | number | null> | null {
+  // ej. MLC-2009525691-arriendo-casa-6hab-5ba-vitacura-_JM
+  const match = url.match(/MLC-\d+-(.+?)(?:_JM|$)/)
+  if (!match) return null
+  const slug = match[1].toLowerCase()
+
+  const info: Record<string, string | number | null> = { raw_slug: slug }
+
+  if (slug.includes('arriendo')) info.operation = 'rent'
+  else if (slug.includes('venta')) info.operation = 'sale'
+  else info.operation = null
+
+  if (slug.includes('-casa')) info.property_type = 'casa'
+  else if (slug.includes('-departamento') || slug.includes('-depto') || slug.includes('-dpto')) info.property_type = 'departamento'
+  else if (slug.includes('-oficina')) info.property_type = 'oficina'
+  else if (slug.includes('-terreno')) info.property_type = 'terreno'
+  else info.property_type = null
+
+  const habMatch = slug.match(/(\d+)hab/)
+  info.bedrooms = habMatch ? parseInt(habMatch[1]) : null
+
+  const baMatch = slug.match(/(\d+)ba/)
+  info.bathrooms = baMatch ? parseInt(baMatch[1]) : null
+
+  const comuna = resolveComuna(slug)
+  info.comuna_slug = comuna?.slug ?? null
+  info.sii_code = comuna?.siiCode ?? null
+  info.comuna_label = comuna?.label ?? null
+
+  return info
+}
+
+export async function fetchListingPage(url: string): Promise<string> {
+  const cleanUrl = url.split('#')[0].split('?')[0]
+  const res = await fetch(cleanUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'es-CL,es;q=0.9,en;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+    },
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.text()
+}
+
+// ─── Candidatos SII con scoring V3 ───────────────────────────────────────────
+
+export interface ScoredCandidate extends SiiCandidateRow {
+  match_score: number
+  match_result_v3: MatchResultV3
+}
+
+export async function findSiiCandidatesV3(
+  siiCode: string,
+  listing: ParsedListing,
+): Promise<ScoredCandidate[]> {
+  if (!siiCode) return []
+  const hasGeo = listing.lat != null && listing.lng != null
+
+  if (hasGeo) {
+    const radios = [100, 300, 1000]
+    for (const radius of radios) {
+      try {
+        const res = await pool.query(
+          `SELECT
+             rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
+             superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+             ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+             CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
+                  THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+                  ELSE NULL END AS text_sim
+           FROM sii_roles_cl
+           WHERE sii_comuna_code = $1
+             AND lat IS NOT NULL AND lng IS NOT NULL
+             AND ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
+           ORDER BY distance_m ASC, avaluo_fiscal_total DESC NULLS LAST
+           LIMIT 40`,
+          [siiCode, listing.address ?? null, listing.lat, listing.lng, radius],
+        )
+        if (res.rows.length > 0) {
+          const scored = scoreCandidatesV3(listing, res.rows)
+          const best = scored[0]
+          if (best.match_result_v3.confidence_level === 'confirmed') return scored.slice(0, 12)
+          if (scored.filter((s) => s.match_result_v3.confidence_level === 'high_candidate').length >= 3) return scored.slice(0, 12)
+          if (best.match_score > 0.75 && radius >= 300) return scored.slice(0, 12)
+          if (radius === radios[radios.length - 1]) return scored.slice(0, 12)
+        }
+      } catch {
+        continue
+      }
+    }
+  }
+
+  // Fallback sin coordenadas: dirección + superficie
+  try {
+    let query = `
+      SELECT
+        rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
+        superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+        NULL::double precision AS distance_m,
+        CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
+             THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+             ELSE NULL END AS text_sim
+      FROM sii_roles_cl
+      WHERE sii_comuna_code = $1
+    `
+    const params: unknown[] = [siiCode, listing.address ?? null]
+    if (listing.address) {
+      params.push(`%${listing.address.toUpperCase()}%`)
+      query += ` AND direccion ILIKE $${params.length}`
+    }
+    if (listing.sqm) {
+      params.push(listing.sqm * 0.5, listing.sqm * 1.5)
+      query += ` AND superficie_terreno_m2 BETWEEN $${params.length - 1} AND $${params.length}`
+    }
+    query += ` ORDER BY text_sim DESC NULLS LAST, avaluo_fiscal_total DESC NULLS LAST LIMIT 40`
+    const res = await pool.query(query, params)
+    return scoreCandidatesV3(listing, res.rows).slice(0, 12)
+  } catch {
+    return []
+  }
+}
+
+// ─── Decisión del match (la regla de los 92%) ────────────────────────────────
+
+export interface MatchDecision {
+  status: 'auto_confirmed' | 'needs_review' | 'no_match'
+  best: ScoredCandidate | null
+  reason: string
+}
+
+export function decideMatch(scored: ScoredCandidate[]): MatchDecision {
+  if (scored.length === 0) return { status: 'no_match', best: null, reason: 'Sin candidatos SII en la zona' }
+  const best = scored[0]
+  const second = scored[1]
+  const p1 = best.match_score
+  const p2 = second?.match_score ?? 0
+
+  if (p1 < REVIEW_PROBABILITY) {
+    return { status: 'no_match', best: null, reason: `Mejor candidato con probabilidad ${(p1 * 100).toFixed(0)}% (<65%)` }
+  }
+  if (p1 >= AUTO_CONFIRM_PROBABILITY && p1 - p2 >= AUTO_CONFIRM_MARGIN) {
+    return { status: 'auto_confirmed', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% con ventaja de ${((p1 - p2) * 100).toFixed(0)} pts sobre el 2º` }
+  }
+  if (p1 >= AUTO_CONFIRM_PROBABILITY) {
+    return { status: 'needs_review', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% pero hay un 2º candidato a solo ${((p1 - p2) * 100).toFixed(0)} pts` }
+  }
+  return { status: 'needs_review', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% (<92%): requiere confirmación manual` }
+}
+
+// ─── Utilidades de nombres/direcciones ───────────────────────────────────────
+
+function normalizeName(s: string | null | undefined): string {
+  if (!s) return ''
+  return stripAccents(s).toUpperCase().replace(/[^A-Z0-9Ñ ]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** Similitud de nombres por solapamiento de tokens (orden-independiente):
+ *  "PEREZ SOTO JUAN" vs "JUAN PEREZ SOTO" → 1.0 */
+export function nameSimilarity(a: string | null | undefined, b: string | null | undefined): number {
+  const ta = new Set(normalizeName(a).split(' ').filter((w) => w.length > 1))
+  const tb = new Set(normalizeName(b).split(' ').filter((w) => w.length > 1))
+  if (ta.size === 0 || tb.size === 0) return 0
+  const common = [...ta].filter((w) => tb.has(w)).length
+  return common / Math.min(ta.size, tb.size)
+}
+
+function normalizeAddr(s: string | null | undefined): string {
+  return normalizeName(s)
+    .replace(/\b(AV|AVDA|AVE)\b/g, 'AVENIDA')
+    .replace(/\b(PJE)\b/g, 'PASAJE')
+}
+
+function streetNumber(s: string | null | undefined): string | null {
+  const m = normalizeAddr(s).match(/\b(\d{1,6})\b/)
+  return m ? m[1] : null
+}
+
+/** Cruce documental: ¿la dirección del certificado TGR corresponde a la
+ *  dirección SII del rol elegido? Si sí → el match queda VERIFICADO (ya no es
+ *  solo probabilidad). */
+export function addressesMatch(tgrDir: string | null | undefined, siiDir: string | null | undefined): boolean {
+  const a = normalizeAddr(tgrDir)
+  const b = normalizeAddr(siiDir)
+  if (!a || !b) return false
+  const numA = streetNumber(a)
+  const numB = streetNumber(b)
+  if (numA && numB && numA !== numB) return false
+  const ta = new Set(a.split(' ').filter((w) => w.length > 2 && !/^\d+$/.test(w)))
+  const tb = new Set(b.split(' ').filter((w) => w.length > 2 && !/^\d+$/.test(w)))
+  if (ta.size === 0 || tb.size === 0) return Boolean(numA && numB && numA === numB)
+  const common = [...ta].filter((w) => tb.has(w)).length
+  return common / Math.min(ta.size, tb.size) >= 0.6 && Boolean(!numA || !numB || numA === numB)
+}
+
+// ─── Tipos de fila ───────────────────────────────────────────────────────────
+
+export interface CaptacionRow {
+  id: string
+  source_url: string
+  listing_cl_id: string | null
+  title: string | null
+  operation: string | null
+  property_type: string | null
+  price_raw: number | null
+  currency: string | null
+  sqm: number | null
+  bedrooms: number | null
+  bathrooms: number | null
+  address: string | null
+  comuna_label: string | null
+  sii_comuna_code: string | null
+  latitude: number | null
+  longitude: number | null
+  photos: unknown
+  raw_extracted: Record<string, unknown> | null
+  sii_rol: string | null
+  sii_direccion: string | null
+  match_score: number | null
+  match_confidence: string | null
+  match_verified: boolean
+  match_method: string | null
+  match_signals: unknown
+  candidates: ScoredCandidate[] | null
+  tgr_status: string
+  owner_name: string | null
+  tgr_direccion: string | null
+  tgr_consulted_at: string | null
+  tgr_error: string | null
+  dealernet_status: string
+  owner_rut: string | null
+  owner_rut_candidates: unknown
+  phones: unknown
+  emails: unknown
+  dealernet_consulted_at: string | null
+  dealernet_error: string | null
+  stage: string
+  needs_review: boolean
+  review_reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function getCaptacion(id: string): Promise<CaptacionRow | null> {
+  const { rows } = await pool.query(`SELECT * FROM captaciones_cl WHERE id = $1`, [id])
+  return (rows[0] as CaptacionRow) ?? null
+}
+
+// ─── Etapa 1: extracción ─────────────────────────────────────────────────────
+
+export interface ExtractResult {
+  captacion: CaptacionRow
+  fetch_error: string | null
+}
+
+export async function extractListing(url: string): Promise<ExtractResult> {
+  const cleanUrl = url.split('#')[0].split('?')[0]
+  const slugInfo = extractFromSlug(cleanUrl)
+
+  let parsed: Record<string, unknown> = {}
+  let fetchError: string | null = null
+  try {
+    const html = await fetchListingPage(cleanUrl)
+    const detail = parsePortalListingDetail(html)
+    if (detail) {
+      parsed = {
+        title: detail.title,
+        operation: detail.operation,
+        property_type: detail.property_type,
+        price_raw: detail.price,
+        currency: detail.currency,
+        sqm: detail.square_meters,
+        bedrooms: detail.bedrooms,
+        bathrooms: detail.bathrooms,
+        lat: detail.latitude,
+        lng: detail.longitude,
+        address: detail.address,
+        address_full: detail.address && detail.comuna ? `${detail.address}, ${detail.comuna}` : detail.address,
+        advertiser_name: detail.advertiser_name,
+        advertiser_type: detail.advertiser_type,
+        photos: detail.photos,
+        description: detail.description,
+        comuna_detected: detail.comuna,
+      }
+    } else {
+      fetchError = 'No se pudo interpretar el contenido del anuncio'
+    }
+  } catch (e) {
+    fetchError = e instanceof Error ? e.message : 'Error fetching URL'
+  }
+
+  const comunaMatch = (await resolveComunaAsync((parsed.comuna_detected as string) ?? null))
+    ?? (await resolveComunaAsync((slugInfo?.raw_slug as string) ?? null))
+    ?? (slugInfo?.sii_code
+      ? { siiCode: slugInfo.sii_code as string, label: slugInfo.comuna_label as string, slug: slugInfo.comuna_slug as string }
+      : null)
+
+  const merged: Record<string, unknown> = {
+    ...slugInfo,
+    ...Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== null && v !== undefined)),
+    sii_code: comunaMatch?.siiCode ?? null,
+    comuna_slug: comunaMatch?.slug ?? null,
+    comuna_label: comunaMatch?.label ?? null,
+    fetch_error: fetchError,
+  }
+
+  // Registrar el anuncio también en listings_cl (capa cruda) — así la captación
+  // deja huella en el inventario general y el dedup posterior lo ve.
+  let listingClId: string | null = null
+  const externalId = cleanUrl.match(/MLC-?\d+/)?.[0]?.replace('MLC-', 'MLC') ?? null
+  if (externalId) {
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO listings_cl (
+           portal, source_type, external_id, source_url, operation, advertiser_type,
+           advertiser_name, price, bedrooms, bathrooms, square_meters, property_type,
+           comuna_raw, address, latitude, longitude, description, photos
+         ) VALUES ('portalinmobiliario','portal',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+         ON CONFLICT (portal, external_id) DO UPDATE SET
+           source_url = EXCLUDED.source_url,
+           price = COALESCE(EXCLUDED.price, listings_cl.price),
+           address = COALESCE(EXCLUDED.address, listings_cl.address),
+           latitude = COALESCE(EXCLUDED.latitude, listings_cl.latitude),
+           longitude = COALESCE(EXCLUDED.longitude, listings_cl.longitude),
+           last_seen_at = now(), updated_at = now()
+         RETURNING id`,
+        [
+          externalId,
+          cleanUrl,
+          merged.operation ?? null,
+          (merged.advertiser_type as string) ?? 'unknown',
+          merged.advertiser_name ?? null,
+          merged.currency === 'CLP' ? merged.price_raw ?? null : null,
+          merged.bedrooms ?? null,
+          merged.bathrooms ?? null,
+          merged.sqm ?? null,
+          merged.property_type ?? null,
+          merged.comuna_label ?? null,
+          merged.address ?? null,
+          merged.lat ?? null,
+          merged.lng ?? null,
+          merged.description ?? null,
+          merged.photos ? JSON.stringify(merged.photos) : null,
+        ],
+      )
+      listingClId = rows[0]?.id ?? null
+    } catch {
+      // listings_cl es secundario aquí: la captación sigue aunque falle el upsert
+    }
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO captaciones_cl (
+       source_url, listing_cl_id, title, operation, property_type, price_raw, currency,
+       sqm, bedrooms, bathrooms, address, comuna_label, sii_comuna_code,
+       latitude, longitude, photos, raw_extracted
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     ON CONFLICT (source_url) DO UPDATE SET
+       listing_cl_id = COALESCE(EXCLUDED.listing_cl_id, captaciones_cl.listing_cl_id),
+       title = COALESCE(EXCLUDED.title, captaciones_cl.title),
+       operation = COALESCE(EXCLUDED.operation, captaciones_cl.operation),
+       property_type = COALESCE(EXCLUDED.property_type, captaciones_cl.property_type),
+       price_raw = COALESCE(EXCLUDED.price_raw, captaciones_cl.price_raw),
+       currency = COALESCE(EXCLUDED.currency, captaciones_cl.currency),
+       sqm = COALESCE(EXCLUDED.sqm, captaciones_cl.sqm),
+       bedrooms = COALESCE(EXCLUDED.bedrooms, captaciones_cl.bedrooms),
+       bathrooms = COALESCE(EXCLUDED.bathrooms, captaciones_cl.bathrooms),
+       address = COALESCE(EXCLUDED.address, captaciones_cl.address),
+       comuna_label = COALESCE(EXCLUDED.comuna_label, captaciones_cl.comuna_label),
+       sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, captaciones_cl.sii_comuna_code),
+       latitude = COALESCE(EXCLUDED.latitude, captaciones_cl.latitude),
+       longitude = COALESCE(EXCLUDED.longitude, captaciones_cl.longitude),
+       photos = COALESCE(EXCLUDED.photos, captaciones_cl.photos),
+       raw_extracted = EXCLUDED.raw_extracted,
+       updated_at = now()
+     RETURNING *`,
+    [
+      cleanUrl,
+      listingClId,
+      merged.title ?? null,
+      merged.operation ?? null,
+      merged.property_type ?? null,
+      merged.price_raw ?? null,
+      merged.currency ?? null,
+      merged.sqm ?? null,
+      merged.bedrooms ?? null,
+      merged.bathrooms ?? null,
+      (merged.address_full as string) ?? (merged.address as string) ?? null,
+      merged.comuna_label ?? null,
+      merged.sii_code ?? null,
+      merged.lat ?? null,
+      merged.lng ?? null,
+      merged.photos ? JSON.stringify(merged.photos) : null,
+      JSON.stringify(merged),
+    ],
+  )
+
+  return { captacion: rows[0] as CaptacionRow, fetch_error: fetchError }
+}
+
+// ─── Etapa 2: match de rol ───────────────────────────────────────────────────
+
+function captacionToParsedListing(c: CaptacionRow): ParsedListing {
+  const raw = (c.raw_extracted ?? {}) as Record<string, unknown>
+  return {
+    title: c.title ?? undefined,
+    address: (raw.address as string) ?? c.address,
+    address_full: (raw.address_full as string) ?? c.address,
+    lat: c.latitude != null ? Number(c.latitude) : null,
+    lng: c.longitude != null ? Number(c.longitude) : null,
+    sqm: c.sqm,
+    bedrooms: c.bedrooms,
+    bathrooms: c.bathrooms,
+    operation: c.operation,
+    property_type: c.property_type,
+    price_raw: c.price_raw != null ? Number(c.price_raw) : null,
+    currency: c.currency,
+  }
+}
+
+export interface MatchStageResult {
+  captacion: CaptacionRow
+  decision: MatchDecision
+  candidates: ScoredCandidate[]
+}
+
+export async function matchRol(captacionId: string): Promise<MatchStageResult> {
+  const c = await getCaptacion(captacionId)
+  if (!c) throw new Error('Captación no encontrada')
+  if (!c.sii_comuna_code) {
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET match_confidence = 'none', needs_review = true,
+         review_reason = 'Comuna sin datos SII disponibles', updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [captacionId],
+    )
+    return { captacion: rows[0], decision: { status: 'no_match', best: null, reason: 'Comuna sin datos SII' }, candidates: [] }
+  }
+
+  const listing = captacionToParsedListing(c)
+  const scored = await findSiiCandidatesV3(c.sii_comuna_code, listing)
+  const decision = decideMatch(scored)
+
+  const best = decision.status === 'auto_confirmed' ? decision.best : null
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       sii_rol = $2,
+       sii_direccion = $3,
+       match_score = $4,
+       match_confidence = $5,
+       match_method = $6,
+       match_signals = $7,
+       candidates = $8,
+       stage = CASE WHEN $2::text IS NOT NULL THEN 'matched' ELSE stage END,
+       needs_review = $9,
+       review_reason = $10,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [
+      captacionId,
+      best?.rol ?? null,
+      best?.direccion ?? null,
+      decision.best?.match_score ?? scored[0]?.match_score ?? null,
+      decision.status === 'auto_confirmed' ? 'confirmed' : decision.status === 'needs_review' ? 'candidate' : 'none',
+      decision.status === 'auto_confirmed' ? 'auto' : null,
+      best ? JSON.stringify(best.match_result_v3.signals) : null,
+      JSON.stringify(scored),
+      decision.status === 'needs_review',
+      decision.status === 'auto_confirmed' ? null : decision.reason,
+    ],
+  )
+
+  if (best) await syncListingIdentity(rows[0] as CaptacionRow)
+  return { captacion: rows[0] as CaptacionRow, decision, candidates: scored }
+}
+
+/** Selección manual de rol entre los candidatos guardados. */
+export async function selectRolManual(captacionId: string, rol: string): Promise<CaptacionRow> {
+  const c = await getCaptacion(captacionId)
+  if (!c) throw new Error('Captación no encontrada')
+  const candidates = (c.candidates ?? []) as ScoredCandidate[]
+  const chosen = candidates.find((x) => x.rol === rol)
+  if (!chosen) throw new Error(`El rol ${rol} no está entre los candidatos de esta captación`)
+
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       sii_rol = $2, sii_direccion = $3, match_score = $4,
+       match_confidence = 'manual', match_method = 'manual',
+       match_signals = $5, stage = 'matched',
+       needs_review = false, review_reason = NULL, updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [captacionId, chosen.rol, chosen.direccion, chosen.match_score, JSON.stringify(chosen.match_result_v3.signals)],
+  )
+  await syncListingIdentity(rows[0] as CaptacionRow)
+  return rows[0] as CaptacionRow
+}
+
+/** Propaga el match al anuncio en listings_cl (dirección exacta + rol). */
+async function syncListingIdentity(c: CaptacionRow): Promise<void> {
+  if (!c.listing_cl_id || !c.sii_rol) return
+  try {
+    await pool.query(
+      `UPDATE listings_cl SET
+         exact_address = $2,
+         rol_matriz_candidate = $3,
+         identity_score = $4,
+         identity_signals = $5,
+         location_confidence = CASE WHEN $4 >= 0.92 THEN 'exact' ELSE 'high' END,
+         identity_resolved_at = now(),
+         updated_at = now()
+       WHERE id = $1`,
+      [c.listing_cl_id, c.sii_direccion, c.sii_rol, c.match_score, c.match_signals ? JSON.stringify(c.match_signals) : null],
+    )
+  } catch {
+    // 'exact'/'high' pueden no estar en el CHECK de location_confidence en
+    // esquemas antiguos — el pipeline no debe morir por eso.
+  }
+}
+
+// ─── Etapa 3: dueño vía TGR ──────────────────────────────────────────────────
+
+export interface TgrStageResult {
+  captacion: CaptacionRow
+  from_cache: boolean
+  cooldown_ms?: number
+}
+
+export async function lookupOwnerTgr(captacionId: string): Promise<TgrStageResult> {
+  const c = await getCaptacion(captacionId)
+  if (!c) throw new Error('Captación no encontrada')
+  if (!c.sii_rol || !c.sii_comuna_code) throw new Error('La captación aún no tiene rol confirmado')
+
+  const rolCompleto = `${c.sii_comuna_code}-${c.sii_rol}`
+
+  // 1) Cache: certificado previo (del scraper masivo o de otra captación)
+  const cached = await pool.query(
+    `SELECT * FROM tgr_certificados
+     WHERE rol = $1 AND estado IN ('exitosa','sin_deuda') AND nombre IS NOT NULL
+       AND fecha_consulta > now() - interval '${TGR_CACHE_DAYS} days'
+     LIMIT 1`,
+    [rolCompleto],
+  )
+  if (cached.rows[0]) {
+    const cert = cached.rows[0]
+    const row = await applyTgrResult(c, cert.nombre, cert.direccion, cert.estado === 'sin_deuda' ? 'sin_deuda' : 'ok', null)
+    return { captacion: row, from_cache: true }
+  }
+
+  const { consultarTgrRol, tgrCooldownRemainingMs } = await import('@/lib/tgr')
+
+  // 2) Cooldown WAF: no intentar siquiera lanzar Chromium
+  const cooldown = tgrCooldownRemainingMs()
+  if (cooldown > 0) {
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET tgr_status = 'cooldown', tgr_error = $2, updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [captacionId, `WAF TGR en cooldown, reintentar en ${Math.ceil(cooldown / 1000)}s`],
+    )
+    return { captacion: rows[0], from_cache: false, cooldown_ms: cooldown }
+  }
+
+  // 3) Consulta on-demand (serializada dentro de lib/tgr.ts)
+  const comunaRes = await pool.query(
+    `SELECT name FROM chile_comunas WHERE sii_comuna_code = $1 LIMIT 1`,
+    [c.sii_comuna_code],
+  )
+  const comunaNombre = comunaRes.rows[0]?.name ?? c.comuna_label
+  if (!comunaNombre) throw new Error('No se pudo resolver el nombre de la comuna para TGR')
+
+  const [manzana, predio] = c.sii_rol.split('-')
+  const cert = await consultarTgrRol(manzana, predio, comunaNombre, rolCompleto)
+
+  // Persistir el certificado en la tabla compartida (mismo ON CONFLICT que la
+  // ruta /api/chile/tgr-lookup y el scraper masivo)
+  await pool.query(
+    `INSERT INTO tgr_certificados (
+       rol, comuna, nombre, direccion, total_deuda_no_vencida, total_deuda_morosa,
+       total_acogido_art_196_197, tiene_deuda, fecha_emision_certificado, liquidada_al,
+       emitido_a_las, codigo_verificacion, estado, intentos, error, fecha_consulta, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,$14, now(), now())
+     ON CONFLICT (rol) DO UPDATE SET
+       comuna = excluded.comuna, nombre = excluded.nombre, direccion = excluded.direccion,
+       total_deuda_no_vencida = excluded.total_deuda_no_vencida,
+       total_deuda_morosa = excluded.total_deuda_morosa,
+       total_acogido_art_196_197 = excluded.total_acogido_art_196_197,
+       tiene_deuda = excluded.tiene_deuda,
+       fecha_emision_certificado = excluded.fecha_emision_certificado,
+       liquidada_al = excluded.liquidada_al, emitido_a_las = excluded.emitido_a_las,
+       codigo_verificacion = excluded.codigo_verificacion,
+       estado = excluded.estado, intentos = tgr_certificados.intentos + 1, error = excluded.error,
+       fecha_consulta = now(), updated_at = now()`,
+    [
+      rolCompleto, cert.comuna, cert.nombre, cert.direccion,
+      cert.totalDeudaNoVencida, cert.totalDeudaMorosa, cert.totalAcogidoArt196197,
+      cert.tieneDeuda, cert.fechaEmisionCertificado, cert.liquidadaAl, cert.emitidoALas,
+      cert.codigoVerificacion, cert.estado, cert.error,
+    ],
+  )
+
+  if (cert.estado === 'bloqueado') {
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET tgr_status = 'cooldown', tgr_error = $2, updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [captacionId, cert.error ?? 'Bloqueado por WAF de tesoreria.cl'],
+    )
+    return { captacion: rows[0], from_cache: false, cooldown_ms: tgrCooldownRemainingMs() }
+  }
+  if (cert.estado === 'error' || !cert.nombre) {
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET tgr_status = 'error', tgr_error = $2, updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [captacionId, cert.error ?? 'El certificado no trae nombre del propietario'],
+    )
+    return { captacion: rows[0], from_cache: false }
+  }
+
+  const row = await applyTgrResult(c, cert.nombre, cert.direccion, cert.estado === 'sin_deuda' ? 'sin_deuda' : 'ok', null)
+  return { captacion: row, from_cache: false }
+}
+
+/** Aplica el resultado TGR + cruce documental de dirección (verificación 100%). */
+async function applyTgrResult(
+  c: CaptacionRow,
+  ownerName: string | null,
+  tgrDireccion: string | null,
+  status: 'ok' | 'sin_deuda',
+  error: string | null,
+): Promise<CaptacionRow> {
+  const verified = addressesMatch(tgrDireccion, c.sii_direccion)
+  // Si el match fue automático y la dirección TGR NO calza con la SII, la
+  // identificación deja de ser confiable: degradar a revisión manual.
+  const degrade = !verified && c.match_method === 'auto' && tgrDireccion != null
+
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       tgr_status = $2, owner_name = $3, tgr_direccion = $4, tgr_error = $5,
+       tgr_consulted_at = now(),
+       match_verified = $6,
+       needs_review = CASE WHEN $7 THEN true ELSE needs_review END,
+       review_reason = CASE WHEN $7 THEN 'La dirección del certificado TGR no coincide con la dirección SII del rol elegido' ELSE review_reason END,
+       stage = CASE WHEN $3::text IS NOT NULL AND NOT $7 THEN 'owner_found' ELSE stage END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [c.id, status, ownerName, tgrDireccion, error, verified, degrade],
+  )
+  return rows[0] as CaptacionRow
+}
+
+// ─── Etapa 4: contacto vía DealerNet ─────────────────────────────────────────
+
+export interface DealernetStageResult {
+  captacion: CaptacionRow
+  rut_candidates?: DealernetCandidato[]
+}
+
+function candidatoFullName(cand: DealernetCandidato): string {
+  return [cand.nombres, cand.apellidos, cand.razonSocial].filter(Boolean).join(' ')
+}
+
+export async function lookupContactsDealernet(captacionId: string): Promise<DealernetStageResult> {
+  const c = await getCaptacion(captacionId)
+  if (!c) throw new Error('Captación no encontrada')
+  if (!c.sii_rol || !c.sii_comuna_code) throw new Error('La captación aún no tiene rol confirmado')
+  if (!c.owner_name) throw new Error('Primero hay que obtener el nombre del dueño vía TGR')
+
+  const comunaRes = await pool.query(
+    `SELECT name FROM chile_comunas WHERE sii_comuna_code = $1 LIMIT 1`,
+    [c.sii_comuna_code],
+  )
+  const comunaNombre: string | null = comunaRes.rows[0]?.name ?? c.comuna_label
+
+  // Buscador Múltiple: por rol → por nombre → por dirección, hasta encontrar
+  // candidatos cuyo nombre calce con el dueño TGR.
+  const attempts: Array<{ tipo: 'rol' | 'nombre' | 'direccion'; args: string }> = []
+  if (comunaNombre) attempts.push({ tipo: 'rol', args: `${c.sii_rol}, ${comunaNombre}` })
+  attempts.push({ tipo: 'nombre', args: c.owner_name })
+  if (c.sii_direccion && comunaNombre) attempts.push({ tipo: 'direccion', args: `${c.sii_direccion}, ${comunaNombre}` })
+
+  let allCandidates: DealernetCandidato[] = []
+  let lastError: string | null = null
+  let chosen: DealernetCandidato | null = null
+
+  for (const attempt of attempts) {
+    try {
+      const res = await queryDealernetBuscadorMultiple(attempt.tipo, attempt.args)
+      const retErr = dealernetRetcodeMessage(res.retcode)
+      if (retErr) { lastError = `DealerNet (${attempt.tipo}): ${retErr}`; continue }
+      const withRut = res.candidatos.filter((x) => x.rut != null)
+      allCandidates = allCandidates.concat(withRut)
+      const scored = withRut
+        .map((cand) => ({ cand, sim: nameSimilarity(c.owner_name, candidatoFullName(cand)) }))
+        .sort((a, b) => b.sim - a.sim)
+      if (scored[0] && scored[0].sim >= OWNER_NAME_MATCH_THRESHOLD) {
+        const second = scored[1]
+        // Si dos RUT distintos matchean igual de bien, es ambiguo
+        if (!second || second.sim < scored[0].sim || second.cand.rut === scored[0].cand.rut) {
+          chosen = scored[0].cand
+          break
+        }
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : 'Error consultando DealerNet'
+    }
+  }
+
+  if (!chosen) {
+    const status = allCandidates.length > 0 ? 'ambiguous' : 'not_found'
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET
+         dealernet_status = $2, owner_rut_candidates = $3, dealernet_error = $4,
+         dealernet_consulted_at = now(),
+         needs_review = CASE WHEN $2 = 'ambiguous' THEN true ELSE needs_review END,
+         review_reason = CASE WHEN $2 = 'ambiguous' THEN 'Varios RUT candidatos en DealerNet: elegir manualmente' ELSE review_reason END,
+         updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [captacionId, status, JSON.stringify(allCandidates.slice(0, 15)), lastError],
+    )
+    return { captacion: rows[0], rut_candidates: allCandidates.slice(0, 15) }
+  }
+
+  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates)
+}
+
+/** Consulta final por RUT (productos de contactabilidad) y persistencia. */
+export async function finishDealernetByRut(
+  c: CaptacionRow,
+  rutNum: number,
+  rutDv: string,
+  allCandidates: DealernetCandidato[] = [],
+): Promise<DealernetStageResult> {
+  const lookup = await queryDealernet({ num: rutNum, dv: rutDv }, DEFAULT_DEALERNET_PRODUCTS)
+  const retErr = dealernetRetcodeMessage(lookup.retcode)
+  if (retErr) {
+    const { rows } = await pool.query(
+      `UPDATE captaciones_cl SET dealernet_status = 'error', dealernet_error = $2,
+         dealernet_consulted_at = now(), updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [c.id, `DealerNet: ${retErr}`],
+    )
+    return { captacion: rows[0] }
+  }
+
+  // Persistir en las tablas compartidas de DealerNet (cache reutilizable por
+  // /chile/duenos y /dealer)
+  try {
+    const contactRes = await pool.query(
+      `INSERT INTO dealernet_contacts_cl
+         (rut_num, rut_dv, sii_rol, sii_comuna_code, nombre_titular, products_requested, retcode, retmsg, raw_response, portal_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (rut_num, rut_dv) DO UPDATE SET
+         sii_rol = COALESCE(EXCLUDED.sii_rol, dealernet_contacts_cl.sii_rol),
+         sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, dealernet_contacts_cl.sii_comuna_code),
+         nombre_titular = COALESCE(EXCLUDED.nombre_titular, dealernet_contacts_cl.nombre_titular),
+         retcode = EXCLUDED.retcode, retmsg = EXCLUDED.retmsg,
+         raw_response = EXCLUDED.raw_response,
+         portal_url = COALESCE(EXCLUDED.portal_url, dealernet_contacts_cl.portal_url)
+       RETURNING id`,
+      [rutNum, rutDv, c.sii_rol, c.sii_comuna_code, lookup.nombreTitular, lookup.productsRequested,
+       lookup.retcode, lookup.retmsg, JSON.stringify(lookup.raw), c.source_url],
+    )
+    const contactId = contactRes.rows[0].id
+    for (const phone of lookup.phones) {
+      await pool.query(
+        `INSERT INTO dealernet_phones_cl
+           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, ranking, calidad, product_code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (contact_id, phone_e164, product_code) DO UPDATE SET
+           categoria = EXCLUDED.categoria, ranking = EXCLUDED.ranking, calidad = EXCLUDED.calidad`,
+        [contactId, phone.phone_e164, phone.phone_raw, phone.categoria, phone.clasificacion,
+         phone.ind_whatsapp, phone.idimagen, phone.ranking, phone.calidad, phone.product_code],
+      )
+    }
+  } catch {
+    // cache compartido es secundario — los teléfonos quedan igual en captaciones_cl
+  }
+
+  const phonesJson = lookup.phones.map((p) => ({
+    numero: p.phone_e164,
+    tipo: p.clasificacion,
+    categoria: p.categoria,
+    whatsapp: p.ind_whatsapp,
+    fuente: p.product_code,
+    calidad: p.calidad,
+  }))
+  const emailsJson = lookup.emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
+
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       dealernet_status = 'ok',
+       owner_rut = $2,
+       owner_rut_candidates = $3,
+       phones = $4,
+       emails = $5,
+       dealernet_error = NULL,
+       dealernet_consulted_at = now(),
+       stage = CASE WHEN $6::int > 0 THEN 'contact_found' ELSE stage END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [c.id, `${rutNum}-${rutDv}`, JSON.stringify(allCandidates.slice(0, 15)),
+     JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length],
+  )
+  return { captacion: rows[0] as CaptacionRow }
+}

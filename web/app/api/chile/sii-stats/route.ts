@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import { pool } from '@/lib/db'
 
 /**
  * GET /api/chile/sii-stats?sii_comuna_code=15108

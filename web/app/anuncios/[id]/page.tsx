@@ -12,7 +12,7 @@ import {
   Armchair, ArrowUpDown, BellRing, Car, ChefHat, Flame,
   Sun, TreePalm, Waves, Wind, Home, Star, ExternalLink, ChevronDown, X,
 } from 'lucide-react'
-import type { SourceReference, Listing } from '@/lib/mock-listings'
+import type { SourceReference, Listing } from '@/lib/types'
 
 const PriceChart = dynamic(() => import('@/components/PriceChart'), { ssr: false })
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })

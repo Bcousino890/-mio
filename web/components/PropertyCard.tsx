@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Listing } from '@/lib/mock-listings'
+import type { Listing } from '@/lib/types'
 import { ChevronLeft, ChevronRight, MoreHorizontal, MapPin } from 'lucide-react'
 
 const BADGE_DOT: Record<string, string> = {

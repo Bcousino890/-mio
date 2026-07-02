@@ -2,9 +2,7 @@
 // Lives for the lifetime of the Node process — survives individual HTTP
 // requests/browser disconnects, which is the whole point: the job keeps
 // running server-side even if nobody is watching the status endpoint.
-import { Pool } from 'pg'
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+import { pool } from '@/lib/db'
 
 export type JobStatus = 'idle' | 'running' | 'done' | 'error'
 

@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { pool } from '@/lib/db'
 
 // Reuse existing pool or create new one
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
 
 const SORT_CLAUSES: Record<string, string> = {
   recent: 'l.last_seen_at DESC',
@@ -94,60 +91,59 @@ export async function GET(request: NextRequest) {
       conditions.push(`EXISTS (SELECT 1 FROM listing_changes lc WHERE lc.listing_id = l.id AND lc.change_type = 'price_down')`)
     }
 
-    // Advanced filter conditions
-    // TODO: Implement location search with fuzzy matching or autocomplete
-    // if (location) {
-    //   const locationTerm = addParam(`%${location}%`)
-    //   conditions.push(`(l.zone_raw ILIKE ${locationTerm} OR l.address ILIKE ${locationTerm})`)
-    // }
+    // ── Filtros avanzados ────────────────────────────────────────────────────
+    if (location) {
+      const locationTerm = addParam(`%${location}%`)
+      conditions.push(`(l.zone_raw ILIKE ${locationTerm} OR l.subzone_raw ILIKE ${locationTerm} OR l.address ILIKE ${locationTerm})`)
+    }
 
-    // TODO: Implement characteristics filtering (stored as JSONB array in l.features)
-    // Characteristics should be checked if all requested characteristics are present
-    // if (characteristics && characteristics.length > 0) {
-    //   const charConditions = characteristics.map(c => `l.features @> '["${c}"]'::jsonb`).join(' AND ')
-    //   conditions.push(`(${charConditions})`)
-    // }
+    // features es un array JSONB de textos libres del portal ("Terraza",
+    // "Ascensor", ...) — se exige que TODAS las características pedidas
+    // aparezcan (busca como subcadena, insensible a mayúsculas).
+    if (characteristics && characteristics.length > 0) {
+      for (const characteristic of characteristics) {
+        const term = addParam(`%${characteristic}%`)
+        conditions.push(`EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(l.features, '[]'::jsonb)) f WHERE f ILIKE ${term})`)
+      }
+    }
 
-    // TODO: Implement property type filtering
-    // This may require a property_type column or derived from other fields
-    // if (propertyType && propertyType.length > 0) {
-    //   conditions.push(`l.property_type IN (${propertyType.map(t => addParam(t)).join(',')})`)
-    // }
+    if (propertyType && propertyType.length > 0) {
+      conditions.push(`l.property_type IN (${propertyType.map((t) => addParam(t)).join(',')})`)
+    }
 
-    // TODO: Implement furnished status filtering
-    // if (furnished) {
-    //   conditions.push(`l.furnished = ${addParam(furnished === 'true')}`)
-    // }
+    if (furnished === 'true' || furnished === 'false') {
+      const furnishedCond = `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(l.features, '[]'::jsonb)) f WHERE f ILIKE '%amueblad%')`
+      conditions.push(furnished === 'true' ? furnishedCond : `NOT ${furnishedCond}`)
+    }
 
-    // TODO: Implement year built filtering
-    // if (yearBuiltMin !== null) {
-    //   conditions.push(`l.year_built >= ${addParam(yearBuiltMin)}`)
-    // }
-    // if (yearBuiltMax !== null) {
-    //   conditions.push(`l.year_built <= ${addParam(yearBuiltMax)}`)
-    // }
+    if (pricePerSqmMin !== null || pricePerSqmMax !== null) {
+      const priceSqm = `(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END)`
+      if (pricePerSqmMin !== null) conditions.push(`${priceSqm} >= ${addParam(pricePerSqmMin)}`)
+      if (pricePerSqmMax !== null) conditions.push(`${priceSqm} <= ${addParam(pricePerSqmMax)}`)
+    }
 
-    // TODO: Implement price per sqm filtering
-    // if (pricePerSqmMin !== null || pricePerSqmMax !== null) {
-    //   const priceSqm = `(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END)`
-    //   if (pricePerSqmMin !== null) conditions.push(`${priceSqm} >= ${addParam(pricePerSqmMin)}`)
-    //   if (pricePerSqmMax !== null) conditions.push(`${priceSqm} <= ${addParam(pricePerSqmMax)}`)
-    // }
+    // Vistas y orientación no tienen columna propia: se buscan en features y
+    // descripción (los portales las publican como texto).
+    if (view) {
+      const viewTerm = addParam(`%vistas%${view}%`)
+      const viewTerm2 = addParam(`%${view}%`)
+      conditions.push(`(l.description ILIKE ${viewTerm} OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(l.features, '[]'::jsonb)) f WHERE f ILIKE ${viewTerm2}))`)
+    }
 
-    // TODO: Implement view filtering
-    // if (view) {
-    //   conditions.push(`l.view = ${addParam(view)}`)
-    // }
+    if (orientation) {
+      const orientTerm = addParam(`%orientaci_n ${orientation}%`)
+      const orientTerm2 = addParam(`%${orientation}%`)
+      conditions.push(`(l.description ILIKE ${orientTerm} OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(l.features, '[]'::jsonb)) f WHERE f ILIKE ${orientTerm2}))`)
+    }
 
-    // TODO: Implement orientation filtering
-    // if (orientation) {
-    //   conditions.push(`l.orientation = ${addParam(orientation)}`)
-    // }
+    if (energyRating) {
+      conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
+    }
 
-    // TODO: Implement energy rating filtering
-    // if (energyRating) {
-    //   conditions.push(`l.energy_rating = ${addParam(energyRating)}`)
-    // }
+    // year_built no existe como columna en listings — el parámetro se acepta
+    // pero no filtra; si algún día se añade la columna, implementar aquí.
+    void yearBuiltMin
+    void yearBuiltMax
 
     // Filtros de ubicación normalizada (migración 0019)
     // Notas:
