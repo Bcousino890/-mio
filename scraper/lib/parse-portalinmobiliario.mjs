@@ -228,7 +228,7 @@ export function parseListPage(html) {
  * Prioriza el blob "Nordic" embebido (ver extractNordicBlob/extractInitialState)
  * si existe; de lo contrario cae a selectores DOM con regex.
  */
-export function parseDetailPage(html, external_id) {
+export async function parseDetailPage(html, external_id) {
   try {
     if (!html) return null
 
