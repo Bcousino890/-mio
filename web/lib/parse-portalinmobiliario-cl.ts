@@ -258,7 +258,6 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
     const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
     // URL del modal con la galería completa y total de fotos
-    const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
     const galleryMediaCounters = gallery?.media_counters ?? []
     const galleryUrl = galleryMediaCounters.find((m: any) => m?.type === 'photos')?.url ?? null
     const photosTotalCount = gallery?.total_count ?? (photos.length || null)
