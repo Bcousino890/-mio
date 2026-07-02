@@ -170,6 +170,9 @@ function normalizeAddress(addr: string | null): string {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '') // unaccent
     .toUpperCase()
+    // Puntuación fuera ANTES de expandir abreviaturas: "AV." y ", VITACURA"
+    // impedían el match exacto de vía+número (la señal más fuerte del scoring)
+    .replace(/[.,;:()]/g, ' ')
     .replace(/\b(AV|AVENIDA|AVDA|AVE|PJE|PASAJE|CLLE|CALLE|DR|DOCTOR)\b/g, (m) => {
       const map: Record<string, string> = {
         AV: 'AVENIDA',
@@ -488,8 +491,13 @@ function distanceEvidence(candidate: SiiCandidateRow): MatchSignalV3 {
   if (d <= 50) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 1.4 }
   if (d <= 120) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0.7 }
   if (d <= 300) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0 }
-  if (d <= 600) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.6 }
-  return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -1.4 }
+  if (d <= 600) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.4 }
+  // Los pines de los portales pueden venir corridos 1-2 km: lejos penaliza
+  // suave, y si la dirección calza exacta la penalización se anula del todo
+  // (ver scoreCandidateV3).
+  if (d <= 1200) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.8 }
+  if (d <= 2500) return { signal: 'distancia', value: `${(d / 1000).toFixed(1)} km`, log_odds: -1.2 }
+  return { signal: 'distancia', value: `${(d / 1000).toFixed(1)} km`, log_odds: -1.6 }
 }
 
 function builtAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
@@ -606,9 +614,17 @@ function avaluoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): Mat
 }
 
 export function scoreCandidateV3(listing: ParsedListing, candidate: SiiCandidateRow): MatchResultV3 {
+  const addressSig = addressEvidence(listing, candidate)
+  let distanceSig = distanceEvidence(candidate)
+  // Pin corrido: si la dirección calza exacta (vía + número), el pin lejano
+  // no debe hundir al candidato correcto — la dirección es evidencia dura y
+  // la ubicación del anuncio es notoriamente imprecisa en los portales.
+  if (addressSig.log_odds >= 4 && distanceSig.log_odds < 0) {
+    distanceSig = { signal: 'distancia', value: `${distanceSig.value} (pin lejano ignorado: dirección exacta)`, log_odds: 0 }
+  }
   const signals = [
-    addressEvidence(listing, candidate),
-    distanceEvidence(candidate),
+    addressSig,
+    distanceSig,
     builtAreaEvidence(listing, candidate),
     landAreaEvidence(listing, candidate),
     floorsEvidence(listing, candidate),

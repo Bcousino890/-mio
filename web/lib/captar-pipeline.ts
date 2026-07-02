@@ -185,7 +185,10 @@ export async function findSiiCandidatesV3(
   const hasGeo = listing.lat != null && listing.lng != null
 
   if (hasGeo) {
-    const radios = [100, 300, 1000]
+    // Los portales difuminan o corren el pin (a veces 1-2 km): se expande el
+    // radio progresivamente y la dirección/ficha técnica deciden — una
+    // dirección exacta anula la penalización por distancia (ver scoreCandidateV3).
+    const radios = [100, 300, 1000, 2500]
     for (const radius of radios) {
       try {
         const res = await pool.query(
