@@ -95,7 +95,7 @@ export default function CaptacionChilePage() {
   return (
     <PageShell
       title="Captación Chile"
-      subtitle="Pipeline URL → rol → dueño → teléfonos · captaciones persistidas"
+      subtitle="Pipeline URL → dueño → rol exacto → teléfonos · captaciones persistidas"
       action={
         <Link
           href="/chile/captar-url"

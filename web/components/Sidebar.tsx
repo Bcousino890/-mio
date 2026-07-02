@@ -109,7 +109,7 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       href: '/chile/captacion',
       label: 'Captación',
       icon: Users,
-      description: 'Pipeline URL → rol → dueño → teléfonos',
+      description: 'Pipeline URL → dueño → rol exacto → teléfonos',
       badge: 'NEW',
     },
     {
