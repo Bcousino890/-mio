@@ -93,6 +93,69 @@ export interface ParsedListingDetail {
   advertiser_type: string
   photos: string[]
   description: string | null
+  // Ficha técnica completa (V4) — claves para identificar la propiedad exacta
+  sqm_terreno: number | null      // superficie total / de terreno
+  sqm_construida: number | null   // superficie construida / útil
+  floors: number | null           // cantidad de pisos
+  year_built: number | null       // año de construcción (o derivado de antigüedad)
+  orientation: string | null      // norte / surponiente / ...
+  parking: number | null
+  storage: number | null          // bodegas
+  has_pool: boolean
+  is_condo: boolean
+}
+
+// ─── Ficha técnica (V4) ──────────────────────────────────────────────────────
+// Las specs se extraen del HTML renderizado (SSR) + título + descripción con
+// regex, en vez de navegar la estructura del blob: la tabla de specs cambia de
+// componente según el tipo de ficha, pero el texto visible es estable.
+
+function toNum(s: string | undefined | null): number | null {
+  if (!s) return null
+  const n = parseInt(s.replace(/[.\s]/g, ''), 10)
+  return Number.isFinite(n) ? n : null
+}
+
+export function extractTechSpecs(html: string, title: string | null, description: string | null) {
+  // Se busca sobre texto plano (sin tags) para que los valores separados por
+  // markup ("<th>Superficie total</th><td>4.022 m²</td>") queden adyacentes.
+  const text = `${title ?? ''}\n${html.replace(/<[^>]+>/g, ' ')}\n${description ?? ''}`
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+
+  const m = (re: RegExp) => text.match(re)?.[1] ?? null
+
+  let sqm_terreno = toNum(m(/superficie (?:total|de terreno|terreno)\s*:?\s*([\d.]+)\s*m/i))
+  let sqm_construida = toNum(m(/superficie (?:construida|útil|util)\s*:?\s*([\d.]+)\s*m/i))
+
+  // Patrón de título muy común en casas: "4.022/258 Mt2" = terreno/construida
+  const dual = (title ?? '').match(/([\d.]{3,7})\s*\/\s*([\d.]{2,6})\s*(?:m|mt)2?/i)
+  if (dual) {
+    const a = toNum(dual[1])
+    const b = toNum(dual[2])
+    if (a && b) {
+      sqm_terreno = sqm_terreno ?? Math.max(a, b)
+      sqm_construida = sqm_construida ?? Math.min(a, b)
+    }
+  }
+
+  const floors = toNum(m(/cantidad de pisos\s*:?\s*(\d+)/i)) ?? toNum(m(/\b(\d)\s*pisos\b/i))
+
+  let year_built = toNum(m(/año de construcci[oó]n\s*:?\s*(\d{4})/i))
+  if (!year_built) {
+    const antiguedad = toNum(m(/antig[üu]edad\s*:?\s*(\d{1,3})\s*años?/i))
+    if (antiguedad != null) year_built = new Date().getFullYear() - antiguedad
+  }
+
+  const orientation = m(/orientaci[oó]n\s*:?\s*(nor(?:te|oriente|poniente)|sur(?:oriente|poniente)?|oriente|poniente|noreste|noroeste|sureste|suroeste)/i)
+
+  const parking = toNum(m(/estacionamientos?\s*:?\s*(\d{1,2})/i))
+  const storage = toNum(m(/bodegas?\s*:?\s*(\d{1,2})/i))
+
+  const has_pool = /piscina\s*:?\s*(sí|si\b|1)/i.test(text) || /\bpiscina\b/i.test(`${title ?? ''} ${description ?? ''}`)
+  const is_condo = /\bcondominio\b|\bcond\.?\b/i.test(`${title ?? ''} ${description ?? ''}`)
+
+  return { sqm_terreno, sqm_construida, floors, year_built, orientation: orientation ? orientation.toLowerCase() : null, parking, storage, has_pool, is_condo }
 }
 
 /**
@@ -173,6 +236,13 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
 
     const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
+    const specs = extractTechSpecs(html, title, description)
+    // El "m²" destacado suele ser la superficie total; si la ficha técnica
+    // trae terreno/construida por separado, esos valores son la verdad.
+    if (specs.sqm_terreno == null && square_meters != null && specs.sqm_construida != null && square_meters > specs.sqm_construida) {
+      specs.sqm_terreno = square_meters
+    }
+
     return {
       portal: 'portalinmobiliario',
       operation,
@@ -187,6 +257,7 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       advertiser_name, advertiser_type,
       photos: photos.slice(0, 30),
       description,
+      ...specs,
     }
   } catch {
     return null

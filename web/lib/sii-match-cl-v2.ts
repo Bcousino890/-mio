@@ -21,6 +21,13 @@ export interface ParsedListing {
   lng?: number | null
   sqm?: number | null
   sqm_util?: number | null
+  // V4 — ficha técnica separada (terreno vs construida) y atributos duros
+  sqm_terreno?: number | null
+  sqm_construida?: number | null
+  year_built?: number | null
+  is_condo?: boolean | null
+  has_pool?: boolean | null
+  orientation?: string | null
   bedrooms?: number | null
   bathrooms?: number | null
   parking?: number | null
@@ -45,6 +52,13 @@ export interface SiiCandidateRow {
   lng: number | null
   distance_m?: number | null
   text_sim?: number | null
+  // V4 — agregados de sii_construcciones_cl por rol
+  numero_pisos?: number | null
+  anio_construccion?: number | null
+  // V4 — score de verificación visual con IA (fotos del anuncio vs satélite),
+  // -1..1; lo inyecta el paso de verificación visual cuando corre
+  visual_score?: number | null
+  visual_reasons?: string | null
 }
 
 export interface MatchComponent {
@@ -479,31 +493,85 @@ function distanceEvidence(candidate: SiiCandidateRow): MatchSignalV3 {
 }
 
 function builtAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
-  const sqm = listing.sqm ?? listing.sqm_util
+  // V4: si la ficha técnica trae superficie construida explícita, la señal es
+  // mucho más fuerte que el "m²" genérico del anuncio (que suele ser terreno
+  // en casas y mezclaba ambas cosas).
+  const explicit = listing.sqm_construida ?? null
+  const sqm = explicit ?? listing.sqm ?? listing.sqm_util
   const built = candidate.superficie_construida_m2
   if (!sqm || !built) return { signal: 'sup_construida', value: 'sin datos', log_odds: 0 }
   const diff = Math.abs(sqm - built) / sqm
   const label = `anuncio ${sqm} m² vs SII ${built} m²`
-  if (diff <= 0.08) return { signal: 'sup_construida', value: label, log_odds: 1.6 }
-  if (diff <= 0.2) return { signal: 'sup_construida', value: label, log_odds: 0.8 }
+  const strong = explicit != null
+  if (diff <= 0.08) return { signal: 'sup_construida', value: label, log_odds: strong ? 2.0 : 1.6 }
+  if (diff <= 0.2) return { signal: 'sup_construida', value: label, log_odds: strong ? 1.0 : 0.8 }
   if (diff <= 0.4) return { signal: 'sup_construida', value: label, log_odds: 0 }
-  if (diff <= 0.7) return { signal: 'sup_construida', value: label, log_odds: -1.0 }
-  return { signal: 'sup_construida', value: label, log_odds: -1.8 }
+  if (diff <= 0.7) return { signal: 'sup_construida', value: label, log_odds: strong ? -1.2 : -1.0 }
+  return { signal: 'sup_construida', value: label, log_odds: strong ? -2.2 : -1.8 }
 }
 
 function landAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
   // Solo aporta para casas/terrenos: en deptos el terreno es del edificio entero.
   const type = listing.property_type?.toLowerCase() ?? ''
   const isLandRelevant = type.includes('casa') || type.includes('terreno') || type.includes('parcela')
-  const sqm = listing.sqm
+  const explicit = listing.sqm_terreno ?? null
+  // Sin terreno explícito, el "m²" del anuncio solo sirve si no representa ya
+  // la construida (evitar comparar 258 m² construidos contra 5.000 de terreno)
+  const sqm = explicit ?? (listing.sqm_construida == null ? listing.sqm : null)
   const land = candidate.superficie_terreno_m2
   if (!isLandRelevant || !sqm || !land) return { signal: 'sup_terreno', value: 'no aplica', log_odds: 0 }
   const diff = Math.abs(sqm - land) / sqm
   const label = `anuncio ${sqm} m² vs terreno ${land} m²`
-  if (diff <= 0.1) return { signal: 'sup_terreno', value: label, log_odds: 1.0 }
-  if (diff <= 0.3) return { signal: 'sup_terreno', value: label, log_odds: 0.4 }
+  const strong = explicit != null
+  if (diff <= 0.1) return { signal: 'sup_terreno', value: label, log_odds: strong ? 1.8 : 1.0 }
+  if (diff <= 0.3) return { signal: 'sup_terreno', value: label, log_odds: strong ? 0.8 : 0.4 }
   if (diff <= 0.7) return { signal: 'sup_terreno', value: label, log_odds: 0 }
-  return { signal: 'sup_terreno', value: label, log_odds: -0.6 }
+  return { signal: 'sup_terreno', value: label, log_odds: strong ? -1.0 : -0.6 }
+}
+
+// ─── Señales V4: pisos, año de construcción, condominio, verificación visual ─
+
+function floorsEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  if (listing.floors == null || candidate.numero_pisos == null) {
+    return { signal: 'pisos', value: 'sin datos', log_odds: 0 }
+  }
+  const diff = Math.abs(listing.floors - candidate.numero_pisos)
+  const label = `anuncio ${listing.floors} vs SII ${candidate.numero_pisos}`
+  if (diff === 0) return { signal: 'pisos', value: label, log_odds: 1.2 }
+  if (diff === 1) return { signal: 'pisos', value: label, log_odds: 0.2 }
+  return { signal: 'pisos', value: label, log_odds: -0.8 }
+}
+
+function yearBuiltEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  if (listing.year_built == null || candidate.anio_construccion == null) {
+    return { signal: 'anio_construccion', value: 'sin datos', log_odds: 0 }
+  }
+  const diff = Math.abs(listing.year_built - candidate.anio_construccion)
+  const label = `anuncio ~${listing.year_built} vs SII ${candidate.anio_construccion}`
+  if (diff <= 3) return { signal: 'anio_construccion', value: label, log_odds: 1.4 }
+  if (diff <= 8) return { signal: 'anio_construccion', value: label, log_odds: 0.6 }
+  if (diff <= 20) return { signal: 'anio_construccion', value: label, log_odds: 0 }
+  return { signal: 'anio_construccion', value: label, log_odds: -0.8 }
+}
+
+function condoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
+  // En condominios los roles suelen colgar de un rol padre o compartir manzana;
+  // solo bonifica levemente — muchos condominios antiguos tienen roles simples.
+  if (!listing.is_condo) return { signal: 'condominio', value: 'no aplica', log_odds: 0 }
+  if (candidate.rol_padre) return { signal: 'condominio', value: 'rol de condominio', log_odds: 0.4 }
+  return { signal: 'condominio', value: 'rol simple', log_odds: 0 }
+}
+
+function visualEvidence(candidate: SiiCandidateRow): MatchSignalV3 {
+  // Score -1..1 del verificador visual con IA (fotos del anuncio vs recorte
+  // satelital de la parcela: piscina, tipo de techo/teja, entorno).
+  if (candidate.visual_score == null) return { signal: 'verificacion_visual', value: 'no ejecutada', log_odds: 0 }
+  const v = Math.max(-1, Math.min(1, candidate.visual_score))
+  return {
+    signal: 'verificacion_visual',
+    value: candidate.visual_reasons ?? `score ${v.toFixed(2)}`,
+    log_odds: v * 1.5,
+  }
 }
 
 function destinoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
@@ -543,8 +611,12 @@ export function scoreCandidateV3(listing: ParsedListing, candidate: SiiCandidate
     distanceEvidence(candidate),
     builtAreaEvidence(listing, candidate),
     landAreaEvidence(listing, candidate),
+    floorsEvidence(listing, candidate),
+    yearBuiltEvidence(listing, candidate),
+    condoEvidence(listing, candidate),
     destinoEvidence(listing, candidate),
     avaluoEvidence(listing, candidate),
+    visualEvidence(candidate),
   ]
   const logOdds = V3_PRIOR + signals.reduce((s, x) => s + x.log_odds, 0)
   const probability = 1 / (1 + Math.exp(-logOdds))

@@ -1,13 +1,14 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import PageShell from '@/components/PageShell'
 import {
   Link2, Search, MapPin, Layers, ExternalLink, AlertCircle, CheckCircle2,
   RefreshCw, Phone, User, FileCheck2, Landmark, ShieldCheck, Copy,
-  MessageCircle, ChevronRight, Clock,
+  MessageCircle, ChevronRight, Clock, ChevronLeft, Sparkles, Waves,
+  Building, Compass, Calendar, Car, Archive, Home,
 } from 'lucide-react'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
@@ -35,6 +36,7 @@ interface Captacion {
   sii_comuna_code: string | null
   latitude: number | null
   longitude: number | null
+  photos: string[] | null
   raw_extracted: Record<string, unknown> | null
   sii_rol: string | null
   sii_direccion: string | null
@@ -96,6 +98,61 @@ function Step({ n, label, state, detail }: { n: number; label: string; state: St
   )
 }
 
+function TechChip({ icon: Icon, label, highlight }: { icon: React.ComponentType<{ size?: number; className?: string }>; label: string; highlight?: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border ${
+      highlight ? 'border-cyan-900/50 bg-cyan-950/20 text-cyan-300' : 'border-[var(--c-border-card)] bg-slate-900/30 text-slate-400'
+    }`}>
+      <Icon size={10} />
+      {label}
+    </span>
+  )
+}
+
+/** Detección determinista de piscina en el tile satelital del candidato,
+ *  en el navegador (canvas + umbral de color cian). Es el respaldo sin IA:
+ *  señal orientativa, no entra al scoring. */
+function PoolBadge({ lat, lng }: { lat: number | string | null; lng: number | string | null }) {
+  const [pool, setPool] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (lat == null || lng == null) return
+    const zoom = 19
+    const n = 2 ** zoom
+    const x = Math.floor(((Number(lng) + 180) / 360) * n)
+    const latRad = (Number(lat) * Math.PI) / 180
+    const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const cv = document.createElement('canvas')
+        cv.width = img.width
+        cv.height = img.height
+        const ctx = cv.getContext('2d')
+        if (!ctx) return
+        ctx.drawImage(img, 0, 0)
+        const d = ctx.getImageData(0, 0, cv.width, cv.height).data
+        let cyan = 0
+        for (let i = 0; i < d.length; i += 16) {
+          const r = d[i], g = d[i + 1], b = d[i + 2]
+          if (b > 120 && g > 100 && b > r + 30 && g > r + 10) cyan++
+        }
+        setPool(cyan > 40)
+      } catch {
+        setPool(null) // canvas "tainted" si el CDN no manda CORS — sin señal
+      }
+    }
+    img.onerror = () => setPool(null)
+    img.src = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y}/${x}`
+  }, [lat, lng])
+  if (!pool) return null
+  return (
+    <span className="text-[10px] text-cyan-300 bg-cyan-950/30 border border-cyan-900/40 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
+      <Waves size={9} /> posible piscina (satélite)
+    </span>
+  )
+}
+
 export default function CaptarUrlPage() {
   const [url, setUrl] = useState('')
   const [captacion, setCaptacion] = useState<Captacion | null>(null)
@@ -105,6 +162,9 @@ export default function CaptarUrlPage() {
   const [dnRunning, setDnRunning] = useState(false)
   const [selectedRol, setSelectedRol] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [photoIdx, setPhotoIdx] = useState(0)
+  const [visualRunning, setVisualRunning] = useState(false)
+  const [visualError, setVisualError] = useState<string | null>(null)
 
   // ── Etapa 3+4 auto-encadenadas ─────────────────────────────────────────────
   const runDealernet = useCallback(async (id: string) => {
@@ -210,6 +270,30 @@ export default function CaptarUrlPage() {
     navigator.clipboard?.writeText(text)
     setCopied(text)
     setTimeout(() => setCopied(null), 1500)
+  }
+
+  // ── Verificación visual con IA (fotos ↔ satélite) ─────────────────────────
+  const runVisual = async () => {
+    if (!captacion) return
+    setVisualRunning(true)
+    setVisualError(null)
+    try {
+      const res = await fetch(`/api/chile/captar/${captacion.id}/visual`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success && data.captacion) {
+        setCaptacion(data.captacion)
+        // Si la verificación visual auto-confirmó el rol, continuar el pipeline
+        if (data.captacion.sii_rol && !data.captacion.needs_review && !data.captacion.owner_name) {
+          await runTgr(data.captacion.id)
+        }
+      } else {
+        setVisualError(data.error ?? 'Error en la verificación visual')
+      }
+    } catch {
+      setVisualError('Error de red')
+    } finally {
+      setVisualRunning(false)
+    }
   }
 
   // ── Estados del stepper ────────────────────────────────────────────────────
@@ -472,22 +556,103 @@ export default function CaptarUrlPage() {
                   No se pudo cargar la página del anuncio ({String(ext.fetch_error)}) — datos derivados de la URL.
                 </p>
               )}
+
+              {/* Ficha técnica V4 */}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {ext.sqm_terreno != null && <TechChip icon={MapPin} label={`Terreno ${Number(ext.sqm_terreno).toLocaleString('es-CL')} m²`} />}
+                {ext.sqm_construida != null && <TechChip icon={Home} label={`Construida ${Number(ext.sqm_construida).toLocaleString('es-CL')} m²`} />}
+                {ext.floors != null && <TechChip icon={Building} label={`${ext.floors} piso${Number(ext.floors) !== 1 ? 's' : ''}`} />}
+                {ext.year_built != null && <TechChip icon={Calendar} label={`Construcción ~${ext.year_built}`} />}
+                {ext.orientation && <TechChip icon={Compass} label={`Orientación ${String(ext.orientation)}`} />}
+                {ext.parking != null && <TechChip icon={Car} label={`${ext.parking} estac.`} />}
+                {ext.storage != null && <TechChip icon={Archive} label={`${ext.storage} bodega${Number(ext.storage) !== 1 ? 's' : ''}`} />}
+                {ext.has_pool === true && <TechChip icon={Waves} label="Piscina" highlight />}
+                {ext.is_condo === true && <TechChip icon={Building} label="Condominio" />}
+              </div>
             </div>
           </div>
 
+          {/* ── Galería de fotos del anuncio ── */}
+          {(captacion.photos?.length ?? 0) > 0 && (
+            <div>
+              <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold mb-3">
+                Fotos del anuncio ({captacion.photos!.length}) — compara piscina, techo y entorno con el satélite
+              </p>
+              <div className="rounded-2xl overflow-hidden ring-1 ring-white/5 bg-black relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={captacion.photos![Math.min(photoIdx, captacion.photos!.length - 1)]}
+                  alt={`Foto ${photoIdx + 1}`}
+                  className="w-full h-80 object-contain bg-black"
+                />
+                {captacion.photos!.length > 1 && (
+                  <>
+                    <button
+                      onClick={() => setPhotoIdx((p) => (p - 1 + captacion.photos!.length) % captacion.photos!.length)}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/60 text-white/80 hover:bg-black/80 flex items-center justify-center"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <button
+                      onClick={() => setPhotoIdx((p) => (p + 1) % captacion.photos!.length)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/60 text-white/80 hover:bg-black/80 flex items-center justify-center"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                    <span className="absolute bottom-2 right-3 text-[10px] text-white/70 bg-black/50 px-1.5 py-0.5 rounded">
+                      {photoIdx + 1}/{captacion.photos!.length}
+                    </span>
+                  </>
+                )}
+              </div>
+              {captacion.photos!.length > 1 && (
+                <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
+                  {captacion.photos!.map((p, i) => (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      key={p}
+                      src={p}
+                      alt=""
+                      onClick={() => setPhotoIdx(i)}
+                      className={`h-14 w-20 object-cover rounded-lg cursor-pointer flex-shrink-0 border-2 transition-all ${
+                        i === photoIdx ? 'border-blue-500' : 'border-transparent opacity-60 hover:opacity-100'
+                      }`}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Candidatos SII ── */}
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-3 gap-3">
               <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold flex items-center gap-2">
                 <FileCheck2 size={12} />
                 {captacion.sii_rol && !captacion.needs_review
                   ? 'Rol confirmado'
                   : `Roles SII candidatos ${candidates.length > 0 ? `(${candidates.length})` : ''}`}
               </p>
-              {captacion.needs_review && captacion.review_reason && (
-                <span className="text-[11px] text-amber-400">{captacion.review_reason}</span>
-              )}
+              <div className="flex items-center gap-2">
+                {captacion.needs_review && captacion.review_reason && (
+                  <span className="text-[11px] text-amber-400">{captacion.review_reason}</span>
+                )}
+                {candidates.length > 0 && captacion.needs_review && (
+                  <button
+                    onClick={runVisual}
+                    disabled={visualRunning}
+                    className="flex items-center gap-1.5 text-[11px] font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-2.5 py-1.5 rounded-lg transition-colors flex-shrink-0"
+                    title="Compara las fotos del anuncio con el satélite de cada candidato (piscina, techo, entorno) usando IA"
+                  >
+                    {visualRunning ? <RefreshCw size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                    {visualRunning ? 'Comparando fotos ↔ satélite…' : 'Verificación visual IA'}
+                  </button>
+                )}
+              </div>
             </div>
+            {visualError && (
+              <p className="text-[11px] text-red-400 mb-2 flex items-center gap-1.5"><AlertCircle size={11} /> {visualError}</p>
+            )}
 
             {!captacion.sii_comuna_code ? (
               <div className="p-4 rounded-xl border border-amber-900/40 bg-amber-950/20 text-amber-400 text-sm flex items-center gap-2">
@@ -544,12 +709,29 @@ export default function CaptarUrlPage() {
                               Construida: {rol.superficie_construida_m2}m²
                             </span>
                           )}
+                          {rol.numero_pisos != null && (
+                            <span className="text-[10px] text-slate-500 bg-slate-900/30 px-1.5 py-0.5 rounded">
+                              {rol.numero_pisos} piso{rol.numero_pisos !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                          {rol.anio_construccion != null && (
+                            <span className="text-[10px] text-slate-500 bg-slate-900/30 px-1.5 py-0.5 rounded">
+                              Año {rol.anio_construccion}
+                            </span>
+                          )}
                           {rol.distance_m != null && (
                             <span className="text-[10px] text-slate-500 bg-slate-900/30 px-1.5 py-0.5 rounded">
                               {Math.round(rol.distance_m)} m del pin
                             </span>
                           )}
+                          <PoolBadge lat={rol.lat} lng={rol.lng} />
                         </div>
+                        {rol.visual_reasons && (
+                          <p className={`text-[10px] mt-1.5 flex items-start gap-1 ${Number(rol.visual_score) > 0.3 ? 'text-emerald-400' : Number(rol.visual_score) < -0.3 ? 'text-red-400' : 'text-slate-500'}`}>
+                            <Sparkles size={9} className="mt-0.5 flex-shrink-0" />
+                            <span>IA visual: {rol.visual_reasons}</span>
+                          </p>
+                        )}
                       </div>
                       <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                         <div className={`px-2.5 py-1 rounded-lg border text-xs font-bold ${probColor(rol.match_score)}`}>

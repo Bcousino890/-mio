@@ -35,7 +35,11 @@ import {
 
 // ─── Umbrales del match (regla pedida por el usuario: 90-95%+, ideal 100%) ───
 export const AUTO_CONFIRM_PROBABILITY = 0.92 // prob. mínima para auto-confirmar
-export const AUTO_CONFIRM_MARGIN = 0.15      // ventaja mínima sobre el 2º candidato
+export const AUTO_CONFIRM_MARGIN = 0.15      // ventaja mínima sobre el 2º (en probabilidad)
+// Con muchas señales positivas la sigmoide se satura (dos candidatos pueden
+// quedar 0.99 vs 0.94 aunque uno tenga 10 puntos más de log-odds = miles de
+// veces más probable). Por eso la ventaja también puede cumplirse en log-odds.
+export const AUTO_CONFIRM_LOG_ODDS_MARGIN = 2.2 // ≈ 9× más probable que el 2º
 export const REVIEW_PROBABILITY = 0.65       // debajo de esto ni siquiera es candidato
 const TGR_CACHE_DAYS = 90
 const OWNER_NAME_MATCH_THRESHOLD = 0.85
@@ -186,17 +190,25 @@ export async function findSiiCandidatesV3(
       try {
         const res = await pool.query(
           `SELECT
-             rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-             superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
-             ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
-             CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
-                  THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+             r.rol, r.direccion, r.avaluo_fiscal_total, r.superficie_terreno_m2,
+             r.superficie_construida_m2, r.codigo_destino_principal, r.rol_padre, r.lat, r.lng,
+             con.numero_pisos, con.anio_construccion,
+             ST_DistanceSphere(r.geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) AS distance_m,
+             CASE WHEN $2::text IS NOT NULL AND r.direccion IS NOT NULL
+                  THEN similarity(unaccent_immutable(upper(r.direccion)), unaccent_immutable(upper($2)))
                   ELSE NULL END AS text_sim
-           FROM sii_roles_cl
-           WHERE sii_comuna_code = $1
-             AND lat IS NOT NULL AND lng IS NOT NULL
-             AND ST_DistanceSphere(geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
-           ORDER BY distance_m ASC, avaluo_fiscal_total DESC NULLS LAST
+           FROM sii_roles_cl r
+           LEFT JOIN LATERAL (
+             SELECT max(c.numero_pisos) AS numero_pisos,
+                    round(sum(c.superficie_m2 * c.anio_construccion)::numeric
+                          / NULLIF(sum(c.superficie_m2) FILTER (WHERE c.anio_construccion IS NOT NULL), 0))::int AS anio_construccion
+             FROM sii_construcciones_cl c
+             WHERE c.rol_id = r.id AND (c.numero_pisos IS NOT NULL OR c.anio_construccion IS NOT NULL)
+           ) con ON true
+           WHERE r.sii_comuna_code = $1
+             AND r.lat IS NOT NULL AND r.lng IS NOT NULL
+             AND ST_DistanceSphere(r.geom, ST_SetSRID(ST_MakePoint($4, $3), 4326)) < $5
+           ORDER BY distance_m ASC, r.avaluo_fiscal_total DESC NULLS LAST
            LIMIT 40`,
           [siiCode, listing.address ?? null, listing.lat, listing.lng, radius],
         )
@@ -218,25 +230,34 @@ export async function findSiiCandidatesV3(
   try {
     let query = `
       SELECT
-        rol, direccion, avaluo_fiscal_total, superficie_terreno_m2,
-        superficie_construida_m2, codigo_destino_principal, rol_padre, lat, lng,
+        r.rol, r.direccion, r.avaluo_fiscal_total, r.superficie_terreno_m2,
+        r.superficie_construida_m2, r.codigo_destino_principal, r.rol_padre, r.lat, r.lng,
+        con.numero_pisos, con.anio_construccion,
         NULL::double precision AS distance_m,
-        CASE WHEN $2::text IS NOT NULL AND direccion IS NOT NULL
-             THEN similarity(unaccent_immutable(upper(direccion)), unaccent_immutable(upper($2)))
+        CASE WHEN $2::text IS NOT NULL AND r.direccion IS NOT NULL
+             THEN similarity(unaccent_immutable(upper(r.direccion)), unaccent_immutable(upper($2)))
              ELSE NULL END AS text_sim
-      FROM sii_roles_cl
-      WHERE sii_comuna_code = $1
+      FROM sii_roles_cl r
+      LEFT JOIN LATERAL (
+        SELECT max(c.numero_pisos) AS numero_pisos,
+               round(sum(c.superficie_m2 * c.anio_construccion)::numeric
+                     / NULLIF(sum(c.superficie_m2) FILTER (WHERE c.anio_construccion IS NOT NULL), 0))::int AS anio_construccion
+        FROM sii_construcciones_cl c
+        WHERE c.rol_id = r.id AND (c.numero_pisos IS NOT NULL OR c.anio_construccion IS NOT NULL)
+      ) con ON true
+      WHERE r.sii_comuna_code = $1
     `
     const params: unknown[] = [siiCode, listing.address ?? null]
     if (listing.address) {
       params.push(`%${listing.address.toUpperCase()}%`)
-      query += ` AND direccion ILIKE $${params.length}`
+      query += ` AND r.direccion ILIKE $${params.length}`
     }
-    if (listing.sqm) {
-      params.push(listing.sqm * 0.5, listing.sqm * 1.5)
-      query += ` AND superficie_terreno_m2 BETWEEN $${params.length - 1} AND $${params.length}`
+    const landHint = listing.sqm_terreno ?? listing.sqm
+    if (landHint) {
+      params.push(landHint * 0.5, landHint * 1.5)
+      query += ` AND r.superficie_terreno_m2 BETWEEN $${params.length - 1} AND $${params.length}`
     }
-    query += ` ORDER BY text_sim DESC NULLS LAST, avaluo_fiscal_total DESC NULLS LAST LIMIT 40`
+    query += ` ORDER BY text_sim DESC NULLS LAST, r.avaluo_fiscal_total DESC NULLS LAST LIMIT 40`
     const res = await pool.query(query, params)
     return scoreCandidatesV3(listing, res.rows).slice(0, 12)
   } catch {
@@ -258,15 +279,21 @@ export function decideMatch(scored: ScoredCandidate[]): MatchDecision {
   const second = scored[1]
   const p1 = best.match_score
   const p2 = second?.match_score ?? 0
+  const lo1 = best.match_result_v3?.log_odds ?? 0
+  const lo2 = second?.match_result_v3?.log_odds ?? -99
 
   if (p1 < REVIEW_PROBABILITY) {
     return { status: 'no_match', best: null, reason: `Mejor candidato con probabilidad ${(p1 * 100).toFixed(0)}% (<65%)` }
   }
-  if (p1 >= AUTO_CONFIRM_PROBABILITY && p1 - p2 >= AUTO_CONFIRM_MARGIN) {
-    return { status: 'auto_confirmed', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% con ventaja de ${((p1 - p2) * 100).toFixed(0)} pts sobre el 2º` }
+  const clearWinner = p1 - p2 >= AUTO_CONFIRM_MARGIN || lo1 - lo2 >= AUTO_CONFIRM_LOG_ODDS_MARGIN
+  if (p1 >= AUTO_CONFIRM_PROBABILITY && clearWinner) {
+    const ventaja = p1 - p2 >= AUTO_CONFIRM_MARGIN
+      ? `${((p1 - p2) * 100).toFixed(0)} pts sobre el 2º`
+      : `${(lo1 - lo2).toFixed(1)} log-odds (≈${Math.round(Math.exp(lo1 - lo2))}× más probable que el 2º)`
+    return { status: 'auto_confirmed', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% con ventaja de ${ventaja}` }
   }
   if (p1 >= AUTO_CONFIRM_PROBABILITY) {
-    return { status: 'needs_review', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% pero hay un 2º candidato a solo ${((p1 - p2) * 100).toFixed(0)} pts` }
+    return { status: 'needs_review', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% pero el 2º candidato está demasiado cerca` }
   }
   return { status: 'needs_review', best, reason: `Probabilidad ${(p1 * 100).toFixed(0)}% (<92%): requiere confirmación manual` }
 }
@@ -404,6 +431,16 @@ export async function extractListing(url: string): Promise<ExtractResult> {
         photos: detail.photos,
         description: detail.description,
         comuna_detected: detail.comuna,
+        // Ficha técnica V4
+        sqm_terreno: detail.sqm_terreno,
+        sqm_construida: detail.sqm_construida,
+        floors: detail.floors,
+        year_built: detail.year_built,
+        orientation: detail.orientation,
+        parking: detail.parking,
+        storage: detail.storage,
+        has_pool: detail.has_pool,
+        is_condo: detail.is_condo,
       }
     } else {
       fetchError = 'No se pudo interpretar el contenido del anuncio'
@@ -525,6 +562,7 @@ export async function extractListing(url: string): Promise<ExtractResult> {
 
 function captacionToParsedListing(c: CaptacionRow): ParsedListing {
   const raw = (c.raw_extracted ?? {}) as Record<string, unknown>
+  const num = (v: unknown) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
   return {
     title: c.title ?? undefined,
     address: (raw.address as string) ?? c.address,
@@ -538,6 +576,14 @@ function captacionToParsedListing(c: CaptacionRow): ParsedListing {
     property_type: c.property_type,
     price_raw: c.price_raw != null ? Number(c.price_raw) : null,
     currency: c.currency,
+    // Ficha técnica V4 (persistida en raw_extracted)
+    sqm_terreno: num(raw.sqm_terreno),
+    sqm_construida: num(raw.sqm_construida),
+    floors: num(raw.floors),
+    year_built: num(raw.year_built),
+    orientation: (raw.orientation as string) ?? null,
+    is_condo: raw.is_condo === true,
+    has_pool: raw.has_pool === true,
   }
 }
 
@@ -595,6 +641,72 @@ export async function matchRol(captacionId: string): Promise<MatchStageResult> {
 
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
   return { captacion: rows[0] as CaptacionRow, decision, candidates: scored }
+}
+
+/**
+ * Verificación visual con IA (V4): compara las fotos del anuncio con el
+ * satélite de cada candidato (piscina, techo/teja, entorno) y re-puntúa.
+ * Puede subir un match dudoso por encima del 92% (auto-confirmación) o
+ * hundir candidatos que contradicen las fotos.
+ */
+export async function verifyVisual(captacionId: string): Promise<MatchStageResult> {
+  const c = await getCaptacion(captacionId)
+  if (!c) throw new Error('Captación no encontrada')
+  const prevCandidates = (c.candidates ?? []) as ScoredCandidate[]
+  if (prevCandidates.length === 0) throw new Error('No hay candidatos que verificar — corre primero el match')
+  if (c.match_method === 'manual') throw new Error('El rol ya fue confirmado manualmente')
+
+  const { verifyCandidatesVisually } = await import('@/lib/visual-match-cl')
+  const raw = (c.raw_extracted ?? {}) as Record<string, unknown>
+  const photos: string[] = Array.isArray(c.photos) ? (c.photos as string[]) : []
+
+  const verdicts = await verifyCandidatesVisually(photos, prevCandidates, {
+    title: c.title,
+    description: (raw.description as string) ?? null,
+    has_pool: raw.has_pool === true,
+    property_type: c.property_type,
+  })
+
+  const byRol = new Map(verdicts.map((v) => [v.rol, v]))
+  const listing = captacionToParsedListing(c)
+  const rescored = scoreCandidatesV3(
+    listing,
+    prevCandidates.map((cand) => ({
+      ...cand,
+      visual_score: byRol.get(cand.rol)?.score ?? cand.visual_score ?? null,
+      visual_reasons: byRol.get(cand.rol)?.reasons ?? cand.visual_reasons ?? null,
+    })),
+  )
+  const decision = decideMatch(rescored)
+
+  const best = decision.status === 'auto_confirmed' ? decision.best : null
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       sii_rol = COALESCE($2, sii_rol),
+       sii_direccion = COALESCE($3, sii_direccion),
+       match_score = $4,
+       match_confidence = CASE WHEN $2::text IS NOT NULL THEN 'confirmed' ELSE match_confidence END,
+       match_method = CASE WHEN $2::text IS NOT NULL THEN 'auto+visual' ELSE match_method END,
+       match_signals = COALESCE($5, match_signals),
+       candidates = $6,
+       stage = CASE WHEN $2::text IS NOT NULL THEN 'matched' ELSE stage END,
+       needs_review = $7,
+       review_reason = $8,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [
+      captacionId,
+      best?.rol ?? null,
+      best?.direccion ?? null,
+      rescored[0]?.match_score ?? null,
+      best ? JSON.stringify(best.match_result_v3.signals) : null,
+      JSON.stringify(rescored),
+      decision.status === 'needs_review',
+      decision.status === 'auto_confirmed' ? null : decision.reason,
+    ],
+  )
+  if (best) await syncListingIdentity(rows[0] as CaptacionRow)
+  return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored }
 }
 
 /** Selección manual de rol entre los candidatos guardados. */
