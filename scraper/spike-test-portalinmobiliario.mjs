@@ -151,7 +151,7 @@ async function main() {
   const parsed = []
   for (const r of results) {
     if (!r.ok) continue
-    const item = parseDetailPage(r.html, r.label)
+    const item = await parseDetailPage(r.html, r.label)
     parsed.push(item)
     console.log(`  ${r.label}:`)
     console.log(`     property_code=${item?.property_code ?? 'NULL'}  advertiser_id=${item?.advertiser_id ?? 'NULL'}`)

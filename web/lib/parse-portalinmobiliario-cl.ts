@@ -103,6 +103,9 @@ export interface ParsedListingDetail {
   storage: number | null          // bodegas
   has_pool: boolean
   is_condo: boolean
+  // URL del modal con la galería completa (Fase 2: requiere fetch adicional)
+  gallery_url?: string | null
+  photos_total_count?: number | null
 }
 
 // ─── Ficha técnica (V4) ──────────────────────────────────────────────────────
@@ -254,6 +257,11 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
 
     const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
+    // URL del modal con la galería completa y total de fotos
+    const galleryMediaCounters = gallery?.media_counters ?? []
+    const galleryUrl = galleryMediaCounters.find((m: any) => m?.type === 'photos')?.url ?? null
+    const photosTotalCount = gallery?.total_count ?? (photos.length || null)
+
     const specs = extractTechSpecs(html, title, description)
     // El "m²" destacado suele ser la superficie total; si la ficha técnica
     // trae terreno/construida por separado, esos valores son la verdad.
@@ -275,6 +283,8 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       advertiser_name, advertiser_type,
       photos: photos.slice(0, 40),
       description,
+      gallery_url: galleryUrl,
+      photos_total_count: photosTotalCount,
       ...specs,
     }
   } catch {

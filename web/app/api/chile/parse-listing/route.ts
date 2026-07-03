@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { extractFromSlug, fetchListingPage, findSiiCandidatesV3, resolveComunaAsync } from '@/lib/captar-pipeline'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
+import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import type { ParsedListing } from '@/lib/sii-match-cl-v2'
 
 /**
@@ -26,6 +27,20 @@ export async function POST(request: NextRequest) {
       const html = await fetchListingPage(url)
       const detail = parsePortalListingDetail(html)
       if (detail) {
+        // Si hay URL de galería, fetch todas las fotos del modal
+        let allPhotos = detail.photos
+        if (detail.gallery_url) {
+          const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+          // Combina fotos del HTML estático con las del modal (deduplicado)
+          const seenPhotos = new Set(allPhotos)
+          for (const photo of galleryPhotos) {
+            if (!seenPhotos.has(photo)) {
+              allPhotos.push(photo)
+              seenPhotos.add(photo)
+            }
+          }
+        }
+
         parsed = {
           title: detail.title,
           operation: detail.operation,
@@ -41,7 +56,8 @@ export async function POST(request: NextRequest) {
           address_full: detail.address && detail.comuna ? `${detail.address}, ${detail.comuna}` : detail.address,
           advertiser_name: detail.advertiser_name,
           advertiser_type: detail.advertiser_type,
-          photos: detail.photos,
+          photos: allPhotos.slice(0, 40),
+          photos_total_count: detail.photos_total_count,
           description: detail.description,
           comuna_detected: detail.comuna,
         }

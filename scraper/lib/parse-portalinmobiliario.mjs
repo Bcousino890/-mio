@@ -58,6 +58,40 @@ const NAMED = {
   uuml: 'ü', Uuml: 'Ü', ndash: '–', mdash: '—', laquo: '«', raquo: '»',
 }
 
+// ─── Fetch de la galería completa (Fase 2 del modal de Portal Inmobiliario) ───
+async function fetchGalleryPhotos(galleryUrl) {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+    const response = await fetch(galleryUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!response.ok) return []
+    const html = await response.text()
+
+    const photos = new Set()
+    // Patrón 1: data-zoom
+    for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp))"/gi)) photos.add(m[1])
+    // Patrón 2: img src (mlstatic)
+    for (const m of html.matchAll(/src="(https?:\/\/http2\.mlstatic\.com\/[^\s"']+\.(?:jpg|jpeg|webp))"/gi)) photos.add(m[1])
+    // Patrón 3: JSON embebido
+    for (const m of html.matchAll(/"url":"(https?:\/\/[^"]+\.(?:jpg|jpeg|webp))"/gi)) photos.add(m[1])
+    // Patrón 4: srcset
+    for (const m of html.matchAll(/srcset="([^"]+)"/gi)) {
+      for (const url of m[1].split(',')) {
+        const urlMatch = url.match(/(https?:\/\/[^\s]+\.(?:jpg|jpeg|webp))/i)
+        if (urlMatch) photos.add(urlMatch[1])
+      }
+    }
+    return Array.from(photos)
+  } catch (e) {
+    console.warn('Error fetching gallery photos:', e.message)
+    return []
+  }
+}
+
 const decode = (s) =>
   (s ?? '')
     .replace(/<[^>]+>/g, '')
@@ -194,7 +228,7 @@ export function parseListPage(html) {
  * Prioriza el blob "Nordic" embebido (ver extractNordicBlob/extractInitialState)
  * si existe; de lo contrario cae a selectores DOM con regex.
  */
-export function parseDetailPage(html, external_id) {
+export async function parseDetailPage(html, external_id) {
   try {
     if (!html) return null
 
@@ -263,7 +297,7 @@ export function parseDetailPage(html, external_id) {
     // Fotos: `gallery_mosaic.primary` + `.secondary` — el HTML estático SOLO
     // trae estas (siempre 5 en la muestra real), sin importar `total_count`
     // (visto entre 11 y 30). El resto vive detrás del modal de galería
-    // (`media_counters[].url`), pendiente de un fetch adicional (Fase 2).
+    // (`media_counters[].url`), que se fetch en `fetchGalleryPhotos` (Fase 2).
     const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
     const photos = []
     const seenPhotos = new Set()
@@ -282,6 +316,18 @@ export function parseDetailPage(html, external_id) {
     const galleryUrl = galleryMediaCounters.find((m) => m?.type === 'photos')?.url ?? null
     const hasVideo = gallery?.has_video ?? false
     const videoModalUrl = galleryMediaCounters.find((m) => m?.type === 'video')?.url ?? null
+
+    // Fetch del modal de galería (si existe) para obtener TODAS las fotos
+    if (galleryUrl) {
+      try {
+        const galleryPhotos = await fetchGalleryPhotos(galleryUrl)
+        for (const photo of galleryPhotos) {
+          addPhoto(photo)
+        }
+      } catch (e) {
+        console.warn(`Error fetching gallery photos from ${galleryUrl}:`, e.message)
+      }
+    }
 
     // Video: confirmado que el archivo real NUNCA aparece como URL directa en
     // el HTML estático de la ficha — solo el booleano `has_video` y la URL

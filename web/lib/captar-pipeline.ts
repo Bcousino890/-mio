@@ -14,6 +14,7 @@
 // captación vuelve a revisión (ver crossCheckTgrAddress).
 import { pool } from '@/lib/db'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
+import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import {
   scoreCandidatesV3,
   type MatchResultV3,
@@ -417,6 +418,20 @@ export async function extractListing(url: string): Promise<ExtractResult> {
     const html = await fetchListingPage(cleanUrl)
     const detail = parsePortalListingDetail(html)
     if (detail) {
+      // Si hay URL de galería, fetch todas las fotos del modal
+      let allPhotos = detail.photos
+      if (detail.gallery_url) {
+        const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+        // Combina fotos del HTML estático con las del modal (deduplicado)
+        const seenPhotos = new Set(allPhotos)
+        for (const photo of galleryPhotos) {
+          if (!seenPhotos.has(photo)) {
+            allPhotos.push(photo)
+            seenPhotos.add(photo)
+          }
+        }
+      }
+
       parsed = {
         title: detail.title,
         operation: detail.operation,
@@ -432,7 +447,8 @@ export async function extractListing(url: string): Promise<ExtractResult> {
         address_full: detail.address && detail.comuna ? `${detail.address}, ${detail.comuna}` : detail.address,
         advertiser_name: detail.advertiser_name,
         advertiser_type: detail.advertiser_type,
-        photos: detail.photos,
+        photos: allPhotos.slice(0, 40),
+        photos_total_count: detail.photos_total_count,
         description: detail.description,
         comuna_detected: detail.comuna,
         // Ficha técnica V4
