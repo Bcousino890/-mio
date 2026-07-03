@@ -733,7 +733,7 @@ export default function CaptarUrlPage() {
                 {captacion.needs_review && captacion.review_reason && (
                   <span className="text-[11px] text-amber-400">{captacion.review_reason}</span>
                 )}
-                {candidates.length > 0 && captacion.needs_review && (
+                {candidates.length > 0 && (
                   <button
                     onClick={runVisual}
                     disabled={visualRunning}
@@ -743,7 +743,7 @@ export default function CaptarUrlPage() {
                     {visualRunning ? <RefreshCw size={11} className="animate-spin" /> : <Sparkles size={11} />}
                     {visualRunning
                       ? 'Comparando fotos ↔ satélite…'
-                      : `Verificación visual IA (${selectedPhotos.length > 0 ? `${selectedPhotos.length} fotos` : '4 fotos auto'})`}
+                      : `${captacion.sii_rol ? 'Re-verificar' : 'Verificación visual'} IA (${selectedPhotos.length > 0 ? `${selectedPhotos.length} fotos` : '4 fotos auto'})`}
                   </button>
                 )}
               </div>
@@ -780,7 +780,7 @@ export default function CaptarUrlPage() {
                     <button
                       key={rol.rol}
                       type="button"
-                      onClick={() => !captacion.sii_rol || captacion.needs_review ? handleSelectRol(rol.rol) : setSelectedRol(rol.rol)}
+                      onClick={() => handleSelectRol(rol.rol)}
                       className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition-colors group ${
                         isChosen ? 'border-emerald-700 bg-emerald-950/20'
                         : isSelected ? 'border-blue-600 bg-blue-950/30'
@@ -848,12 +848,12 @@ export default function CaptarUrlPage() {
                     </button>
                   )
                 })}
-                {captacion.needs_review && (
-                  <p className="text-[11px] text-slate-600 flex items-center gap-1.5 px-1">
-                    <User size={11} />
-                    Haz clic en el candidato correcto para confirmarlo manualmente y continuar con TGR + DealerNet.
-                  </p>
-                )}
+                <p className="text-[11px] text-slate-600 flex items-center gap-1.5 px-1">
+                  <User size={11} />
+                  {captacion.needs_review
+                    ? 'Haz clic en el candidato correcto para confirmarlo manualmente y continuar con TGR + DealerNet.'
+                    : 'Rol confirmado automáticamente. Si no es el correcto, haz clic en el candidato correcto para corregirlo.'}
+                </p>
               </div>
             )}
           </div>

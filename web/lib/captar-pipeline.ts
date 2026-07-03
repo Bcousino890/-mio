@@ -664,7 +664,6 @@ export async function verifyVisual(captacionId: string, selectedPhotoUrls?: stri
   if (!c) throw new Error('Captación no encontrada')
   const prevCandidates = (c.candidates ?? []) as ScoredCandidate[]
   if (prevCandidates.length === 0) throw new Error('No hay candidatos que verificar — corre primero el match')
-  if (c.match_method === 'manual') throw new Error('El rol ya fue confirmado manualmente')
 
   const { verifyCandidatesVisually } = await import('@/lib/visual-match-cl')
   const raw = (c.raw_extracted ?? {}) as Record<string, unknown>
