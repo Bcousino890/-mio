@@ -25,6 +25,23 @@ ok()   { echo "  ✅ $*"; }
 warn() { echo "  ⚠️  $*"; }
 fail() { echo "  ❌ $*"; exit 1; }
 
+# ── 0. Swap preventivo ───────────────────────────────────────────────────────
+# El build de Docker (chromium, geopandas) puede OOM en el VPS compartido de
+# 8 GB cuando el layer-cache está frío. 2 GB de swap absorben el pico.
+if ! swapon --show | grep -q .; then
+  if [ ! -f /swapfile ]; then
+    log "Creando swapfile de 2 GB..."
+    fallocate -l 2G /swapfile 2>/dev/null \
+      || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+    chmod 600 /swapfile
+    mkswap -q /swapfile
+    grep -qxF '/swapfile none swap sw 0 0' /etc/fstab \
+      || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+  swapon /swapfile
+  ok "Swap activo ($(swapon --show --noheadings --bytes | awk '{printf "%.0f MB", $3/1024/1024}'))"
+fi
+
 # ── 0. Comprobaciones ────────────────────────────────────────────────────────
 log "[0/7] Comprobaciones previas..."
 command -v docker >/dev/null || fail "Docker no está instalado"

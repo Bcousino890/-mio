@@ -8,6 +8,23 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DOMAIN="crm.cremme.es"
+
+# Garantizar swap para que `docker build` no muera con OOM (exit 137) al
+# instalar paquetes pesados (chromium, geopandas) cuando el layer-cache se
+# invalida y apt-get update consume >600MB en el VPS compartido.
+if ! swapon --show | grep -q .; then
+  if [ ! -f /swapfile ]; then
+    echo "▶ Creando swapfile de 2 GB (solo en primer uso)..."
+    fallocate -l 2G /swapfile 2>/dev/null \
+      || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+    chmod 600 /swapfile
+    mkswap -q /swapfile
+    grep -qxF '/swapfile none swap sw 0 0' /etc/fstab \
+      || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+  swapon /swapfile
+  echo "  ✅ Swap activo ($(swapon --show --noheadings --bytes | awk '{printf "%.0f MB", $3/1024/1024}'))"
+fi
 APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
 
