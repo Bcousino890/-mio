@@ -9,21 +9,36 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DOMAIN="crm.cremme.es"
 
-# Garantizar swap para que `docker build` no muera con OOM (exit 137) al
-# instalar paquetes pesados (chromium, geopandas) cuando el layer-cache se
-# invalida y apt-get update consume >600MB en el VPS compartido.
-if ! swapon --show | grep -q .; then
-  if [ ! -f /swapfile ]; then
-    echo "▶ Creando swapfile de 2 GB (solo en primer uso)..."
-    fallocate -l 2G /swapfile 2>/dev/null \
-      || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-    chmod 600 /swapfile
-    mkswap -q /swapfile
-    grep -qxF '/swapfile none swap sw 0 0' /etc/fstab \
-      || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+# Garantizar swap SUFICIENTE para que `docker build` no muera con OOM (exit
+# 137) al instalar paquetes pesados (chromium, geopandas) cuando el layer-cache
+# se invalida y apt-get consume el pico de RAM en el VPS de 8GB compartido con
+# Postgres. La versión anterior solo creaba swap si NO había NINGUNO: un swap
+# chico preexistente (p.ej. 512MB) hacía saltar todo el bloque y el build
+# seguía muriendo (justo el fallo del deploy de la migración 0052). Ahora se
+# garantiza un swap TOTAL mínimo, recreando /swapfile al tamaño objetivo aunque
+# ya exista uno más chico. Idempotente: en deploys posteriores no hace nada.
+SWAP_MIN_MB=4096
+SWAPFILE=/swapfile
+swap_total_mb() { free -m | awk '/^Swap:/ {print $2}'; }
+if [ "$(swap_total_mb)" -lt "$SWAP_MIN_MB" ]; then
+  echo "▶ Swap actual $(swap_total_mb)MB < ${SWAP_MIN_MB}MB — asegurando ${SWAPFILE} de $((SWAP_MIN_MB/1024))GB..."
+  # No se puede redimensionar un swapfile en caliente: si el nuestro ya está
+  # activo (pero chico), lo desactivamos para recrearlo. Si swapoff falla
+  # (swap en uso), conservamos lo que hay en vez de borrar un swapfile activo.
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -qxF "$SWAPFILE"; then
+    swapoff "$SWAPFILE" 2>/dev/null || echo "  ⚠ ${SWAPFILE} en uso, no se pudo desactivar; se conserva"
   fi
-  swapon /swapfile
-  echo "  ✅ Swap activo ($(swapon --show --noheadings --bytes | awk '{printf "%.0f MB", $3/1024/1024}'))"
+  if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qxF "$SWAPFILE"; then
+    rm -f "$SWAPFILE"
+    fallocate -l "${SWAP_MIN_MB}M" "$SWAPFILE" 2>/dev/null \
+      || dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_MIN_MB" status=none
+    chmod 600 "$SWAPFILE"
+    mkswap -q "$SWAPFILE"
+    swapon "$SWAPFILE"
+    grep -qxF "$SWAPFILE none swap sw 0 0" /etc/fstab \
+      || echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+  fi
+  echo "  ✅ Swap total ahora: $(swap_total_mb)MB"
 fi
 APP_CONTAINER="casafari-app"
 COMPOSE="docker compose -p casafari --env-file $REPO_DIR/.env -f $REPO_DIR/infra/docker-compose.yml"
