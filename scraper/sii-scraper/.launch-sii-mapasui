@@ -1,0 +1,15 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/scrape-sii-mapasui.yml, que SSHea al VPS y lanza
+run-sii-mapasui.sh en background (scraper de predios del SII → ingesta en
+sii_mapasui_predios_cl).
+
+run-sii-mapasui.sh tiene su propio lockfile, así que un push accidental
+mientras hay un scrape en curso no arranca un segundo.
+
+Para apuntar a otra comuna o cambiar la etapa de descubrimiento, usar el botón
+"Run workflow" (workflow_dispatch) con los inputs comuna_code / comuna_nombre /
+manzanas_stage, o editar los defaults del workflow antes de pushear el centinela.
+
+Historial de lanzamientos:
+- 2026-07-04 — primer lanzamiento: Las Condes (15108), etapa manzanas-geo,
+  ritmo anti-429 rps=2/concurrency=2. Ingesta a sii_mapasui_predios_cl.
