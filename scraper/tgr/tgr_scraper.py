@@ -91,6 +91,104 @@ USER_AGENTS = [
 ]
 
 # ═════════════════════════════════════════════════════════════════════
+# PROXY SmartProxy CL — estrategia sticky-por-sesión con rotación en bloqueo
+# ═════════════════════════════════════════════════════════════════════
+#
+# Misma cuenta SmartProxy CL que el resto de casafari-mio (SMARTPROXY_CL_*,
+# ver .env.example y scraper/lib/fetch.mjs) y la misma estrategia que el
+# scraper del SII (scraper/sii-scraper/sii_scraper/client/session.py):
+#
+#   - Sticky por SESIÓN, no por request. SmartProxy rota la IP de salida por
+#     cada request en su endpoint normal (puerto rotativo). El flujo de TGR es
+#     MULTI-PASO dentro de una misma sesión de navegador (elegir región →
+#     recarga → elegir comuna → submit → resultado); si cada uno de esos
+#     requests saliera por una IP distinta, el WAF (F5 BIG-IP ASM), que ata
+#     sus cookies/token de sesión a la IP que los emitió, vería la sesión
+#     saltar de IP a mitad de flujo y la rechazaría → timeouts → lentísimo.
+#     Ese fue exactamente el fracaso del intento anterior de proxy ("0.2
+#     reg/min, 15x lento" — ver .launch-tgr): usaba el endpoint rotativo sin
+#     fijar sesión. Aquí se agrega "-session-<id>" al username, lo que ata
+#     TODA la vida de una sesión de navegador a UNA sola IP (coherente con
+#     las cookies que esa IP obtuvo).
+#
+#   - Rotación SOLO al bloquearse. Cuando el WAF rechaza la IP ("Request
+#     Rejected"), en vez del cooldown de 300s sobre una IP ya quemada, se
+#     genera un <id> de sesión nuevo (→ IP nueva) y se reinicia el driver:
+#     identidad realmente nueva de inmediato, sin esperar a que la IP vieja
+#     se libere.
+#
+# Es OPT-IN: si las 4 variables SMARTPROXY_CL_* no están configuradas, el
+# scraper corre en conexión directa (comportamiento por defecto, sin cambios;
+# la ruta "sin proxy" ya demostrada estable no se toca).
+
+_PROXY_ENV_VARS = (
+    "SMARTPROXY_CL_HOST",
+    "SMARTPROXY_CL_PORT",
+    "SMARTPROXY_CL_USER",
+    "SMARTPROXY_CL_PASS",
+)
+
+
+def proxy_configurado() -> bool:
+    """True solo si las 4 variables SMARTPROXY_CL_* están presentes."""
+    return all(os.environ.get(name) for name in _PROXY_ENV_VARS)
+
+
+def _nueva_identidad_proxy() -> Optional[Dict[str, str]]:
+    """Devuelve {host, port, username, password} con un <id> de sesión nuevo
+    (aleatorio) en cada llamada, o None si el proxy no está configurado.
+
+    El username lleva el sufijo "-session-<id>" (esquema sticky de SmartProxy):
+    mientras se reutilice ese username, los requests salen por la misma IP; un
+    <id> nuevo da una IP nueva. Cada llamada = una identidad nueva, que se usa
+    para toda la vida de una sesión de navegador (ver iniciar()/rotar_identidad).
+    """
+    if not proxy_configurado():
+        return None
+    import secrets
+    session_id = secrets.token_hex(6)
+    return {
+        "host": os.environ["SMARTPROXY_CL_HOST"],
+        "port": os.environ["SMARTPROXY_CL_PORT"],
+        "username": f'{os.environ["SMARTPROXY_CL_USER"]}-session-{session_id}',
+        "password": os.environ["SMARTPROXY_CL_PASS"],
+    }
+
+
+def _crear_extension_auth_proxy(identidad: Dict[str, str]) -> str:
+    """Chrome no acepta credenciales en --proxy-server (ignora el user:pass@),
+    y en headless no puede mostrarse el diálogo de autenticación. La forma
+    robusta en Selenium puro es cargar una extensión mínima que responda al
+    evento onAuthRequired con las credenciales del proxy. Devuelve la ruta de
+    un directorio temporal con la extensión (MV3, usa webRequestAuthProvider —
+    soportado por el Chrome for Testing que usa este scraper)."""
+    import json
+    ext_dir = tempfile.mkdtemp(prefix="tgr-proxy-ext-")
+    manifest = {
+        "manifest_version": 3,
+        "name": "tgr-proxy-auth",
+        "version": "1.0",
+        "permissions": ["webRequest", "webRequestAuthProvider"],
+        "host_permissions": ["<all_urls>"],
+        "background": {"service_worker": "bg.js"},
+    }
+    with open(os.path.join(ext_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f)
+    bg = (
+        "chrome.webRequest.onAuthRequired.addListener(\n"
+        "  () => ({ authCredentials: {\n"
+        f"    username: {json.dumps(identidad['username'])},\n"
+        f"    password: {json.dumps(identidad['password'])}\n"
+        "  } }),\n"
+        '  { urls: ["<all_urls>"] },\n'
+        '  ["blocking"]\n'
+        ");\n"
+    )
+    with open(os.path.join(ext_dir, "bg.js"), "w", encoding="utf-8") as f:
+        f.write(bg)
+    return ext_dir
+
+# ═════════════════════════════════════════════════════════════════════
 # LOGGING
 # ═════════════════════════════════════════════════════════════════════
 
@@ -652,6 +750,8 @@ class WorkerTGR:
         self.config = config
         self.driver = None
         self.wait = None
+        self.identidad_proxy = None
+        self._proxy_ext_dir = None
 
     def iniciar(self):
         options = Options()
@@ -682,22 +782,26 @@ class WorkerTGR:
         self._profile_dir = profile_dir
         if os.path.exists(CHROME_BINARY):
             options.binary_location = CHROME_BINARY
-        # PROXY DESACTIVADO: 6 workers + proxy agotó recursos (se detuvo).
-        # 4 workers + proxy: 0.2 reg/min (15x LENTO). 4 sin proxy: 3 reg/min (demostrado).
-        # Rollback: 4 workers sin proxy. Tiempo RM: ~6 horas (confiable).
-        # https_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        # if not https_proxy:
-        #     sp_host = os.environ.get("SMARTPROXY_CL_HOST")
-        #     sp_user = os.environ.get("SMARTPROXY_CL_USER")
-        #     if sp_host and sp_user:
-        #         sp_port = os.environ.get("SMARTPROXY_CL_PORT")
-        #         sp_pass = os.environ.get("SMARTPROXY_CL_PASS")
-        #         https_proxy = f"http://{sp_user}:{sp_pass}@{sp_host}:{sp_port}"
-        # if https_proxy:
-        #     options.add_argument(f"--proxy-server={https_proxy}")
-        #     options.add_argument("--ignore-certificate-errors")
-        #     options.add_argument("--ssl-version-max=tls1.2")
-        #     options.add_argument("--disable-quic")
+
+        # PROXY SmartProxy CL (sticky-por-sesión): una IP fija para TODA la vida
+        # de esta sesión de navegador (ver bloque de docs de _nueva_identidad_proxy).
+        # Se elige una identidad nueva en cada iniciar(), así que rotar la IP tras
+        # un bloqueo del WAF es simplemente detener()+iniciar() (ver rotar_identidad).
+        self._proxy_ext_dir = None
+        self.identidad_proxy = _nueva_identidad_proxy()
+        if self.identidad_proxy:
+            host = self.identidad_proxy["host"]
+            port = self.identidad_proxy["port"]
+            options.add_argument(f"--proxy-server=http://{host}:{port}")
+            # No enviar tráfico local por el proxy (evita fallos de resolución).
+            options.add_argument("--proxy-bypass-list=127.0.0.1;localhost")
+            self._proxy_ext_dir = _crear_extension_auth_proxy(self.identidad_proxy)
+            options.add_argument(f"--load-extension={self._proxy_ext_dir}")
+            logger.info(
+                f"Worker {self.worker_id}: proxy SmartProxy CL activo "
+                f"(sesión {self.identidad_proxy['username'].rsplit('-', 1)[-1]})"
+            )
+
         service = Service(executable_path=CHROMEDRIVER_PATH) if os.path.exists(CHROMEDRIVER_PATH) else Service()
         self.driver = webdriver.Chrome(service=service, options=options)
         self.wait = WebDriverWait(self.driver, self.config.timeout)
@@ -708,6 +812,19 @@ class WorkerTGR:
             self.driver.quit()
         if getattr(self, "_profile_dir", None):
             shutil.rmtree(self._profile_dir, ignore_errors=True)
+        if getattr(self, "_proxy_ext_dir", None):
+            shutil.rmtree(self._proxy_ext_dir, ignore_errors=True)
+
+    def rotar_identidad(self):
+        """Reinicia el driver con una identidad de proxy (IP) nueva. Se usa
+        tras un bloqueo del WAF: en vez de esperar a que la IP quemada se
+        libere, se salta a una IP limpia de inmediato. Sin proxy configurado
+        es un reinicio simple del driver (mismo efecto que antes)."""
+        try:
+            self.detener()
+        except Exception:
+            pass
+        self.iniciar()
 
     def consultar_una_vez(self, rol: str, comuna: str) -> Certificado:
         rol_parts = rol.split("-")
@@ -800,9 +917,25 @@ class WorkerTGR:
                     pass
 
                 if waf_bloqueado:
-                    # WAF (F5 BIG-IP ASM) está rechazando la IP, no es timeout de red.
-                    # Reintentar rápido solo extiende el bloqueo: cooldown largo.
                     ultimo_error = "bloqueado por WAF del sitio (Request Rejected)"
+                    if self.identidad_proxy:
+                        # Con proxy sticky: la IP actual quedó quemada, pero
+                        # tenemos IPs de sobra. Rotamos a una identidad (IP)
+                        # nueva y reintentamos casi de inmediato, en vez de
+                        # esperar 300s a que se libere una IP que igual no
+                        # vamos a reutilizar.
+                        logger.warning(
+                            f"Worker {self.worker_id}: ROL {rol} bloqueado por WAF. "
+                            f"Rotando a IP nueva (SmartProxy) y reintentando..."
+                        )
+                        try:
+                            self.rotar_identidad()
+                        except Exception as e:
+                            logger.warning(f"Worker {self.worker_id}: fallo al rotar identidad: {e}")
+                        time.sleep(random.uniform(2, 5))
+                        continue
+                    # Sin proxy: reintentar rápido solo extiende el bloqueo
+                    # sobre la única IP disponible → cooldown largo (igual que antes).
                     cooldown = 300 + random.uniform(0, 60)
                     logger.warning(
                         f"Worker {self.worker_id}: ROL {rol} bloqueado por WAF. "
