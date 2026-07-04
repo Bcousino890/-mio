@@ -3,7 +3,7 @@
  * Valida las 8 capas de matching
  */
 
-import { scoreCandidate, scoreCandidates, ParsedListing } from '../sii-match-cl-v2'
+import { scoreCandidate, scoreCandidates, scoreCandidateV3, ParsedListing, SiiCandidateRow } from '../sii-match-cl-v2'
 
 describe('sii-match-cl-v2: Motor de Scoring Fellegi-Sunter', () => {
   // Listing de ejemplo: Casa en Av. Apoquindo 3200, Las Condes
@@ -182,6 +182,69 @@ describe('sii-match-cl-v2: Motor de Scoring Fellegi-Sunter', () => {
 
     // Debe rechazar porque tipos no coinciden (depto ≠ casa simple)
     expect(result.score).toBeLessThan(0.75)
+  })
+})
+
+describe('scoreCandidateV3: evidencia continua (sin empates de bucket)', () => {
+  // Caso real: parcelación con varios lotes de tamaño casi idéntico en el
+  // mismo camino privado, sin numeración en la dirección del anuncio (la
+  // señal de dirección queda "sin coincidencia clara" para todos). Antes del
+  // fix, un terreno EXACTO (0% de diferencia) puntuaba igual que uno a 5.4%
+  // de diferencia porque ambos caían en el mismo bucket "≤10%" — el ranking
+  // final dependía casi solo de la distancia del pin del portal, que es la
+  // señal menos confiable del portal.
+  const listing: ParsedListing = {
+    address: 'Camino La Tagua',
+    lat: -33.35,
+    lng: -70.53,
+    sqm_terreno: 889,
+    property_type: 'casa',
+    operation: 'sale',
+  }
+
+  const baseCandidate: SiiCandidateRow = {
+    rol: '0000-00',
+    direccion: 'CAMINO LA TAGUA 0',
+    avaluo_fiscal_total: null,
+    superficie_terreno_m2: 889,
+    superficie_construida_m2: null,
+    codigo_destino_principal: 'H',
+    rol_padre: null,
+    lat: null,
+    lng: null,
+    distance_m: 60,
+    text_sim: null,
+  }
+
+  test('terreno exacto puntúa estrictamente más que uno a 5.4% de diferencia (misma distancia)', () => {
+    const exact = scoreCandidateV3(listing, { ...baseCandidate, rol: 'exacto', superficie_terreno_m2: 889 })
+    const close = scoreCandidateV3(listing, { ...baseCandidate, rol: 'cercano', superficie_terreno_m2: 841 }) // 5.4% off
+
+    expect(exact.probability).toBeGreaterThan(close.probability)
+  })
+
+  test('terreno exacto pero más lejos puede superar a un terreno peor pero más cerca', () => {
+    // 906 vs 889 = 1.9% off a 90 m, contra 841 vs 889 = 5.4% off a 27 m: con
+    // los buckets escalonados anteriores ambos "sup_terreno" empataban
+    // (mismo bucket ≤10%) y ganaba solo la distancia. Con evidencia continua,
+    // la brecha de terreno (1.9% vs 5.4%) debe achicar la ventaja de
+    // distancia del candidato más cercano.
+    const lejanoPeroExacto = scoreCandidateV3(listing, { ...baseCandidate, rol: 'lejano-preciso', superficie_terreno_m2: 906, distance_m: 90 })
+    const cercanoPeroImpreciso = scoreCandidateV3(listing, { ...baseCandidate, rol: 'cercano-impreciso', superficie_terreno_m2: 841, distance_m: 27 })
+
+    // La diferencia de probabilidad entre ambos ya no debe ser tan amplia
+    // como cuando el terreno no discriminaba en absoluto dentro del bucket.
+    expect(Math.abs(lejanoPeroExacto.probability - cercanoPeroImpreciso.probability)).toBeLessThan(0.05)
+  })
+
+  test('distancia: 49m y 51m ya no saltan a valores opuestos de bucket', () => {
+    const a = scoreCandidateV3(listing, { ...baseCandidate, distance_m: 49 })
+    const b = scoreCandidateV3(listing, { ...baseCandidate, distance_m: 51 })
+
+    // Deben ser casi iguales (continuo), no un salto de bucket (1.4 vs 0.7 log-odds)
+    expect(Math.abs(a.probability - b.probability)).toBeLessThan(0.02)
+    // Y monótono: más cerca sigue puntuando mejor o igual
+    expect(a.probability).toBeGreaterThanOrEqual(b.probability)
   })
 })
 

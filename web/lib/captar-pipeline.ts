@@ -178,12 +178,32 @@ export interface ScoredCandidate extends SiiCandidateRow {
   match_result_v3: MatchResultV3
 }
 
+/**
+ * `sii_roles_cl` puede traer más de una fila física para el mismo `rol` (se
+ * han visto reimportaciones/snapshots duplicados sin deduplicar en origen —
+ * ej. una fila con `sii_construcciones_cl` ya vinculada y otra sin vincular
+ * para el mismo rol, con distinto score resultante). Sin este filtro el mismo
+ * candidato aparece dos veces en la lista con puntajes distintos, lo cual es
+ * confuso e incorrecto independientemente de cuál sea "el bueno". Al estar ya
+ * ordenado por match_score descendente, quedarse con la primera ocurrencia de
+ * cada rol conserva la de mejor evidencia.
+ */
+function dedupeByRol(scored: ScoredCandidate[]): ScoredCandidate[] {
+  const seen = new Set<string>()
+  return scored.filter((c) => {
+    if (seen.has(c.rol)) return false
+    seen.add(c.rol)
+    return true
+  })
+}
+
 export async function findSiiCandidatesV3(
   siiCode: string,
   listing: ParsedListing,
 ): Promise<ScoredCandidate[]> {
   if (!siiCode) return []
   const hasGeo = listing.lat != null && listing.lng != null
+  let geoScored: ScoredCandidate[] = []
 
   if (hasGeo) {
     // Los portales difuminan o corren el pin (a veces 1-2 km): se expande el
@@ -217,12 +237,20 @@ export async function findSiiCandidatesV3(
           [siiCode, listing.address ?? null, listing.lat, listing.lng, radius],
         )
         if (res.rows.length > 0) {
-          const scored = scoreCandidatesV3(listing, res.rows)
+          const scored = dedupeByRol(scoreCandidatesV3(listing, res.rows))
+          geoScored = scored
           const best = scored[0]
           if (best.match_result_v3.confidence_level === 'confirmed') return scored.slice(0, 12)
           if (scored.filter((s) => s.match_result_v3.confidence_level === 'high_candidate').length >= 3) return scored.slice(0, 12)
           if (best.match_score > 0.75 && radius >= 300) return scored.slice(0, 12)
-          if (radius === radios[radios.length - 1]) return scored.slice(0, 12)
+          // En el radio más amplio (2.5 km) ya NO se retorna a ciegas si la
+          // mejor evidencia sigue siendo floja: eso pasaba cuando el rol real
+          // no tiene lat/lng en catastro (columna excluida por completo del
+          // WHERE de arriba) o el pin del portal está mal ubicado — en ambos
+          // casos ST_DistanceSphere jamás puede encontrar al candidato
+          // correcto, sin importar cuánto se agrande el radio. Se sigue de
+          // largo hacia la búsqueda por dirección/superficie de abajo para
+          // complementar en vez de quedarse con "lo más cercano, aunque sea malo".
         }
       } catch {
         continue
@@ -230,7 +258,12 @@ export async function findSiiCandidatesV3(
     }
   }
 
-  // Fallback sin coordenadas: dirección + superficie
+  if (geoScored[0] && geoScored[0].match_score >= 0.5) return geoScored.slice(0, 12)
+
+  // Fallback / complemento por dirección + superficie: corre siempre que la
+  // búsqueda geográfica no haya encontrado ya algo razonablemente bueno (o
+  // no haya coordenadas del todo). Sus resultados se fusionan con los de la
+  // búsqueda geográfica en vez de reemplazarlos.
   try {
     let query = `
       SELECT
@@ -263,9 +296,11 @@ export async function findSiiCandidatesV3(
     }
     query += ` ORDER BY text_sim DESC NULLS LAST, r.avaluo_fiscal_total DESC NULLS LAST LIMIT 40`
     const res = await pool.query(query, params)
-    return scoreCandidatesV3(listing, res.rows).slice(0, 12)
+    const addrScored = scoreCandidatesV3(listing, res.rows)
+    const merged = dedupeByRol([...geoScored, ...addrScored].sort((a, b) => b.match_score - a.match_score))
+    return merged.slice(0, 12)
   } catch {
-    return []
+    return geoScored.slice(0, 12)
   }
 }
 
@@ -680,7 +715,6 @@ export async function verifyVisual(captacionId: string, selectedPhotoUrls?: stri
   if (!c) throw new Error('Captación no encontrada')
   const prevCandidates = (c.candidates ?? []) as ScoredCandidate[]
   if (prevCandidates.length === 0) throw new Error('No hay candidatos que verificar — corre primero el match')
-  if (c.match_method === 'manual') throw new Error('El rol ya fue confirmado manualmente')
 
   const { verifyCandidatesVisually } = await import('@/lib/visual-match-cl')
   const raw = (c.raw_extracted ?? {}) as Record<string, unknown>

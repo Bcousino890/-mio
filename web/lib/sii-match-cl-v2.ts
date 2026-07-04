@@ -458,6 +458,26 @@ export interface MatchResultV3 {
 // comuna NO es la propiedad (probabilidad base ~23%).
 const V3_PRIOR = -1.2
 
+/**
+ * Interpola linealmente entre puntos de control (x, log_odds) ordenados por x
+ * ascendente. Los buckets escalonados (if diff<=0.1 return 1.8 ...) hacían que
+ * un match EXACTO (diff=0) puntuara idéntico a uno apenas dentro del borde
+ * (diff=0.099) y que un candidato a 49m puntuara el doble que uno a 51m — dos
+ * candidatos objetivamente distintos empataban o se invertían en el ranking
+ * final. La interpolación conserva los mismos valores en los puntos de quiebre
+ * originales (misma calibración) pero dentro de cada tramo la evidencia crece
+ * o decae de forma monótona y continua.
+ */
+function interpolate(x: number, points: ReadonlyArray<readonly [number, number]>): number {
+  if (x <= points[0][0]) return points[0][1]
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1]
+    const [x1, y1] = points[i]
+    if (x <= x1) return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+  }
+  return points[points.length - 1][1]
+}
+
 function addressEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
   const listingAddr = normalizeAddress(listing.address_full ?? listing.address ?? null)
   const candidateAddr = normalizeAddress(candidate.direccion)
@@ -470,9 +490,10 @@ function addressEvidence(listing: ParsedListing, candidate: SiiCandidateRow): Ma
   if (l.vía && c.vía && l.número != null && c.número != null && l.vía === c.vía) {
     const diff = Math.abs(l.número - c.número)
     if (diff === 0) return { signal: 'direccion', value: 'vía + número exactos', log_odds: 4.2 }
-    if (diff <= 4) return { signal: 'direccion', value: `vía exacta, número ±${diff}`, log_odds: 2.2 }
-    if (diff <= 20) return { signal: 'direccion', value: `vía exacta, número ±${diff}`, log_odds: 1.0 }
-    return { signal: 'direccion', value: `vía exacta, número lejano (±${diff})`, log_odds: 0.2 }
+    // Mismos puntos de quiebre que antes (±4 / ±20), pero continuos: puerta
+    // contigua (±1) ya no puntúa igual que ±4 casas más allá.
+    const log_odds = interpolate(diff, [[0, 3.2], [4, 2.2], [20, 1.0], [60, 0.2]])
+    return { signal: 'direccion', value: `vía exacta, número ±${diff}`, log_odds }
   }
 
   // Similitud trigram calculada en Postgres (similarity()) cuando está disponible
@@ -484,21 +505,39 @@ function addressEvidence(listing: ParsedListing, candidate: SiiCandidateRow): Ma
   return { signal: 'direccion', value: 'sin coincidencia clara', log_odds: -0.2 }
 }
 
+// El tramo cercano (0-150 m) se aplanó respecto a la versión anterior
+// (que llegaba a 2.2 a los 15 m y caía a 0.7 a los 120 m): esa pendiente fue
+// calibrada pensando en distinguir edificios distintos en una cuadra urbana
+// normal, pero en parcelaciones/condominios de Lo Barnechea, Colina, etc. hay
+// una decena de lotes de tamaño casi idéntico separados por 20-100 m en el
+// mismo camino privado — ahí la distancia del pin (que el propio anunciante
+// posiciona a mano sobre el mapa) es la señal MENOS confiable de todas, y
+// antes bastaba con estar 60 m más cerca para tapar por completo una
+// coincidencia de terreno mucho mejor (ej. terreno idéntico vs 90 m de
+// distancia perdía contra terreno 5% distinto vs 27 m). El tramo lejano
+// (≥300 m) se mantiene igual: ahí sí importa distinguir "misma cuadra" de
+// "otro barrio".
+const DISTANCE_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1.3], [50, 1.0], [150, 0.5], [300, 0], [600, -0.4], [1200, -0.8], [2500, -1.2], [5000, -1.6],
+]
+
 function distanceEvidence(candidate: SiiCandidateRow): MatchSignalV3 {
   const d = candidate.distance_m
   if (d == null) return { signal: 'distancia', value: 'sin coordenadas', log_odds: 0 }
-  if (d <= 15) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 2.2 }
-  if (d <= 50) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 1.4 }
-  if (d <= 120) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0.7 }
-  if (d <= 300) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: 0 }
-  if (d <= 600) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.4 }
   // Los pines de los portales pueden venir corridos 1-2 km: lejos penaliza
   // suave, y si la dirección calza exacta la penalización se anula del todo
   // (ver scoreCandidateV3).
-  if (d <= 1200) return { signal: 'distancia', value: `${Math.round(d)} m`, log_odds: -0.8 }
-  if (d <= 2500) return { signal: 'distancia', value: `${(d / 1000).toFixed(1)} km`, log_odds: -1.2 }
-  return { signal: 'distancia', value: `${(d / 1000).toFixed(1)} km`, log_odds: -1.6 }
+  const log_odds = interpolate(d, DISTANCE_POINTS)
+  const label = d < 1000 ? `${Math.round(d)} m` : `${(d / 1000).toFixed(1)} km`
+  return { signal: 'distancia', value: label, log_odds }
 }
+
+const BUILT_AREA_POINTS_STRONG: ReadonlyArray<readonly [number, number]> = [
+  [0, 2.4], [0.08, 2.0], [0.2, 1.0], [0.4, 0], [0.7, -1.2], [1.5, -2.2],
+]
+const BUILT_AREA_POINTS_WEAK: ReadonlyArray<readonly [number, number]> = [
+  [0, 1.9], [0.08, 1.6], [0.2, 0.8], [0.4, 0], [0.7, -1.0], [1.5, -1.8],
+]
 
 function builtAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
   // V4: si la ficha técnica trae superficie construida explícita, la señal es
@@ -511,12 +550,16 @@ function builtAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): 
   const diff = Math.abs(sqm - built) / sqm
   const label = `anuncio ${sqm} m² vs SII ${built} m²`
   const strong = explicit != null
-  if (diff <= 0.08) return { signal: 'sup_construida', value: label, log_odds: strong ? 2.0 : 1.6 }
-  if (diff <= 0.2) return { signal: 'sup_construida', value: label, log_odds: strong ? 1.0 : 0.8 }
-  if (diff <= 0.4) return { signal: 'sup_construida', value: label, log_odds: 0 }
-  if (diff <= 0.7) return { signal: 'sup_construida', value: label, log_odds: strong ? -1.2 : -1.0 }
-  return { signal: 'sup_construida', value: label, log_odds: strong ? -2.2 : -1.8 }
+  const log_odds = interpolate(diff, strong ? BUILT_AREA_POINTS_STRONG : BUILT_AREA_POINTS_WEAK)
+  return { signal: 'sup_construida', value: label, log_odds }
 }
+
+const LAND_AREA_POINTS_STRONG: ReadonlyArray<readonly [number, number]> = [
+  [0, 2.2], [0.1, 1.8], [0.3, 0.8], [0.7, 0], [1.5, -1.0],
+]
+const LAND_AREA_POINTS_WEAK: ReadonlyArray<readonly [number, number]> = [
+  [0, 1.3], [0.1, 1.0], [0.3, 0.4], [0.7, 0], [1.5, -0.6],
+]
 
 function landAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
   // Solo aporta para casas/terrenos: en deptos el terreno es del edificio entero.
@@ -531,10 +574,14 @@ function landAreaEvidence(listing: ParsedListing, candidate: SiiCandidateRow): M
   const diff = Math.abs(sqm - land) / sqm
   const label = `anuncio ${sqm} m² vs terreno ${land} m²`
   const strong = explicit != null
-  if (diff <= 0.1) return { signal: 'sup_terreno', value: label, log_odds: strong ? 1.8 : 1.0 }
-  if (diff <= 0.3) return { signal: 'sup_terreno', value: label, log_odds: strong ? 0.8 : 0.4 }
-  if (diff <= 0.7) return { signal: 'sup_terreno', value: label, log_odds: 0 }
-  return { signal: 'sup_terreno', value: label, log_odds: strong ? -1.0 : -0.6 }
+  // Interpolación continua: dos candidatos con 889 m² vs 889 m² (exacto) y
+  // 889 m² vs 841 m² (5.4% off) ya NO empatan en el mismo bucket "≤10%" — el
+  // exacto puntúa estrictamente más alto. Esto importa mucho en parcelaciones
+  // (varios lotes de tamaño casi idéntico en el mismo camino privado), donde
+  // el terreno es la señal más confiable y la distancia del pin del portal es
+  // la menos confiable.
+  const log_odds = interpolate(diff, strong ? LAND_AREA_POINTS_STRONG : LAND_AREA_POINTS_WEAK)
+  return { signal: 'sup_terreno', value: label, log_odds }
 }
 
 // ─── Señales V4: pisos, año de construcción, condominio, verificación visual ─
@@ -556,10 +603,8 @@ function yearBuiltEvidence(listing: ParsedListing, candidate: SiiCandidateRow): 
   }
   const diff = Math.abs(listing.year_built - candidate.anio_construccion)
   const label = `anuncio ~${listing.year_built} vs SII ${candidate.anio_construccion}`
-  if (diff <= 3) return { signal: 'anio_construccion', value: label, log_odds: 1.4 }
-  if (diff <= 8) return { signal: 'anio_construccion', value: label, log_odds: 0.6 }
-  if (diff <= 20) return { signal: 'anio_construccion', value: label, log_odds: 0 }
-  return { signal: 'anio_construccion', value: label, log_odds: -0.8 }
+  const log_odds = interpolate(diff, [[0, 1.6], [3, 1.4], [8, 0.6], [20, 0], [50, -0.8]])
+  return { signal: 'anio_construccion', value: label, log_odds }
 }
 
 function condoEvidence(listing: ParsedListing, candidate: SiiCandidateRow): MatchSignalV3 {
