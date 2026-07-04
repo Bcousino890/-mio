@@ -20,6 +20,7 @@ on:
       - '!scraper/.launch-salamanca-almagro'
       - '!scraper/.fix-db-password'
       - '!scraper/.add-casafari-ssh-key'
+      - '!scraper/sii-scraper/.launch-sii-mapasui'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:

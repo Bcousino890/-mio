@@ -331,3 +331,46 @@ Si para una comuna en particular no se encuentra la capa "Predios" y/o
 "Área Homogénea", se registra una advertencia (WARNING) en los logs
 indicando qué capa falta para esa comuna; los demás campos de predio (rol,
 avalúo, dirección, ubicación) no se ven afectados.
+
+## Operación en producción (VPS) e ingesta a la BD
+
+Para correr el scraper e ingestar sus predios en la tabla
+`sii_mapasui_predios_cl` de producción hay un wrapper que encadena las etapas
+y la ingesta, pensado para el VPS (donde viven `DATABASE_URL` y las
+`SMARTPROXY_CL_*`):
+
+```bash
+# En el VPS (o local con .env + DATABASE_URL):
+SII_COMUNA_CODE=15108 SII_COMUNA_NOMBRE="Las Condes" \
+  SII_MANZANAS_STAGE=manzanas-geo \
+  bash scraper/sii-scraper/run-sii-mapasui.sh
+```
+
+`run-sii-mapasui.sh`:
+
+1. Genera `config.json` para la comuna indicada (defaults: Las Condes 15108,
+   `manzanas-geo`, ritmo anti-429 `rps=2`/`concurrency=2`).
+2. Corre la etapa de descubrimiento (`manzanas-geo` o `manzanas`) y luego
+   `predios`.
+3. Ingesta `output/predios/*.jsonl` en `sii_mapasui_predios_cl` vía
+   `scraper/ingest-sii-mapasui.mjs`.
+
+Tiene lockfile propio (`/tmp/casafari-scrape-sii-mapasui.lock`), así que dos
+lanzamientos simultáneos no se pisan.
+
+### Lanzarlo desde GitHub Actions
+
+El workflow `.github/workflows/scrape-sii-mapasui.yml` hace SSH al VPS y lanza
+el runner en background. Dos formas de dispararlo:
+
+- **Botón "Run workflow"** (`workflow_dispatch`): permite elegir `comuna_code`,
+  `comuna_nombre` y `manzanas_stage` como inputs.
+- **Archivo centinela**: un push a `scraper/sii-scraper/.launch-sii-mapasui`
+  (en `main`) lo dispara con los defaults (Las Condes, `manzanas-geo`). Ese
+  archivo no existe hasta que se quiera lanzar por primera vez — crearlo/tocarlo
+  ES el lanzamiento.
+
+> ⚠ Recordatorio de procedencia/ToS: este runner ejecuta scraping automatizado
+> contra sii.cl (prohibido por sus términos de uso). Se opera bajo autorización
+> explícita del responsable del proyecto; sus datos viven en
+> `sii_mapasui_predios_cl`, nunca mezclados con la señal oficial `sii_roles_cl`.
