@@ -26,6 +26,7 @@ interface SiiResult {
   codigo_destino_principal: string | null
   lat: number | null
   lng: number | null
+  source?: 'oficial' | 'mapasui_scrape'
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -406,6 +407,11 @@ export default function StreetPage() {
                     </div>
                     <p className="text-[10px] text-slate-500 mt-0.5">
                       {r.comuna_nombre}
+                      {r.source === 'mapasui_scrape' && (
+                        <span className="ml-1.5 px-1 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[9px] align-middle" title="Dato obtenido por scraping de mapasui, no del archivo oficial descargado — verificar antes de usar comercialmente">
+                          no oficial
+                        </span>
+                      )}
                       {r.codigo_destino_principal && (
                         <> · {DESTINO[r.codigo_destino_principal] ?? r.codigo_destino_principal}</>
                       )}
