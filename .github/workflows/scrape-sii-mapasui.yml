@@ -1,0 +1,91 @@
+name: Scrape SII mapasui (predios → BD de producción)
+
+# Mismo patrón que scrape-tgr.yml: SSH al VPS y lanza el scraper ahí, porque
+# solo el VPS tiene DATABASE_URL / docker exec casafari-pg de producción y las
+# SMARTPROXY_CL_* en su .env. El job del runner solo lanza el proceso en
+# background (nohup) y termina; el scrape real (puede tardar, según comuna y
+# etapa) sigue corriendo en el VPS de forma independiente.
+#
+# ⚠ Este workflow ejecuta scraping automatizado contra sii.cl, que sus ToS
+# prohíben — se corre bajo autorización explícita del responsable del proyecto
+# (ver run-sii-mapasui.sh y db/migrations/0052_sii_mapasui_predios_cl.sql).
+on:
+  workflow_dispatch:
+    inputs:
+      comuna_code:
+        description: "Código SII de la comuna (ej. 15108 Las Condes, 15160 Vitacura)"
+        required: false
+        default: "15108"
+      comuna_nombre:
+        description: "Nombre de la comuna (para el slug de salida)"
+        required: false
+        default: "Las Condes"
+      manzanas_stage:
+        description: "Etapa de descubrimiento de manzanas"
+        required: false
+        default: "manzanas-geo"
+        type: choice
+        options:
+          - manzanas-geo
+          - manzanas
+  push:
+    branches:
+      - main
+    paths:
+      # Archivo centinela: la API de GitHub de este entorno no permite disparar
+      # workflow_dispatch, así que un push al centinela lanza el scrape.
+      # run-sii-mapasui.sh tiene su propio lockfile.
+      - 'scraper/sii-scraper/.launch-sii-mapasui'
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Matar scrape SII anterior (si existe)
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            cd /opt/casafari
+            echo "⚠ Matando cualquier scrape SII anterior..."
+            pkill -9 -f "run-sii-mapasui.sh" || true
+            pkill -9 -f "sii-scraper/run.py" || true
+            rm -f /tmp/casafari-scrape-sii-mapasui.lock
+            sleep 2
+          EOF
+
+      - name: Lanzar scrape SII en background en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari
+            mkdir -p scraper/output
+            chmod +x scraper/sii-scraper/run-sii-mapasui.sh
+            export SII_COMUNA_CODE="${{ github.event.inputs.comuna_code || '15108' }}"
+            export SII_COMUNA_NOMBRE="${{ github.event.inputs.comuna_nombre || 'Las Condes' }}"
+            export SII_MANZANAS_STAGE="${{ github.event.inputs.manzanas_stage || 'manzanas-geo' }}"
+            nohup bash scraper/sii-scraper/run-sii-mapasui.sh \
+              > "scraper/output/launch-sii-mapasui-\$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &
+            PID=\$!
+            disown
+            sleep 3
+            if kill -0 "\$PID" 2>/dev/null; then
+              echo "▶ Scrape SII lanzado en background en el VPS (PID \$PID)"
+            else
+              echo "✗ El proceso no arrancó, revisa scraper/output/ en el VPS"
+              exit 1
+            fi
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "El scrape SII (predios → sii_mapasui_predios_cl) quedó corriendo en background en el VPS."
+          echo "Logs en /opt/casafari/scraper/output/ y en scraper/sii-scraper/output/ del VPS."
+          echo "Resultados consultables vía /api/chile/sii-search (fallback marcado como no oficial)."
