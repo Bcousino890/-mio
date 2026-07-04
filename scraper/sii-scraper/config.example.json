@@ -1,0 +1,22 @@
+{
+  "comunas": [
+    { "comuna_id": 16301, "nombre_comuna": "Puente Alto" }
+  ],
+  "regiones": [],
+  "ranges": {
+    "manzana_min": 0,
+    "manzana_max": 500,
+    "manzana_probe_depth": 60,
+    "predio_max": 150
+  },
+  "limits": {
+    "max_concurrency": 2,
+    "requests_per_second": 3,
+    "max_retries": 5,
+    "backoff_base": 2
+  },
+  "geo": {
+    "grid_step_m": 100
+  },
+  "output_dir": "output"
+}
