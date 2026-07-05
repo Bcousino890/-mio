@@ -1,7 +1,7 @@
 import { Fragment } from 'react'
 import Link from 'next/link'
 import PageShell from '@/components/PageShell'
-import { Globe, Star, MapPinned, Upload, CheckCircle2, Circle, Database } from 'lucide-react'
+import { Globe, Star, MapPinned, Upload, CheckCircle2, Circle, Database, Activity } from 'lucide-react'
 import { CHILE_COMUNAS, CHILE_PRIORITY_COMUNAS, CHILE_REGIONS, groupByRegion } from '@/lib/chile-zones'
 import { pool } from '@/lib/db'
 
@@ -64,6 +64,13 @@ export default async function ChilePage() {
           >
             <Upload size={12} />
             Subir SII
+          </Link>
+          <Link
+            href="/chile/sii-mapasui"
+            className="flex items-center gap-1.5 text-xs font-medium bg-[var(--c-card)] border border-[var(--c-border-card)] hover:border-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <Activity size={12} />
+            Scrape SII
           </Link>
           <Link
             href="/chile/street"
