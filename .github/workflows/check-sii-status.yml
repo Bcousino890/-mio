@@ -1,0 +1,82 @@
+name: Check SII scrape status (lee progreso en el VPS)
+
+# Diagnóstico de solo lectura del scrape SII mapasui (run-sii-mapasui.sh):
+# ¿sigue vivo?, ¿en qué etapa va?, ¿cuánto output generó?, ¿cuántos predios
+# hay ya en sii_mapasui_predios_cl? Igual que check-scrape-status.yml, se
+# dispara con push a un archivo centinela porque la API de GitHub de este
+# entorno no permite lanzar workflow_dispatch. No toca el scrape en curso.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/sii-scraper/.check-sii-status'
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Leer estado del scrape SII en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            cd /opt/casafari
+
+            echo "── Lockfile ──────────────────────────────────────────"
+            LOCKFILE="/tmp/casafari-scrape-sii-mapasui.lock"
+            LOCK_PID="$(cat "$LOCKFILE" 2>/dev/null || true)"
+            if [ -e "$LOCKFILE" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+              echo "▶ Scrape SII EN CURSO (PID $LOCK_PID)"
+              ps -fp "$LOCK_PID" 2>&1 || true
+            else
+              echo "○ No hay scrape SII corriendo (lockfile ausente o PID muerto)"
+            fi
+
+            echo ""
+            echo "── Procesos del scraper vivos ────────────────────────"
+            ps aux | grep -E 'run-sii-mapasui|sii-scraper/run\.py|run\.py (manzanas|predios)' | grep -v grep || echo "(ninguno)"
+
+            echo ""
+            echo "── Logs de lanzamiento (todos, más reciente al final) ─"
+            ls -ltr scraper/output/launch-sii-mapasui-*.log 2>/dev/null || echo "(no hay logs de lanzamiento)"
+
+            echo ""
+            echo "── Último log de lanzamiento: primeras 30 líneas ─────"
+            LATEST=$(ls -t scraper/output/launch-sii-mapasui-*.log 2>/dev/null | head -1)
+            if [ -n "$LATEST" ]; then
+              echo "($LATEST)"
+              head -30 "$LATEST"
+              echo ""
+              echo "── Último log de lanzamiento: últimas 60 líneas ──────"
+              tail -60 "$LATEST"
+            fi
+
+            echo ""
+            echo "── Output del scraper (scraper/sii-scraper/output/) ──"
+            ls -laR scraper/sii-scraper/output/ 2>/dev/null | head -60 || echo "(no existe output/)"
+
+            echo ""
+            echo "── Tamaño de JSONL por etapa (líneas = registros) ────"
+            for f in scraper/sii-scraper/output/*/*.jsonl scraper/sii-scraper/output/*.jsonl; do
+              [ -f "$f" ] && echo "  $(wc -l < "$f") líneas · $f"
+            done 2>/dev/null || true
+
+            echo ""
+            echo "── Predios en BD (sii_mapasui_predios_cl) ────────────"
+            docker exec casafari-pg psql -U casafari -d casafari -t -c \
+              "SELECT count(*) AS total, count(DISTINCT comuna_code) AS comunas, max(created_at) AS ultimo FROM sii_mapasui_predios_cl;" 2>&1 \
+              || echo "(no se pudo consultar la BD)"
+
+            echo ""
+            echo "── Memoria y disco del VPS ───────────────────────────"
+            free -m
+            df -h / | tail -1
+          EOF

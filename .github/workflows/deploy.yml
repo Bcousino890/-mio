@@ -21,6 +21,7 @@ on:
       - '!scraper/.fix-db-password'
       - '!scraper/.add-casafari-ssh-key'
       - '!scraper/sii-scraper/.launch-sii-mapasui'
+      - '!scraper/sii-scraper/.check-sii-status'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
