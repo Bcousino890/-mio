@@ -2,6 +2,31 @@ import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 
+function parseEnvVar(content: string, key: string): string {
+  const m = content.match(new RegExp(`^${key}=(.+)$`, 'm'))
+  return m?.[1]?.trim() ?? ''
+}
+
+export async function GET() {
+  // Igual que /api/admin/openrouter-config: lee del .env en disco (refleja
+  // guardados recientes sin reiniciar) con process.env como fallback para
+  // credenciales inyectadas directamente vía Docker.
+  let user = ''
+  let pass = ''
+  try {
+    const content = await fs.readFile(join(process.cwd(), '.env'), 'utf-8')
+    user = parseEnvVar(content, 'DEALERNET_USER')
+    pass = parseEnvVar(content, 'DEALERNET_PASSWORD')
+  } catch { /* archivo no existe aún */ }
+  if (!user) user = process.env.DEALERNET_USER ?? ''
+  if (!pass) pass = process.env.DEALERNET_PASSWORD ?? ''
+
+  return NextResponse.json({
+    configured: user.length > 0 && pass.length > 0,
+    user,
+  })
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
 

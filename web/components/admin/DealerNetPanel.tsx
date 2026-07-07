@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Phone, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
 type Status = 'idle' | 'saving' | 'success' | 'error'
@@ -10,6 +10,14 @@ export default function DealerNetPanel() {
   const [pass, setPass] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
+  const [current, setCurrent] = useState<{ configured: boolean; user: string } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/admin/dealernet-config')
+      .then(r => r.json())
+      .then(d => setCurrent(d))
+      .catch(() => {})
+  }, [])
 
   async function handleSave() {
     if (!user || !pass) {
@@ -30,6 +38,9 @@ export default function DealerNetPanel() {
         setTimeout(() => setStatus('idle'), 3000)
         setUser('')
         setPass('')
+        // refrescar estado actual para que el badge "Configurada" se actualice sin recargar
+        const updated = await fetch('/api/admin/dealernet-config').then(r => r.json())
+        setCurrent(updated)
       } else {
         setStatus('error')
         setError(data.error || 'Error al guardar')
@@ -45,7 +56,25 @@ export default function DealerNetPanel() {
       <div className="flex items-center gap-2">
         <Phone size={14} className="text-blue-400" />
         <p className="text-sm font-semibold text-slate-200">Credenciales DealerNet</p>
+        {current?.configured && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-900/30 border border-emerald-700/40 rounded-full px-2 py-0.5">
+            <CheckCircle2 size={10} /> Configurada
+          </span>
+        )}
+        {current && !current.configured && (
+          <span className="ml-auto text-[10px] text-amber-400 bg-amber-900/30 border border-amber-700/40 rounded-full px-2 py-0.5">
+            Sin configurar
+          </span>
+        )}
       </div>
+
+      {current?.configured && (
+        <p className="text-[11px] text-slate-500">
+          Usuario activo: <code className="bg-slate-900 px-1 py-0.5 rounded text-slate-300">{current.user}</code>
+          {' '}— ya quedan guardadas, no hace falta volver a escribirlas.
+        </p>
+      )}
+
       <p className="text-[11px] text-slate-500">
         Credenciales para acceder a DealerNet (directorio de contactos Chile).
         Se guardan en el <code className="bg-slate-900 px-1 py-0.5 rounded">.env</code> del VPS.
