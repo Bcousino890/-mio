@@ -67,6 +67,26 @@ $COMPOSE up -d --no-deps app
 sleep 8
 curl -sf http://127.0.0.1:3000 >/dev/null || { $COMPOSE logs app --tail=40; echo "❌ App no responde"; exit 1; }
 
+# Smoke-test de rutas clave: el health check de arriba solo cubre '/'. Esto
+# deja constancia en el log del workflow de que las pantallas nuevas realmente
+# se sirven desde el VPS (verificable sin acceso al dominio público).
+for ruta in /chile /chile/sii-mapasui; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000${ruta}")
+  if [ "$code" = "200" ]; then
+    echo "  ✅ ${ruta} → 200"
+  else
+    $COMPOSE logs app --tail=40
+    echo "❌ ${ruta} → ${code}"; exit 1
+  fi
+done
+# La API consulta Postgres: si falla no se revierte el deploy, pero queda avisado.
+api_code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3000/api/chile/sii-mapasui-stats")
+if [ "$api_code" = "200" ]; then
+  echo "  ✅ /api/chile/sii-mapasui-stats → 200"
+else
+  echo "  ⚠ /api/chile/sii-mapasui-stats → ${api_code} (la pantalla mostrará error de datos)"
+fi
+
 echo "▶ [3/4] Reconectando a la red compartida ($SHARED_NET)..."
 if [ -n "$SHARED_NET" ]; then
   docker network connect "$SHARED_NET" "$APP_CONTAINER" 2>/dev/null || true

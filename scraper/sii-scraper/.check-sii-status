@@ -1,0 +1,8 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/check-sii-status.yml, que SSHea al VPS e imprime el estado
+del scrape SII mapasui (lockfile, procesos, logs, output y predios en BD).
+De solo lectura: no toca el scrape en curso.
+
+Historial de consultas:
+- 2026-07-07 — primera consulta: la pantalla /chile/sii-mapasui muestra 0
+  predios ingestados 3 días después del lanzamiento de Las Condes (manzanas-geo).
