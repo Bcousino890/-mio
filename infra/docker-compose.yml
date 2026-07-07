@@ -93,6 +93,21 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
       NOMINATIM_URL: http://casafari-nominatim:8080/search
+      # DealerNet: el --env-file del compose solo interpola ESTE archivo, no
+      # inyecta variables al contenedor — sin este passthrough las credenciales
+      # del .env del VPS jamás llegaban a process.env de la app y el buscador
+      # fallaba con "DEALERNET_USER / DEALERNET_PASSWORD no configurados".
+      DEALERNET_USER: ${DEALERNET_USER:-}
+      DEALERNET_PASSWORD: ${DEALERNET_PASSWORD:-}
+    volumes:
+      # El .env del VPS montado donde la app lo lee/escribe (process.cwd() =
+      # /app en el standalone). Dos motivos: (1) "Guardar credenciales" de la
+      # UI (/api/admin/dealernet-config) escribía un .env interno del
+      # contenedor que se perdía en cada deploy — ahora persiste en el host;
+      # (2) el fallback en caliente de lib/dealernet.ts lee este archivo, así
+      # que credenciales guardadas desde la UI aplican sin reiniciar.
+      # deploy.yml garantiza que el .env existe antes de levantar el stack.
+      - ../.env:/app/.env
     depends_on:
       postgres:
         condition: service_healthy
