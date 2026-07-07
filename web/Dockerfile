@@ -23,11 +23,14 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
-# standalone output incluye un server.js mínimo con sus propias dependencias.
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static     ./.next/static
-COPY --from=builder /app/public           ./public
-
+# Los RUN de apt van ANTES de los COPY del build: estos layers no dependen
+# del código, así que el layer-cache de Docker los reutiliza en cada deploy y
+# apt-get solo corre la primera vez (o si cambia la lista de paquetes). Con el
+# orden anterior (COPY primero), cada cambio de código invalidaba la caché y
+# apt re-instalaba ~180 paquetes en cada deploy — y ese pico de memoria mató
+# con OOM (exit 137) los 3 intentos del deploy #361 en el VPS de 8GB, que
+# además comparte RAM con Postgres y el scrape SII en curso.
+#
 # unzip: la subida SII y la ingesta de catastral.cl extraen .zip a disco vía
 # CLI en vez de cargarlos completos en memoria con una librería JS (soporta
 # archivos grandes). python3-geopandas/pandas: ingesta de GeoParquet con
@@ -68,6 +71,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium \
   && rm -rf /var/lib/apt/lists/*
 
 ENV CHROME_BINARY=/usr/bin/chromium
+
+# standalone output incluye un server.js mínimo con sus propias dependencias.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static     ./.next/static
+COPY --from=builder /app/public           ./public
 
 EXPOSE 3000
 CMD ["node", "server.js"]
