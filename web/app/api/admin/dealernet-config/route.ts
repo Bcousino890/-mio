@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Credenciales guardadas. Reinicia el contenedor para que se apliquen.',
+      message: 'Credenciales guardadas y activas — no hace falta reiniciar el contenedor.',
     })
   } catch (error) {
     console.error('Error guardando dealernet config:', error)
