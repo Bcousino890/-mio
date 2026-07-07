@@ -89,6 +89,24 @@ services:
     image: casafari-app:latest
     container_name: casafari-app
     restart: unless-stopped
+    # env_file carga TODO lo que haya en el .env del VPS (DEALERNET_USER/
+    # PASSWORD, OPENROUTER_API_KEY, SMARTPROXY_CL_*, CRON_SECRET, etc.) como
+    # variables de entorno reales del contenedor. Antes de esto, `app` solo
+    # recibía las 3 variables listadas abajo en `environment:` — cualquier
+    # otra integración que lea `process.env.X` directamente (sin el fallback
+    # a lectura de disco que sí tienen dealernet.ts/openrouter-config) nunca
+    # veía su valor, aunque estuviera bien configurado en .env.
+    env_file:
+      - ../.env
+    # Bind-mount (no solo env_file): las rutas de config de la UI (p.ej.
+    # /api/admin/dealernet-config) escriben credenciales en `.env` en caliente
+    # vía `process.cwd()/.env` para no requerir reinicio. Sin este mount ese
+    # archivo vivía solo en la capa efímera del contenedor y se perdía en
+    # cada deploy (docker load + recreate) — de ahí que guardar credenciales
+    # "funcionara" en la UI pero la siguiente consulta a DealerNet siguiera
+    # fallando con "no configurados en el entorno".
+    volumes:
+      - ../.env:/app/.env
     environment:
       NODE_ENV: production
       DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
