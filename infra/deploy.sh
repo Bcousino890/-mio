@@ -51,8 +51,16 @@ SHARED_NET="${SHARED_NET:-$(docker inspect "$SHARED_NGINX" \
 echo "▶ [0/4] Asegurando Nominatim propio (CL) arriba — no bloquea el deploy..."
 $COMPOSE up -d nominatim || true
 
-echo "▶ [1/4] Build de la app..."
-$COMPOSE build app
+# SKIP_BUILD=1: la imagen casafari-app:latest ya viene construida (el workflow
+# de deploy la construye en el runner de GitHub y la carga aquí vía docker
+# load). Construir en este VPS de 8GB compartido con Postgres/Nominatim/scrapes
+# muere con OOM (exit 137) — 4 intentos seguidos entre los runs #361 y #362.
+if [ "${SKIP_BUILD:-0}" = "1" ]; then
+  echo "▶ [1/4] Build omitido — usando imagen casafari-app:latest precargada"
+else
+  echo "▶ [1/4] Build de la app..."
+  $COMPOSE build app
+fi
 
 echo "▶ [2/4] Swap del contenedor..."
 $COMPOSE up -d --no-deps app

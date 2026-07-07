@@ -58,9 +58,17 @@ SHARED_NET="${SHARED_NET:-$(docker inspect "$SHARED_NGINX" \
 ok "nginx compartido: $SHARED_NGINX  ·  red: $SHARED_NET"
 
 # ── 1. Build de la imagen de la app ──────────────────────────────────────────
-log "[1/7] Build de la app (puede tardar en el primer run)..."
-$COMPOSE build app
-ok "Imagen construida"
+# SKIP_BUILD=1: el workflow de deploy construye casafari-app:latest en el
+# runner de GitHub y la carga aquí vía docker load (el build en este VPS
+# compartido muere con OOM).
+if [ "${SKIP_BUILD:-0}" = "1" ]; then
+  log "[1/7] Build omitido — usando imagen casafari-app:latest precargada"
+  ok "Imagen precargada"
+else
+  log "[1/7] Build de la app (puede tardar en el primer run)..."
+  $COMPOSE build app
+  ok "Imagen construida"
+fi
 
 # ── 2. Postgres + Redis (best-effort: la UI usa mock, no bloquea) ────────────
 log "[2/7] Levantando Postgres (5433) + Redis (6380)..."

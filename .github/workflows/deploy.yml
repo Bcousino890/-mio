@@ -64,6 +64,23 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT || 22 }} -o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
             ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/" || exit 1
 
+      # 3.5. Construir la imagen en el RUNNER (7GB de RAM libres, sin Postgres,
+      # Nominatim ni scrapes compitiendo) y cargarla ya construida en el VPS.
+      # Construirla en el VPS de 8GB compartido muere con OOM (exit 137): 4
+      # intentos seguidos entre los runs #361 (x3) y #362, incluso con 4GB de
+      # swap garantizado por deploy.sh. deploy.sh recibe SKIP_BUILD=1 y usa la
+      # imagen precargada.
+      - name: Build de la imagen en el runner
+        run: docker build -t casafari-app:latest ./web
+
+      - name: Enviar imagen al VPS (docker save → docker load)
+        run: |
+          docker save casafari-app:latest | gzip | \
+            ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+              -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+              "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+              'gunzip | docker load && docker image prune -f >/dev/null'
+
       # 4. Ejecutar el deploy en el VPS
       - name: Deploy
         run: |
@@ -116,9 +133,9 @@ jobs:
             # Primera vez: bootstrap completo (DB+nginx+TLS). Después: deploy normal.
             if docker ps --format '{{.Names}}' | grep -q casafari-app; then
               echo "▶ Deploy incremental (app ya existe)"
-              bash infra/deploy.sh
+              SKIP_BUILD=1 bash infra/deploy.sh
             else
               echo "▶ Primera instalación: bootstrap completo"
-              bash infra/bootstrap.sh
+              SKIP_BUILD=1 bash infra/bootstrap.sh
             fi
           EOF
