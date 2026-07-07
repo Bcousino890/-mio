@@ -59,6 +59,9 @@ jobs:
             --exclude '.next' \
             --exclude '.env' \
             --exclude 'scraper/output' \
+            --exclude 'scraper/sii-scraper/output' \
+            --exclude 'scraper/sii-scraper/venv' \
+            --exclude 'scraper/sii-scraper/config.json' \
             --exclude 'scraper/tgr/venv' \
             --exclude 'scraper/tgr/data' \
             --exclude 'scraper/tgr/roles_input_rm.csv' \

@@ -72,7 +72,7 @@ jobs:
             echo ""
             echo "── Predios en BD (sii_mapasui_predios_cl) ────────────"
             docker exec casafari-pg psql -U casafari -d casafari -t -c \
-              "SELECT count(*) AS total, count(DISTINCT comuna_code) AS comunas, max(created_at) AS ultimo FROM sii_mapasui_predios_cl;" 2>&1 \
+              "SELECT count(*) AS total, count(DISTINCT comuna_id) AS comunas, max(created_at) AS ultimo FROM sii_mapasui_predios_cl;" 2>&1 \
               || echo "(no se pudo consultar la BD)"
 
             echo ""
