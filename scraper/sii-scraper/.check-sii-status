@@ -6,3 +6,6 @@ De solo lectura: no toca el scrape en curso.
 Historial de consultas:
 - 2026-07-07 — primera consulta: la pantalla /chile/sii-mapasui muestra 0
   predios ingestados 3 días después del lanzamiento de Las Condes (manzanas-geo).
+- 2026-07-07 — segunda consulta, post-relanzamiento (PR #114, run scrape-sii-mapasui #2
+  a las 14:32 UTC): verificar que el proceso relanzado sigue vivo y avanzando en
+  manzanas-geo tras el fix del rsync que le borraba output/venv.
