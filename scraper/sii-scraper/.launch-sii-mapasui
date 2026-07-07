@@ -13,3 +13,8 @@ manzanas_stage, o editar los defaults del workflow antes de pushear el centinela
 Historial de lanzamientos:
 - 2026-07-04 — primer lanzamiento: Las Condes (15108), etapa manzanas-geo,
   ritmo anti-429 rps=2/concurrency=2. Ingesta a sii_mapasui_predios_cl.
+- 2026-07-07 — relanzamiento: Las Condes (15108), mismos parámetros. La
+  corrida anterior perdió su output/ y venv/ a mitad de camino: el rsync
+  --delete de los deploys del 5-7 de julio los borraba en cada deploy (no
+  estaban excluidos). Corregido en deploy.yml antes de relanzar; además el
+  ingest ya no revienta con ENOENT si no hay predios que ingestar.

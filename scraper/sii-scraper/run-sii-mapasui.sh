@@ -111,6 +111,14 @@ if [ ! -d node_modules/pg ]; then
   npm install --omit=dev --no-audit --no-fund
 fi
 
+# Si la corrida no llegó a extraer ningún predio (p.ej. murió la etapa 2, o
+# todos los fetch fallaron por 429), no hay carpeta que ingestar: avisar y
+# salir limpio en vez de reventar con ENOENT (así el log termina con un estado
+# claro y el lockfile se libera por el trap).
+if [ ! -d sii-scraper/output/predios ]; then
+  echo "⚠ No existe sii-scraper/output/predios — la etapa de predios no produjo salida; nada que ingestar."
+  exit 0
+fi
 echo "▶ [3/3] Ingestando predios en sii_mapasui_predios_cl..."
 DATABASE_URL="$DATABASE_URL" node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
 
