@@ -11,21 +11,27 @@ import { XMLParser } from 'fast-xml-parser'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
-const DEALERNET_WSDL_URL = process.env.DEALERNET_WSDL_URL || 'http://infows.dealernet.cl/wsinfodlnt.asmx'
+// https, no http: el endpoint documentado en DEALERNET-PROTOCOLO.md es https
+// y las credenciales viajan en el body del SOAP — por http irían en claro.
+const DEALERNET_WSDL_URL = process.env.DEALERNET_WSDL_URL || 'https://infows.dealernet.cl/wsinfodlnt.asmx'
 
 // Lee el .env del disco como fallback para cuando las credenciales se guardaron
 // desde la UI de configuración sin reiniciar el contenedor. process.env solo se
-// puebla al arrancar; el archivo .env sí se actualiza en caliente.
-function getDealernetCreds(): { user: string | null; pass: string | null } {
-  const user = process.env.DEALERNET_USER
-  const pass = process.env.DEALERNET_PASSWORD
+// puebla al arrancar; el archivo .env sí se actualiza en caliente (en el VPS
+// está bind-montado en /app/.env — ver infra/docker-compose.yml).
+// `||` y no `??` en todos los pasos: el compose inyecta ${VAR:-} como string
+// vacío cuando la variable no está en el .env del VPS, y un '' cortaba el
+// fallback al archivo dejando las credenciales "configuradas" pero vacías.
+export function getDealernetCreds(): { user: string | null; pass: string | null } {
+  const user = process.env.DEALERNET_USER || null
+  const pass = process.env.DEALERNET_PASSWORD || null
   if (user && pass) return { user, pass }
   try {
     const content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
-    const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null
-    return { user: user ?? parse('DEALERNET_USER'), pass: pass ?? parse('DEALERNET_PASSWORD') }
+    const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() || null
+    return { user: user || parse('DEALERNET_USER'), pass: pass || parse('DEALERNET_PASSWORD') }
   } catch {
-    return { user: null, pass: null }
+    return { user, pass }
   }
 }
 
@@ -431,6 +437,19 @@ function parseBuscadorMultipleResponse(xml: string): DealernetBuscadorMultipleRe
   }
 }
 
+// El protocolo espera el rol como "Manzana-Predio, Comuna" (ej. "3004-19,
+// Las Condes"), pero el SII y el catastro entregan rol zero-padded
+// ("03004-00019") — con los ceros DealerNet no encuentra el rol y devuelve 0
+// candidatos sin marcar error. Quitamos los ceros a la izquierda de manzana y
+// predio; el resto (comuna) queda intacto.
+export function normalizeRolArgs(args: string): string {
+  const [rol, ...resto] = args.split(',')
+  const m = rol.trim().match(/^0*(\d+)\s*-\s*0*(\d+)$/)
+  if (!m) return args
+  const normalized = `${m[1]}-${m[2]}`
+  return resto.length ? `${normalized},${resto.join(',')}` : normalized
+}
+
 export async function queryDealernetBuscadorMultiple(
   tipbusq: BuscadorMultipleTipo,
   args: string
@@ -445,7 +464,8 @@ export async function queryDealernetBuscadorMultiple(
   // coincidencia y devolver 0 candidatos sin que sea un error real de
   // DealerNet. Normalizamos espacios para no depender de que el usuario
   // tipee perfecto.
-  const normalizedArgs = args.trim().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ')
+  let normalizedArgs = args.trim().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ')
+  if (tipbusq === 'rol') normalizedArgs = normalizeRolArgs(normalizedArgs)
   const body = buildBuscadorMultipleXml(tipbusq, normalizedArgs, user, pass)
   const res = await fetch(DEALERNET_WSDL_URL, {
     method: 'POST',

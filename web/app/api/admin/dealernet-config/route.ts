@@ -38,9 +38,12 @@ export async function POST(request: NextRequest) {
 
     await fs.writeFile(envPath, content, 'utf-8')
 
+    // El .env está bind-montado desde el host (infra/docker-compose.yml), así
+    // que lo guardado persiste entre deploys, y lib/dealernet.ts lo relee en
+    // cada consulta — no hace falta reiniciar nada.
     return NextResponse.json({
       success: true,
-      message: 'Credenciales guardadas. Reinicia el contenedor para que se apliquen.',
+      message: 'Credenciales guardadas — activas de inmediato.',
     })
   } catch (error) {
     console.error('Error guardando dealernet config:', error)

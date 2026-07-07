@@ -1,20 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readFileSync } from 'fs'
-import { join } from 'path'
-import { parseRut, isValidRut } from '@/lib/dealernet'
-
-function getDealernetCreds() {
-  const user = process.env.DEALERNET_USER
-  const pass = process.env.DEALERNET_PASSWORD
-  if (user && pass) return { user, pass }
-  try {
-    const content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
-    const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null
-    return { user: user ?? parse('DEALERNET_USER'), pass: pass ?? parse('DEALERNET_PASSWORD') }
-  } catch {
-    return { user: null, pass: null }
-  }
-}
+import { parseRut, isValidRut, getDealernetCreds } from '@/lib/dealernet'
 
 function escapeXml(v: string) {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
@@ -57,7 +42,7 @@ export async function GET(request: NextRequest) {
   </soapenv:Body>
 </soapenv:Envelope>`
 
-  const wsdl = process.env.DEALERNET_WSDL_URL ?? 'http://infows.dealernet.cl/wsinfodlnt.asmx'
+  const wsdl = process.env.DEALERNET_WSDL_URL || 'https://infows.dealernet.cl/wsinfodlnt.asmx'
 
   try {
     const res = await fetch(wsdl, {
