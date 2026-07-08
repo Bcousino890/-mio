@@ -1,0 +1,14 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/ingest-sii-mapasui-now.yml, que hace SSH al VPS e ingesta
+AHORA MISMO scraper/sii-scraper/output/predios/*.jsonl en
+sii_mapasui_predios_cl, sin tocar el proceso del scrape en curso (idempotente
+vía ON CONFLICT DO UPDATE). Útil mientras la corrida sigue en la etapa de
+predios y aún no llegó al paso final de ingesta del propio run-sii-mapasui.sh.
+
+Historial:
+- 2026-07-08 — primer uso: el scrape relanzado el 7 de julio (14:32 UTC)
+  llevaba ~12h con 23.228 predios ya extraídos a disco (etapa predios en
+  curso) pero sii_mapasui_predios_cl seguía en 0 — la ingesta solo corría al
+  terminar TODA la comuna. Se ingesta el output ya existente ahora; además se
+  agregó ingesta incremental (cada 10 min) a run-sii-mapasui.sh para que
+  futuras corridas no necesiten este parche manual.

@@ -1,0 +1,50 @@
+name: Ingestar predios SII mapasui ya extraídos (bajo demanda)
+
+# El scrape de mapasui (run-sii-mapasui.sh) solo ingesta a
+# sii_mapasui_predios_cl al terminar TODA la comuna (paso [3/3], al final del
+# script). Si la corrida lleva muchas horas en la etapa de predios, ya hay
+# miles de registros extraídos en scraper/sii-scraper/output/predios/*.jsonl
+# en el VPS que no se ven en /chile/sii-mapasui hasta que termine todo.
+#
+# Este workflow ingesta ESE output ya existente ahora mismo, sin tocar el
+# proceso del scrape en curso (ingest-sii-mapasui.mjs solo lee los .jsonl; el
+# INSERT ... ON CONFLICT DO UPDATE de sii-mapasui-cl.mjs lo hace seguro de
+# re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo).
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.ingest-sii-mapasui-now'
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ingestar output/predios/*.jsonl existente
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari/scraper
+            if [ -f ../.env ]; then set -a; source ../.env; set +a; fi
+            if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+              echo "✗ Falta POSTGRES_PASSWORD (revisa .env)"
+              exit 1
+            fi
+            export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
+            if [ ! -d node_modules/pg ]; then
+              echo "▶ Instalando dependencias Node del scraper (pg)..."
+              npm install --omit=dev --no-audit --no-fund
+            fi
+            echo "▶ Ingestando sii-scraper/output/predios/ en sii_mapasui_predios_cl..."
+            node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
+          EOF
