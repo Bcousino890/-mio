@@ -9,3 +9,8 @@ Historial de consultas:
 - 2026-07-07 — segunda consulta, post-relanzamiento (PR #114, run scrape-sii-mapasui #2
   a las 14:32 UTC): verificar que el proceso relanzado sigue vivo y avanzando en
   manzanas-geo tras el fix del rsync que le borraba output/venv.
+- 2026-07-08 — tercera consulta (~12h después del relanzamiento de las 14:32
+  UTC del 7 de julio): el usuario reporta que /chile/sii-mapasui sigue en 0
+  predios; verificar cuántas manzanas lleva descubiertas manzanas-geo para
+  decidir si la arquitectura de ingesta al final de la comuna es viable o
+  hay que cambiarla a incremental.
