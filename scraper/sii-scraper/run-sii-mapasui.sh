@@ -39,7 +39,12 @@ if [ -e "$LOCKFILE" ]; then
   fi
 fi
 echo $$ > "$LOCKFILE"
-trap 'rm -f "$LOCKFILE"' EXIT
+INGEST_LOOP_PID=""
+cleanup() {
+  [ -n "$INGEST_LOOP_PID" ] && kill "$INGEST_LOOP_PID" 2>/dev/null || true
+  rm -f "$LOCKFILE"
+}
+trap cleanup EXIT
 
 if [ -f .env ]; then
   set -a; source .env; set +a
@@ -99,17 +104,43 @@ JSON
 echo "▶ [1/3] Descubriendo manzanas (${SII_MANZANAS_STAGE})..."
 ./venv/bin/python run.py "$SII_MANZANAS_STAGE" --config config.json
 
+# El ingest (Node) importa `pg` desde scraper/package.json. El deploy excluye
+# node_modules del rsync, así que si no están, se instalan una vez. Se instala
+# ANTES de la etapa de predios (no después) porque la ingesta incremental de
+# abajo lo necesita mientras esa etapa corre, no solo al final.
+if [ ! -d "$REPO_DIR/scraper/node_modules/pg" ]; then
+  echo "▶ Instalando dependencias Node del scraper (pg) para el ingest..."
+  (cd "$REPO_DIR/scraper" && npm install --omit=dev --no-audit --no-fund)
+fi
+
+# Ingesta incremental: la etapa de predios de una comuna grande (p.ej. Las
+# Condes: ~1100 manzanas) puede tardar muchas horas a ritmo anti-429, y sin
+# esto sii_mapasui_predios_cl (y por tanto /chile/sii-mapasui) se queda en 0
+# hasta que TERMINA toda la comuna. Se ingesta lo ya extraído cada
+# SII_INGEST_INTERVAL_SEC mientras la etapa de predios sigue corriendo en
+# primer plano; ingest-sii-mapasui.mjs solo lee el .jsonl (no lo bloquea) y su
+# INSERT ON CONFLICT DO UPDATE es idempotente, así que re-ingestar el mismo
+# archivo en crecimiento es seguro.
+SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"
+(
+  while sleep "$SII_INGEST_INTERVAL_SEC"; do
+    if [ -d output/predios ]; then
+      echo "▶ [ingesta incremental $(date -Iseconds)]"
+      DATABASE_URL="$DATABASE_URL" node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios 2>&1 \
+        | sed 's/^/  [ingest] /'
+    fi
+  done
+) &
+INGEST_LOOP_PID=$!
+
 echo "▶ [2/3] Extrayendo predios..."
 ./venv/bin/python run.py predios --config config.json
 
-# ── Ingesta a Postgres de producción ────────────────────────────────────────
-# El ingest (Node) importa `pg` desde scraper/package.json. El deploy excluye
-# node_modules del rsync, así que si no están, se instalan una vez.
+kill "$INGEST_LOOP_PID" 2>/dev/null || true
+wait "$INGEST_LOOP_PID" 2>/dev/null || true
+INGEST_LOOP_PID=""
+
 cd "$REPO_DIR/scraper"
-if [ ! -d node_modules/pg ]; then
-  echo "▶ Instalando dependencias Node del scraper (pg) para el ingest..."
-  npm install --omit=dev --no-audit --no-fund
-fi
 
 # Si la corrida no llegó a extraer ningún predio (p.ej. murió la etapa 2, o
 # todos los fetch fallaron por 429), no hay carpeta que ingestar: avisar y
