@@ -9,9 +9,11 @@ import { pool } from '@/lib/db'
  * `tgr-stats`, pero para la tabla de procedencia scraping (mapasui).
  *
  * Nota: a diferencia de TGR (que escribe rol por rol), esta tabla se llena por
- * LOTES — el ingest (`ingest-sii-mapasui.mjs`) corre al terminar la etapa
- * `predios` de cada comuna. Por eso "última ingesta" refleja el último lote,
- * no un goteo continuo.
+ * LOTES — la ingesta incremental de run-sii-mapasui.sh re-ingesta el JSONL
+ * cada SII_INGEST_INTERVAL_SEC (default 600 s). Por eso el latido mira
+ * GREATEST(created_at, updated_at) — el upsert bumpea updated_at aunque un
+ * lote no traiga predios nuevos — y la ventana de "activo" es 15 min
+ * (1.5× la cadencia), no los 5 min de un goteo continuo.
  */
 export async function GET() {
   try {
@@ -48,8 +50,8 @@ export async function GET() {
         LIMIT 20
       `),
       pool.query(`
-        SELECT MAX(created_at) AS ultima,
-               COUNT(*) FILTER (WHERE created_at > now() - interval '5 minutes') AS recientes
+        SELECT MAX(GREATEST(created_at, updated_at)) AS ultima,
+               COUNT(*) FILTER (WHERE created_at > now() - interval '15 minutes') AS recientes
         FROM sii_mapasui_predios_cl
       `),
     ])
@@ -59,8 +61,9 @@ export async function GET() {
 
     const ultimaIngesta = hb.ultima as Date | null
     const segundosDesdeUltima = ultimaIngesta ? (Date.now() - new Date(ultimaIngesta).getTime()) / 1000 : null
-    // "activo" si hubo ingesta en los últimos 5 min (un lote recién llegó).
-    const activo = segundosDesdeUltima !== null && segundosDesdeUltima < 300
+    // "activo" si hubo escritura (insert o upsert) en los últimos 15 min:
+    // 1.5× el intervalo de la ingesta incremental (SII_INGEST_INTERVAL_SEC=600).
+    const activo = segundosDesdeUltima !== null && segundosDesdeUltima < 900
 
     return NextResponse.json({
       success: true,
@@ -68,7 +71,7 @@ export async function GET() {
         activo,
         ultima_ingesta: ultimaIngesta,
         segundos_desde_ultima: segundosDesdeUltima,
-        ingestados_ultimos_5min: Number(hb.recientes),
+        nuevos_ultimos_15min: Number(hb.recientes),
       },
       globales: {
         total: Number(g.total),
