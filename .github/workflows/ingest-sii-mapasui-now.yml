@@ -12,6 +12,13 @@ name: Ingestar predios SII mapasui ya extraídos (bajo demanda)
 # re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo).
 on:
   workflow_dispatch: {}
+  # Respaldo horario: la ingesta incremental de run-sii-mapasui.sh (cada 10
+  # min) es el camino normal, pero este pipeline ya se murió en silencio dos
+  # veces (rsync --delete, corrida lanzada con script viejo). Re-ingestar el
+  # JSONL existente es idempotente y tarda ~30 s, así que un cron horario
+  # garantiza que sii_mapasui_predios_cl nunca quede >1 h por detrás del disco.
+  schedule:
+    - cron: '23 * * * *'
   push:
     branches:
       - main
@@ -35,6 +42,10 @@ jobs:
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
             cd /opt/casafari/scraper
+            if [ ! -d sii-scraper/output/predios ]; then
+              echo "○ No existe sii-scraper/output/predios en el VPS — nada que ingestar (salida limpia para el cron)."
+              exit 0
+            fi
             if [ -f ../.env ]; then set -a; source ../.env; set +a; fi
             if [ -z "${POSTGRES_PASSWORD:-}" ]; then
               echo "✗ Falta POSTGRES_PASSWORD (revisa .env)"

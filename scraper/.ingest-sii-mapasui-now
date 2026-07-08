@@ -12,3 +12,8 @@ Historial:
   terminar TODA la comuna. Se ingesta el output ya existente ahora; además se
   agregó ingesta incremental (cada 10 min) a run-sii-mapasui.sh para que
   futuras corridas no necesiten este parche manual.
+- 2026-07-08 (bis) — la corrida en curso se lanzó el 7 de julio 14:32 UTC con
+  el script ANTERIOR a la ingesta incremental, así que la BD quedó congelada
+  en la ingesta manual de las 02:35 (~19 h sin lotes). Se ingesta el output
+  acumulado ya, se relanza el scrape (ver .launch-sii-mapasui) para que tome
+  el script nuevo, y el workflow gana un cron horario de respaldo.

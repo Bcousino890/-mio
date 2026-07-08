@@ -27,7 +27,7 @@ interface IngestaStatus {
   activo: boolean
   ultima_ingesta: string | null
   segundos_desde_ultima: number | null
-  ingestados_ultimos_5min: number
+  nuevos_ultimos_15min: number
 }
 
 interface Stats {
@@ -114,14 +114,14 @@ export default function SiiMapasuiStats() {
         <div className="flex items-center gap-3">
           <span className={`inline-block w-2.5 h-2.5 rounded-full ${ingesta_status.activo ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
           <span className="text-sm font-medium">
-            {ingesta_status.activo ? 'Ingesta reciente (lote llegando)' : 'Sin ingesta reciente'}
+            {ingesta_status.activo ? 'Ingesta activa (lotes cada ~10 min)' : 'Sin ingesta reciente'}
           </span>
           <span className="text-xs text-slate-500">
             última ingesta {formatoTiempo(ingesta_status.segundos_desde_ultima)}
           </span>
         </div>
         <div className="text-xs text-slate-500">
-          {ingesta_status.ingestados_ultimos_5min.toLocaleString('es-CL')} ingestados en los últimos 5 min
+          {ingesta_status.nuevos_ultimos_15min.toLocaleString('es-CL')} predios nuevos en los últimos 15 min
         </div>
       </div>
 

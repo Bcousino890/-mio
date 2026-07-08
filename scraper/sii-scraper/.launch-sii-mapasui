@@ -3,8 +3,10 @@ Archivo centinela: cada push a este archivo (en main) dispara
 run-sii-mapasui.sh en background (scraper de predios del SII → ingesta en
 sii_mapasui_predios_cl).
 
-run-sii-mapasui.sh tiene su propio lockfile, así que un push accidental
-mientras hay un scrape en curso no arranca un segundo.
+⚠ El workflow MATA cualquier scrape SII en curso antes de relanzar (paso
+"Matar scrape SII anterior"), así que pushear este centinela reinicia la
+corrida — sin pérdida grave: ambas etapas reanudan desde los checkpoints de
+output/checkpoints/. No pushear por accidente.
 
 Para apuntar a otra comuna o cambiar la etapa de descubrimiento, usar el botón
 "Run workflow" (workflow_dispatch) con los inputs comuna_code / comuna_nombre /
@@ -18,3 +20,9 @@ Historial de lanzamientos:
   --delete de los deploys del 5-7 de julio los borraba en cada deploy (no
   estaban excluidos). Corregido en deploy.yml antes de relanzar; además el
   ingest ya no revienta con ENOENT si no hay predios que ingestar.
+- 2026-07-08 — relanzamiento: Las Condes (15108), mismos parámetros. La
+  corrida del 7 de julio seguía viva pero ejecutaba el script anterior a la
+  ingesta incremental (#119), así que la BD no recibía lotes desde la ingesta
+  manual de las 02:35. El relanzamiento toma run-sii-mapasui.sh actual (ya
+  desplegado en el VPS) y reanuda desde los checkpoints de manzanas/predios,
+  con ingesta a sii_mapasui_predios_cl cada 10 min.
