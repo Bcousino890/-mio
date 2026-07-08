@@ -11,21 +11,29 @@ import { XMLParser } from 'fast-xml-parser'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
-const DEALERNET_WSDL_URL = process.env.DEALERNET_WSDL_URL || 'http://infows.dealernet.cl/wsinfodlnt.asmx'
+// El protocolo v14 define el endpoint de producción en HTTPS. Se fuerza https
+// para el host conocido porque los .env antiguos (copiados de un .env.example
+// con http://) mandarían las credenciales SOAP en claro.
+const DEALERNET_WSDL_URL = (process.env.DEALERNET_WSDL_URL || 'https://infows.dealernet.cl/wsinfodlnt.asmx')
+  .replace(/^http:\/\/(infows\.dealernet\.cl)/, 'https://$1')
 
-// Lee el .env del disco como fallback para cuando las credenciales se guardaron
-// desde la UI de configuración sin reiniciar el contenedor. process.env solo se
-// puebla al arrancar; el archivo .env sí se actualiza en caliente.
+// Prioridad: .env en disco (bind-mount del VPS, refleja guardados en caliente
+// desde la UI de /dealer) y process.env como fallback. Al revés no funciona:
+// env_file congela los valores al arrancar el contenedor, así que si
+// process.env ganara, un cambio de credenciales guardado desde la UI no se
+// aplicaría hasta el siguiente recreate.
 function getDealernetCreds(): { user: string | null; pass: string | null } {
-  const user = process.env.DEALERNET_USER
-  const pass = process.env.DEALERNET_PASSWORD
-  if (user && pass) return { user, pass }
+  let fileUser: string | null = null
+  let filePass: string | null = null
   try {
     const content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
     const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null
-    return { user: user ?? parse('DEALERNET_USER'), pass: pass ?? parse('DEALERNET_PASSWORD') }
-  } catch {
-    return { user: null, pass: null }
+    fileUser = parse('DEALERNET_USER')
+    filePass = parse('DEALERNET_PASSWORD')
+  } catch { /* sin .env en disco */ }
+  return {
+    user: fileUser ?? process.env.DEALERNET_USER ?? null,
+    pass: filePass ?? process.env.DEALERNET_PASSWORD ?? null,
   }
 }
 
@@ -58,7 +66,7 @@ export const DEALERNET_RETCODE_MESSAGES: Record<number, string> = {
   0: 'Consulta exitosa',
   1: 'Cuenta de usuario no definida en DealerNet',
   2: 'Cuenta de usuario bloqueada en DealerNet',
-  3: 'Cuenta de usuario no habilitada para este servicio (producto no contratado)',
+  3: 'Cuenta de usuario no habilitada para consulta WS (sin permiso de web services o producto no contratado)',
   4: 'Clave de DealerNet inválida',
   5: 'Tipo de consulta inválido',
   6: 'RUT inválido',
@@ -146,7 +154,7 @@ function buildRequestXml(rut: ParsedRut, productCodes: string[], user: string, p
         <root>
           <tipocns>O</tipocns>
           <ruts>
-            <rut num="${rut.num}" dv="${escapeXml(rut.dv)}" serie="" />
+            <rut num="${rut.num}" dv="${escapeXml(rut.dv)}" />
           </ruts>
           <prods>${prods}</prods>
         </root>
@@ -210,10 +218,16 @@ function numOrNull(value: unknown): number | null {
   return value != null && value !== '' ? Number(value) : null
 }
 
+// 3407 (Contactabilidad) y 3410 (Directorio Teléfonos) cuelgan los bloques
+// telefono_contacto_*/correo_contacto_*/residencia_* directamente de <colect>;
+// 3408 (Verificación Múltiple) los envuelve un nivel más adentro, en
+// <telefonos>/<correos>/<direcciones> (protocolo v11, sección 2.6). Cada
+// extractor mira primero el envoltorio y cae a <colect> si no existe.
 function extractPhones(colect: any, productCode: string): DealernetPhone[] {
+  const scope = colect?.telefonos ?? colect
   const out: DealernetPhone[] = []
   for (const categoria of ['probable', 'alternativo'] as const) {
-    const block = colect?.[`telefono_contacto_${categoria}`]
+    const block = scope?.[`telefono_contacto_${categoria}`]
     for (const d of toArray(block?.d)) {
       const raw = String(d?.telefono ?? '').trim()
       if (!raw) continue
@@ -234,9 +248,10 @@ function extractPhones(colect: any, productCode: string): DealernetPhone[] {
 }
 
 function extractAddresses(colect: any, productCode: string): DealernetAddress[] {
+  const scope = colect?.direcciones ?? colect
   const out: DealernetAddress[] = []
   for (const categoria of ['probable', 'alternativo'] as const) {
-    const block = colect?.[`residencia_${categoria === 'probable' ? 'probable' : 'alternativa'}`]
+    const block = scope?.[`residencia_${categoria === 'probable' ? 'probable' : 'alternativa'}`]
     for (const d of toArray(block?.d)) {
       const direccion = String(d?.direccion ?? '').trim()
       if (!direccion) continue
@@ -255,9 +270,10 @@ function extractAddresses(colect: any, productCode: string): DealernetAddress[] 
 }
 
 function extractEmails(colect: any, productCode: string): DealernetEmail[] {
+  const scope = colect?.correos ?? colect
   const out: DealernetEmail[] = []
   for (const categoria of ['probable', 'alternativo'] as const) {
-    const block = colect?.[`correo_contacto_${categoria}`]
+    const block = scope?.[`correo_contacto_${categoria}`]
     for (const d of toArray(block?.d)) {
       const email = String(d?.correo ?? '').trim()
       if (!email) continue
