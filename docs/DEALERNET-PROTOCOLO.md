@@ -1,13 +1,27 @@
 # DealerNet — Protocolo de integración (Central de Información)
 
-Referencia interna a partir de dos documentos entregados por el proveedor
-(agosto 2025, no versionados antes en este repo):
+Referencia interna a partir de tres documentos entregados por el proveedor
+(no versionados en este repo):
 
-- *DEALERNET — Servicios de Integración, Protocolo General* (v14)
+- *DEALERNET — Servicios de Integración, Protocolo General* (v14, agosto 2025)
 - *Servicios de Integración — Buscador Múltiple* (producto 3460, doc. agosto 2025)
+- *DEALERNET — Servicios de Integración, Protocolo Web-Services* (v11, 103 págs.
+  — la spec completa con los payloads de entrada/salida de cada producto)
 
 Endpoint de producción: `https://infows.dealernet.cl/wsinfodlnt.asmx?wsdl`
+(HTTPS — el código fuerza https aunque el `.env` tenga la URL antigua en http).
 Método SOAP único: `CentralDeInformacion`.
+
+⚠️ Estructura de salida según producto (v11): en 3407/3410 los bloques
+`telefono_contacto_*`, `correo_contacto_*` y `residencia_*` cuelgan
+directamente de `<colect>`; en 3408 (Verificación Múltiple) van envueltos un
+nivel más adentro, en `<telefonos>`/`<correos>`/`<direcciones>`. Los
+extractores de `web/lib/dealernet.ts` soportan ambas formas.
+
+⚠️ Cuentas: el retcode 3 ("Cuenta Usuario no habilitada para consulta WS")
+apareció con la cuenta de portal `COUSINO.Bcousino` — las consultas WS
+requieren la cuenta de web services (`COUSINO.WsProd`), que se configura
+desde la pantalla `/dealer`.
 
 ## 1. Consulta por RUT (protocolo general)
 

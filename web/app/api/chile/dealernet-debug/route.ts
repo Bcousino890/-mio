@@ -3,16 +3,20 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { parseRut, isValidRut } from '@/lib/dealernet'
 
+// Prioridad .env en disco > process.env — misma lógica (y motivo) que
+// getDealernetCreds en web/lib/dealernet.ts.
 function getDealernetCreds() {
-  const user = process.env.DEALERNET_USER
-  const pass = process.env.DEALERNET_PASSWORD
-  if (user && pass) return { user, pass }
+  let fileUser: string | null = null
+  let filePass: string | null = null
   try {
     const content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
     const parse = (key: string) => content.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null
-    return { user: user ?? parse('DEALERNET_USER'), pass: pass ?? parse('DEALERNET_PASSWORD') }
-  } catch {
-    return { user: null, pass: null }
+    fileUser = parse('DEALERNET_USER')
+    filePass = parse('DEALERNET_PASSWORD')
+  } catch { /* sin .env en disco */ }
+  return {
+    user: fileUser ?? process.env.DEALERNET_USER ?? null,
+    pass: filePass ?? process.env.DEALERNET_PASSWORD ?? null,
   }
 }
 
@@ -48,7 +52,7 @@ export async function GET(request: NextRequest) {
         <root>
           <tipocns>O</tipocns>
           <ruts>
-            <rut num="${rut.num}" dv="${escapeXml(rut.dv)}" serie="" />
+            <rut num="${rut.num}" dv="${escapeXml(rut.dv)}" />
           </ruts>
           <prods>${prods}</prods>
         </root>
@@ -57,7 +61,9 @@ export async function GET(request: NextRequest) {
   </soapenv:Body>
 </soapenv:Envelope>`
 
-  const wsdl = process.env.DEALERNET_WSDL_URL ?? 'http://infows.dealernet.cl/wsinfodlnt.asmx'
+  // https forzado para el host conocido — mismo motivo que en web/lib/dealernet.ts
+  const wsdl = (process.env.DEALERNET_WSDL_URL ?? 'https://infows.dealernet.cl/wsinfodlnt.asmx')
+    .replace(/^http:\/\/(infows\.dealernet\.cl)/, 'https://$1')
 
   try {
     const res = await fetch(wsdl, {
