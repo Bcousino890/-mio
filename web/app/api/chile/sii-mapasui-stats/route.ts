@@ -10,11 +10,32 @@ import { pool } from '@/lib/db'
  *
  * Nota: a diferencia de TGR (que escribe rol por rol), esta tabla se llena por
  * LOTES — la ingesta incremental de run-sii-mapasui.sh re-ingesta el JSONL
- * cada SII_INGEST_INTERVAL_SEC (default 600 s). Por eso el latido mira
- * GREATEST(created_at, updated_at) — el upsert bumpea updated_at aunque un
- * lote no traiga predios nuevos — y la ventana de "activo" es 15 min
- * (1.5× la cadencia), no los 5 min de un goteo continuo.
+ * cada SII_INGEST_INTERVAL_SEC (default 600 s), y el cron de respaldo
+ * (ingest-sii-mapasui-now.yml, minuto :23) lo re-ingesta cada hora. El upsert
+ * bumpea updated_at aunque el lote no traiga predios nuevos, así que
+ * GREATEST(created_at, updated_at) refleja la última escritura real.
+ *
+ * El latido tiene TRES niveles, no un binario activo/inactivo, porque "scrape
+ * en reposo entre lotes" es un estado SANO y no debe pintarse como la alarma
+ * de "pipeline muerto 19 h" que motivó este panel:
+ *   - ingestando (<15 min): el scrape está escribiendo ahora mismo, o acaba de
+ *     correr un lote/cron. 1.5× la cadencia incremental de 600 s.
+ *   - al_dia (<2 h): sin lote reciente pero el cron horario lo mantiene fresco;
+ *     típico cuando el scrape de la comuna ya terminó. NO es un problema.
+ *   - estancado (>=2 h): ni la ingesta incremental ni DOS crones horarios
+ *     escribieron — el pipeline está realmente caído y hay que mirarlo.
  */
+const VENTANA_INGESTANDO_SEG = 15 * 60
+const VENTANA_AL_DIA_SEG = 2 * 60 * 60
+
+type NivelIngesta = 'ingestando' | 'al_dia' | 'estancado' | 'sin_datos'
+
+function nivelIngesta(segundosDesdeUltima: number | null): NivelIngesta {
+  if (segundosDesdeUltima === null) return 'sin_datos'
+  if (segundosDesdeUltima < VENTANA_INGESTANDO_SEG) return 'ingestando'
+  if (segundosDesdeUltima < VENTANA_AL_DIA_SEG) return 'al_dia'
+  return 'estancado'
+}
 export async function GET() {
   try {
     const [globalRes, comunaRes, ultimosRes, heartbeatRes] = await Promise.all([
@@ -61,14 +82,16 @@ export async function GET() {
 
     const ultimaIngesta = hb.ultima as Date | null
     const segundosDesdeUltima = ultimaIngesta ? (Date.now() - new Date(ultimaIngesta).getTime()) / 1000 : null
-    // "activo" si hubo escritura (insert o upsert) en los últimos 15 min:
-    // 1.5× el intervalo de la ingesta incremental (SII_INGEST_INTERVAL_SEC=600).
-    const activo = segundosDesdeUltima !== null && segundosDesdeUltima < 900
+    const nivel = nivelIngesta(segundosDesdeUltima)
+    // `activo` se mantiene por compatibilidad: verdadero salvo que el pipeline
+    // esté realmente estancado (>=2 h sin escritura) o sin datos.
+    const activo = nivel === 'ingestando' || nivel === 'al_dia'
 
     return NextResponse.json({
       success: true,
       ingesta_status: {
         activo,
+        nivel,
         ultima_ingesta: ultimaIngesta,
         segundos_desde_ultima: segundosDesdeUltima,
         nuevos_ultimos_15min: Number(hb.recientes),
