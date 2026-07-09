@@ -259,6 +259,18 @@ function extractPhoneRelacion(d: Record<string, unknown>): string | null {
   return relacion ?? nombre
 }
 
+// Id de la foto de perfil (WhatsApp) del número. En el DOM del portal el
+// atributo del <img> es `id_imagen` y su valor es el `CODCOMP` de la URL de
+// la imagen — pero el nombre exacto en el XML del WS no está en la doc
+// versionada. Se busca por alias (normalizedEntries ya colapsa `id_imagen`,
+// `id imagen`, etc. a `idimagen`) para no depender de un único nombre —
+// justo por asumir sólo `idimagen` las fotos no aparecían.
+const IDIMAGEN_ALIASES = ['idimagen', 'idimg', 'idfoto', 'idfotoperfil', 'codcomp', 'codimagen', 'imgid']
+
+function extractIdImagen(d: Record<string, unknown>): string | null {
+  return firstScalar(normalizedEntries(d), IDIMAGEN_ALIASES)
+}
+
 // 3407 (Contactabilidad) y 3410 (Directorio Teléfonos) cuelgan los bloques
 // telefono_contacto_*/correo_contacto_*/residencia_* directamente de <colect>;
 // 3408 (Verificación Múltiple) los envuelve un nivel más adentro, en
@@ -278,7 +290,7 @@ function extractPhones(colect: any, productCode: string): DealernetPhone[] {
         categoria,
         clasificacion: d?.clasificacion != null ? String(d.clasificacion) : null,
         ind_whatsapp: d?.ind_whatsapp != null ? String(d.ind_whatsapp) === '1' : null,
-        idimagen: d?.idimagen != null ? String(d.idimagen) : null,
+        idimagen: extractIdImagen(d ?? {}),
         relacion: extractPhoneRelacion(d ?? {}),
         ranking: numOrNull(d?.ranking),
         calidad: numOrNull(d?.calidad),
