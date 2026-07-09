@@ -23,11 +23,23 @@ interface UltimoRow {
   created_at: string
 }
 
+type NivelIngesta = 'ingestando' | 'al_dia' | 'estancado' | 'sin_datos'
+
 interface IngestaStatus {
   activo: boolean
+  nivel?: NivelIngesta
   ultima_ingesta: string | null
   segundos_desde_ultima: number | null
   nuevos_ultimos_15min: number
+}
+
+// Presentación de cada nivel del latido. `al_dia` (scrape en reposo, cron
+// horario al día) es un estado SANO y se pinta en calma, no como alarma.
+const NIVEL_UI: Record<NivelIngesta, { dot: string; pulse: boolean; label: string }> = {
+  ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lotes cada ~10 min)' },
+  al_dia: { dot: 'bg-emerald-500', pulse: false, label: 'Al día (scrape en reposo · cron horario)' },
+  estancado: { dot: 'bg-amber-500', pulse: false, label: 'Sin ingesta reciente' },
+  sin_datos: { dot: 'bg-slate-500', pulse: false, label: 'Sin datos todavía' },
 }
 
 interface Stats {
@@ -110,20 +122,26 @@ export default function SiiMapasuiStats() {
       </div>
 
       {/* Estado de la ingesta */}
-      <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <span className={`inline-block w-2.5 h-2.5 rounded-full ${ingesta_status.activo ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
-          <span className="text-sm font-medium">
-            {ingesta_status.activo ? 'Ingesta activa (lotes cada ~10 min)' : 'Sin ingesta reciente'}
-          </span>
-          <span className="text-xs text-slate-500">
-            última ingesta {formatoTiempo(ingesta_status.segundos_desde_ultima)}
-          </span>
-        </div>
-        <div className="text-xs text-slate-500">
-          {ingesta_status.nuevos_ultimos_15min.toLocaleString('es-CL')} predios nuevos en los últimos 15 min
-        </div>
-      </div>
+      {(() => {
+        // Compat: si la API aún no envía `nivel`, derivarlo de `activo`.
+        const nivel: NivelIngesta =
+          ingesta_status.nivel ?? (ingesta_status.activo ? 'ingestando' : 'estancado')
+        const ui = NIVEL_UI[nivel]
+        return (
+          <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${ui.dot} ${ui.pulse ? 'animate-pulse' : ''}`} />
+              <span className="text-sm font-medium">{ui.label}</span>
+              <span className="text-xs text-slate-500">
+                última ingesta {formatoTiempo(ingesta_status.segundos_desde_ultima)}
+              </span>
+            </div>
+            <div className="text-xs text-slate-500">
+              {ingesta_status.nuevos_ultimos_15min.toLocaleString('es-CL')} predios nuevos en los últimos 15 min
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Cards globales */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
