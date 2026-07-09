@@ -243,7 +243,10 @@ function firstScalar(entries: Map<string, unknown>, aliases: string[]): string |
   return null
 }
 
-const RELACION_ALIASES = ['relacion', 'glsrelacion', 'tiporelacion', 'vinculo', 'parentesco', 'relacionadocon']
+// El portal muestra por teléfono "Relación directa con Titular, Sociedad" —
+// el campo WS puede llamarse relacion/relacion_directa/etc. (normalizedEntries
+// ya quita guiones bajos, por eso 'relaciondirecta').
+const RELACION_ALIASES = ['relacion', 'relaciondirecta', 'glsrelacion', 'tiporelacion', 'vinculo', 'parentesco', 'relacionadocon']
 const RELACION_NOMBRE_ALIASES = ['nomrelacion', 'nombrerelacion', 'nomrelacionado', 'nombrerelacionado']
 
 // "Relación" de un teléfono: de quién es el número cuando no es del titular

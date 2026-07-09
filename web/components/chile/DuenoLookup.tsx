@@ -519,7 +519,9 @@ function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut
                   )}
                 </div>
                 {p.relacion && (
-                  <p className="text-[10px] text-sky-400/90 truncate">Relación directa con {p.relacion}</p>
+                  <p className="text-[10px] text-sky-400/90 truncate">
+                    {/^relaci/i.test(p.relacion) ? p.relacion : `Relación directa con ${p.relacion}`}
+                  </p>
                 )}
               </div>
               <div className="ml-auto">

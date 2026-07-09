@@ -1,16 +1,25 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Phone, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Phone, Loader2, CheckCircle2, AlertCircle, ImageIcon } from 'lucide-react'
 
 type Status = 'idle' | 'saving' | 'success' | 'error'
+
+interface CurrentConfig {
+  configured: boolean
+  user: string
+  portal_base_url?: string
+  image_cookie_configured?: boolean
+}
 
 export default function DealerNetPanel() {
   const [user, setUser] = useState('')
   const [pass, setPass] = useState('')
+  const [portalUrl, setPortalUrl] = useState('')
+  const [imageCookie, setImageCookie] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
-  const [current, setCurrent] = useState<{ configured: boolean; user: string } | null>(null)
+  const [current, setCurrent] = useState<CurrentConfig | null>(null)
 
   useEffect(() => {
     fetch('/api/admin/dealernet-config')
@@ -20,8 +29,14 @@ export default function DealerNetPanel() {
   }, [])
 
   async function handleSave() {
-    if (!user || !pass) {
-      setError('Usuario y contraseña son obligatorios')
+    // Credenciales van juntas; la config del portal de fotos se puede guardar
+    // sola sin re-tipearlas.
+    if ((user && !pass) || (!user && pass)) {
+      setError('Usuario y contraseña se guardan juntos')
+      return
+    }
+    if (!user && !pass && !portalUrl && !imageCookie) {
+      setError('Nada que guardar — completa al menos un campo')
       return
     }
     setStatus('saving')
@@ -30,7 +45,11 @@ export default function DealerNetPanel() {
       const res = await fetch('/api/admin/dealernet-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ DEALERNET_USER: user, DEALERNET_PASSWORD: pass }),
+        body: JSON.stringify({
+          ...(user && pass ? { DEALERNET_USER: user, DEALERNET_PASSWORD: pass } : {}),
+          ...(portalUrl ? { DEALERNET_PORTAL_BASE_URL: portalUrl } : {}),
+          ...(imageCookie ? { DEALERNET_IMAGE_COOKIE: imageCookie } : {}),
+        }),
       })
       const data = await res.json()
       if (data.success) {
@@ -38,6 +57,8 @@ export default function DealerNetPanel() {
         setTimeout(() => setStatus('idle'), 3000)
         setUser('')
         setPass('')
+        setPortalUrl('')
+        setImageCookie('')
         // refrescar estado actual para que el badge "Configurada" se actualice sin recargar
         const updated = await fetch('/api/admin/dealernet-config').then(r => r.json())
         setCurrent(updated)
@@ -104,6 +125,46 @@ export default function DealerNetPanel() {
         </div>
       </div>
 
+      <div className="pt-3 border-t border-[var(--c-border-card)] space-y-3">
+        <div className="flex items-center gap-2">
+          <ImageIcon size={13} className="text-purple-400" />
+          <p className="text-[12px] font-semibold text-slate-200">Fotos de perfil por teléfono</p>
+          {current?.portal_base_url && (
+            <span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-900/30 border border-emerald-700/40 rounded-full px-2 py-0.5">
+              <CheckCircle2 size={10} /> Portal configurado
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          Para mostrar la foto (WhatsApp) junto a cada número en Dueños. Pega la URL con la que
+          abres el portal DealerNet en el navegador (solo el dominio). Si las fotos no cargan,
+          agrega también la cookie de sesión (DevTools → Network → cualquier petición al portal →
+          header <code className="bg-slate-900 px-1 py-0.5 rounded">Cookie</code>).
+        </p>
+        <div>
+          <label className="text-[11px] font-medium text-slate-300 block mb-1">URL del portal</label>
+          <input
+            type="url"
+            placeholder={current?.portal_base_url || 'https://portal.dealernet.cl'}
+            value={portalUrl}
+            onChange={(e) => setPortalUrl(e.target.value)}
+            className="w-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
+          />
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-slate-300 block mb-1">
+            Cookie de sesión (opcional{current?.image_cookie_configured ? ' — ya hay una guardada' : ''})
+          </label>
+          <input
+            type="password"
+            placeholder="ASP.NET_SessionId=..."
+            value={imageCookie}
+            onChange={(e) => setImageCookie(e.target.value)}
+            className="w-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
+          />
+        </div>
+      </div>
+
       {error && (
         <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-2 text-[11px] text-red-300">
           <AlertCircle size={12} />
@@ -114,7 +175,7 @@ export default function DealerNetPanel() {
       {status === 'success' && (
         <div className="flex items-center gap-2 bg-emerald-900/20 border border-emerald-700/50 rounded-lg p-2 text-[11px] text-emerald-300">
           <CheckCircle2 size={12} />
-          Credenciales guardadas en el VPS
+          Configuración guardada en el VPS
         </div>
       )}
 
@@ -124,7 +185,7 @@ export default function DealerNetPanel() {
         className="w-full flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-medium py-2 rounded-lg transition-colors"
       >
         {status === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Phone size={12} />}
-        {status === 'saving' ? 'Guardando...' : 'Guardar credenciales'}
+        {status === 'saving' ? 'Guardando...' : 'Guardar configuración'}
       </button>
     </div>
   )

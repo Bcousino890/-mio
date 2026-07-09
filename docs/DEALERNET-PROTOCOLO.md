@@ -142,17 +142,28 @@ por alias y se guarda en `dealernet_phones_cl.relacion`.
 
 Cada teléfono puede traer un `idimagen` (referencia a la foto de perfil de
 WhatsApp que muestra el portal). El web service solo entrega el id; la
-imagen la sirve el portal por HTTP con una URL que no está en la doc. Se
-configura como plantilla en el `.env`:
+imagen la sirve el portal web con este path (confirmado inspeccionando el
+DOM del portal — el atributo `id_imagen` del `<img>` coincide con el
+`idimagen` del WS):
 
 ```
-DEALERNET_IMAGE_URL_TEMPLATE=https://.../imagen?id={id}
+{portal}/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}|60|60|1
 ```
 
-(abrir una ficha en el portal → clic derecho sobre la foto → "Copiar
-dirección de imagen" → reemplazar el id por `{id}`). La app la proxea vía
-`/api/chile/dealernet-imagen?id=...` (cache 24h, sin filtrar la URL interna
-al navegador); sin plantilla configurada la UI muestra un avatar genérico.
+Config en `.env`, editable desde la UI de `/dealer` (sección "Fotos de
+perfil por teléfono"):
+
+- `DEALERNET_PORTAL_BASE_URL` — dominio donde se abre el portal en el
+  navegador. Ojo: NO es `www.dealernet.cl` (ese host es solo el sitio de
+  marketing y responde 500 a cualquier path de la app).
+- `DEALERNET_IMAGE_COOKIE` — opcional; header `Cookie` de una sesión del
+  portal si el endpoint exige sesión (probable: es una app ASP clásica).
+- `DEALERNET_IMAGE_URL_TEMPLATE` — opcional; URL completa con `{id}` que
+  pisa la construida con el base URL, por si el path cambia.
+
+La app la proxea vía `/api/chile/dealernet-imagen?id=...` (cache 24h, con
+headers de navegador, sin filtrar URL interna/cookie al cliente); sin portal
+configurado o si la imagen no carga, la UI muestra un avatar genérico.
 
 ## 5. Pestaña "Dealer" en la app
 
