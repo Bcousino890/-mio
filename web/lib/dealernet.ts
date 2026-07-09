@@ -41,6 +41,7 @@ export const DEALERNET_PRODUCTS = {
   CONTACTABILIDAD: '3407',
   VERIFICACION_MULTIPLE: '3408',
   DIRECTORIO_TELEFONOS: '3410',
+  REGISTROS_RELACIONADOS: '3421',
   BUSCADOR_MULTIPLE: '3460',
 } as const
 
@@ -191,6 +192,7 @@ export interface DealernetPhone {
   clasificacion: string | null
   ind_whatsapp: boolean | null
   idimagen: string | null
+  relacion: string | null
   ranking: number | null
   calidad: number | null
   product_code: string
@@ -218,6 +220,45 @@ function numOrNull(value: unknown): number | null {
   return value != null && value !== '' ? Number(value) : null
 }
 
+// La spec v11 no está versionada en el repo, así que los nombres exactos de
+// los campos de "relación" varían según producto (3407 puede anotar de quién
+// es el número; 3421 lista relacionados con RUT + tipo de relación). En vez
+// de fijar un nombre y romperse en silencio, se busca por lista de alias —
+// las keys se normalizan a minúsculas sin prefijo de atributo ("@_").
+function normalizedEntries(node: Record<string, unknown>): Map<string, unknown> {
+  const out = new Map<string, unknown>()
+  for (const [k, v] of Object.entries(node)) {
+    out.set(k.toLowerCase().replace(/^@_/, '').replace(/[_\s]/g, ''), v)
+  }
+  return out
+}
+
+function firstScalar(entries: Map<string, unknown>, aliases: string[]): string | null {
+  for (const alias of aliases) {
+    const v = entries.get(alias)
+    if (v == null || typeof v === 'object') continue
+    const s = String(v).trim()
+    if (s && s.toLowerCase() !== 'null') return s
+  }
+  return null
+}
+
+// El portal muestra por teléfono "Relación directa con Titular, Sociedad" —
+// el campo WS puede llamarse relacion/relacion_directa/etc. (normalizedEntries
+// ya quita guiones bajos, por eso 'relaciondirecta').
+const RELACION_ALIASES = ['relacion', 'relaciondirecta', 'glsrelacion', 'tiporelacion', 'vinculo', 'parentesco', 'relacionadocon']
+const RELACION_NOMBRE_ALIASES = ['nomrelacion', 'nombrerelacion', 'nomrelacionado', 'nombrerelacionado']
+
+// "Relación" de un teléfono: de quién es el número cuando no es del titular
+// (ej. cónyuge/hijo/sociedad). Se arma un solo string legible para UI/BD.
+function extractPhoneRelacion(d: Record<string, unknown>): string | null {
+  const entries = normalizedEntries(d)
+  const relacion = firstScalar(entries, RELACION_ALIASES)
+  const nombre = firstScalar(entries, RELACION_NOMBRE_ALIASES)
+  if (relacion && nombre) return `${relacion} — ${nombre}`
+  return relacion ?? nombre
+}
+
 // 3407 (Contactabilidad) y 3410 (Directorio Teléfonos) cuelgan los bloques
 // telefono_contacto_*/correo_contacto_*/residencia_* directamente de <colect>;
 // 3408 (Verificación Múltiple) los envuelve un nivel más adentro, en
@@ -238,6 +279,7 @@ function extractPhones(colect: any, productCode: string): DealernetPhone[] {
         clasificacion: d?.clasificacion != null ? String(d.clasificacion) : null,
         ind_whatsapp: d?.ind_whatsapp != null ? String(d.ind_whatsapp) === '1' : null,
         idimagen: d?.idimagen != null ? String(d.idimagen) : null,
+        relacion: extractPhoneRelacion(d ?? {}),
         ranking: numOrNull(d?.ranking),
         calidad: numOrNull(d?.calidad),
         product_code: productCode,
@@ -289,6 +331,83 @@ function extractEmails(colect: any, productCode: string): DealernetEmail[] {
   return out
 }
 
+export interface DealernetRelacionado {
+  rut: number | null
+  dv: string | null
+  nombre: string | null
+  relacion: string | null // Titular / Sociedad / Socio / Conyuge / Hijo / Empleador / ...
+  product_code: string
+}
+
+const REL_RUT_ALIASES = ['rut', 'rutrel', 'rutnum', 'rutrelacionado']
+const REL_DV_ALIASES = ['dv', 'digito', 'dvrel', 'digitorel']
+const REL_NOMBRE_ALIASES = ['nombre', 'nombrecompleto', 'razonsocial', 'dsporg', 'glsnombre', 'nomrelacionado']
+const REL_NOMBRES_ALIASES = ['nombres', 'dspnombres']
+const REL_APELLIDOS_ALIASES = ['apellidos', 'dspapellidos', 'apellido']
+
+// 3421 (Registros de Relacionados) devuelve filas RUT/NOMBRE/RELACIÓN (la
+// tabla "Relacionados" del portal DealerNet: Titular, Sociedad, Socio,
+// Cónyuge, Hijo, Empleador, ...). Como la estructura exacta del XML no está
+// en la doc versionada, se recorre el payload del producto en profundidad y
+// se toma como relacionado cualquier nodo que tenga un campo de relación
+// junto a un RUT o nombre — resistente a cambios de envoltorio/anidación.
+function extractRelacionados(wrapper: unknown, productCode: string): DealernetRelacionado[] {
+  const out: DealernetRelacionado[] = []
+  const seen = new Set<string>()
+
+  function visit(node: unknown) {
+    if (node == null || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    const entries = normalizedEntries(node as Record<string, unknown>)
+    const relacion = firstScalar(entries, RELACION_ALIASES)
+    const rutRaw = firstScalar(entries, REL_RUT_ALIASES)
+    let nombre = firstScalar(entries, REL_NOMBRE_ALIASES)
+    if (!nombre) {
+      const nombres = firstScalar(entries, REL_NOMBRES_ALIASES)
+      const apellidos = firstScalar(entries, REL_APELLIDOS_ALIASES)
+      nombre = [nombres, apellidos].filter(Boolean).join(' ') || null
+    }
+
+    if (relacion && (rutRaw || nombre)) {
+      let rut: number | null = null
+      let dv: string | null = null
+      if (rutRaw) {
+        // El RUT puede venir con DV pegado ("6.166.610-9") o como número puro
+        // ("6166610") con el DV en un campo aparte o ausente. Solo se
+        // interpreta DV embebido si el formato lo delata (guión o K final) —
+        // en un número pelado el último dígito es parte del RUT, no el DV.
+        const dvField = firstScalar(entries, REL_DV_ALIASES)
+        if (/[-kK]/.test(rutRaw)) {
+          const parsedRut = parseRut(rutRaw)
+          if (parsedRut) {
+            rut = parsedRut.num
+            dv = parsedRut.dv
+          }
+        } else {
+          const digits = rutRaw.replace(/\D/g, '')
+          rut = digits ? parseInt(digits, 10) : null
+        }
+        if (dvField) dv = dvField.toUpperCase()
+        if (rut != null && !dv) dv = computeRutDv(rut)
+      }
+      const key = `${rut ?? ''}|${nombre ?? ''}|${relacion}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        out.push({ rut, dv, nombre, relacion, product_code: productCode })
+      }
+      return // no descender: los hijos de una fila ya emitida no son filas nuevas
+    }
+
+    for (const value of Object.values(node as Record<string, unknown>)) visit(value)
+  }
+
+  visit(wrapper)
+  return out
+}
+
 export interface DealernetLookupResult {
   retcode: number | null
   retmsg: string | null
@@ -296,11 +415,12 @@ export interface DealernetLookupResult {
   phones: DealernetPhone[]
   addresses: DealernetAddress[]
   emails: DealernetEmail[]
+  relacionados: DealernetRelacionado[]
   productsRequested: string[]
   raw: unknown
 }
 
-function parseDealernetResponse(xml: string, productsRequested: string[]): DealernetLookupResult {
+export function parseDealernetResponse(xml: string, productsRequested: string[]): DealernetLookupResult {
   const parsed = xmlParser.parse(xml)
   const result = parsed?.Envelope?.Body?.CentralDeInformacionResult
   if (!result) {
@@ -314,6 +434,7 @@ function parseDealernetResponse(xml: string, productsRequested: string[]): Deale
   const phones: DealernetPhone[] = []
   const addresses: DealernetAddress[] = []
   const emails: DealernetEmail[] = []
+  const relacionados: DealernetRelacionado[] = []
 
   for (const prd of prds) {
     const productCode = prd?.['@_cod'] != null ? String(prd['@_cod']) : ''
@@ -321,6 +442,9 @@ function parseDealernetResponse(xml: string, productsRequested: string[]): Deale
     const d = wrapper?.ROOT?.D
     if (!d) continue
     if (!nombreTitular && d['@_nombre']) nombreTitular = String(d['@_nombre'])
+    if (productCode === DEALERNET_PRODUCTS.REGISTROS_RELACIONADOS) {
+      relacionados.push(...extractRelacionados(d, productCode))
+    }
     const colect = d?.result?.colect
     if (!colect) continue
     phones.push(...extractPhones(colect, productCode))
@@ -335,6 +459,7 @@ function parseDealernetResponse(xml: string, productsRequested: string[]): Deale
     phones,
     addresses,
     emails,
+    relacionados,
     productsRequested,
     raw: parsed,
   }
@@ -419,7 +544,7 @@ export interface DealernetBuscadorMultipleResult {
   raw: unknown
 }
 
-function parseBuscadorMultipleResponse(xml: string): DealernetBuscadorMultipleResult {
+export function parseBuscadorMultipleResponse(xml: string): DealernetBuscadorMultipleResult {
   const parsed = xmlParser.parse(xml)
   const result = parsed?.Envelope?.Body?.CentralDeInformacionResult
   if (!result) {
@@ -427,17 +552,26 @@ function parseBuscadorMultipleResponse(xml: string): DealernetBuscadorMultipleRe
   }
 
   const datos = toArray(result.output?.DATOS?.DATO)
-  const candidatos: DealernetCandidato[] = datos.map((d: any) => ({
-    rut: numOrNull(d?.RUT),
-    dv: d?.DIGITO != null ? String(d.DIGITO) : null,
-    clasif: d?.CLASIF != null ? String(d.CLASIF) : null,
-    nombres: d?.DSPNOMBRES != null ? String(d.DSPNOMBRES) : null,
-    apellidos: d?.DSPAPELLIDOS != null ? String(d.DSPAPELLIDOS) : null,
-    razonSocial: d?.DSPORG != null ? String(d.DSPORG) : null,
-    propietario: d?.PROPIETARIO != null ? String(d.PROPIETARIO) : null,
-    similitud: numOrNull(d?.SIMILITUD),
-    probabilidad: d?.PROBABILIDAD != null ? String(d.PROBABILIDAD) : null,
-  }))
+  const candidatos: DealernetCandidato[] = datos.map((d: any) => {
+    const rut = numOrNull(d?.RUT)
+    // En respuestas reales del 3460 el <DIGITO> a veces viene vacío/ausente
+    // (la UI mostraba "RUT 4.778.091-null" y el candidato quedaba
+    // deshabilitado). El DV chileno es determinista, así que se calcula del
+    // número cuando falta.
+    let dv = d?.DIGITO != null && String(d.DIGITO).trim() !== '' ? String(d.DIGITO).trim().toUpperCase() : null
+    if (rut != null && (dv == null || dv === 'NULL')) dv = computeRutDv(rut)
+    return {
+      rut,
+      dv,
+      clasif: d?.CLASIF != null ? String(d.CLASIF) : null,
+      nombres: d?.DSPNOMBRES != null ? String(d.DSPNOMBRES) : null,
+      apellidos: d?.DSPAPELLIDOS != null ? String(d.DSPAPELLIDOS) : null,
+      razonSocial: d?.DSPORG != null ? String(d.DSPORG) : null,
+      propietario: d?.PROPIETARIO != null ? String(d.PROPIETARIO) : null,
+      similitud: numOrNull(d?.SIMILITUD),
+      probabilidad: d?.PROBABILIDAD != null ? String(d.PROBABILIDAD) : null,
+    }
+  })
 
   return {
     retcode: result.retcode != null ? Number(result.retcode) : null,

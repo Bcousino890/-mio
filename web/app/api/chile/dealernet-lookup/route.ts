@@ -27,6 +27,8 @@ function dedupePhones(phones: DealernetPhone[]) {
     existing.ranking = Math.max(existing.ranking ?? 0, p.ranking ?? 0)
     existing.calidad = Math.max(existing.calidad ?? 0, p.calidad ?? 0)
     existing.ind_whatsapp = existing.ind_whatsapp || p.ind_whatsapp
+    existing.idimagen = existing.idimagen ?? p.idimagen
+    existing.relacion = existing.relacion ?? p.relacion
   }
   return Array.from(map.values())
 }
@@ -110,13 +112,14 @@ export async function POST(request: NextRequest) {
     for (const phone of lookup.phones) {
       await client.query(
         `INSERT INTO dealernet_phones_cl
-           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, ranking, calidad, product_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, relacion, ranking, calidad, product_code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (contact_id, phone_e164, product_code) DO UPDATE SET
            categoria = EXCLUDED.categoria,
            clasificacion = EXCLUDED.clasificacion,
            ind_whatsapp = EXCLUDED.ind_whatsapp,
            idimagen = EXCLUDED.idimagen,
+           relacion = COALESCE(EXCLUDED.relacion, dealernet_phones_cl.relacion),
            ranking = EXCLUDED.ranking,
            calidad = EXCLUDED.calidad`,
         [
@@ -127,10 +130,22 @@ export async function POST(request: NextRequest) {
           phone.clasificacion,
           phone.ind_whatsapp,
           phone.idimagen,
+          phone.relacion,
           phone.ranking,
           phone.calidad,
           phone.product_code,
         ]
+      )
+    }
+
+    for (const rel of lookup.relacionados) {
+      await client.query(
+        `INSERT INTO dealernet_relacionados_cl
+           (contact_id, rut_num, rut_dv, nombre, relacion, product_code)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (contact_id, COALESCE(rut_num, 0), COALESCE(nombre, ''), COALESCE(relacion, '')) DO UPDATE SET
+           rut_dv = COALESCE(EXCLUDED.rut_dv, dealernet_relacionados_cl.rut_dv)`,
+        [contactId, rel.rut, rel.dv, rel.nombre, rel.relacion, rel.product_code]
       )
     }
 
@@ -186,6 +201,7 @@ export async function POST(request: NextRequest) {
       phones: dedupePhones(lookup.phones),
       addresses: lookup.addresses,
       emails: lookup.emails,
+      relacionados: lookup.relacionados,
       rut_num: rut.num,
       rut_dv: rut.dv,
     })
@@ -232,10 +248,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, contact: null })
     }
 
-    const [phonesRes, addressesRes, emailsRes] = await Promise.all([
+    const [phonesRes, addressesRes, emailsRes, relacionadosRes] = await Promise.all([
       pool.query(`SELECT * FROM dealernet_phones_cl WHERE contact_id = $1 ORDER BY categoria, ranking DESC NULLS LAST`, [contactRow.id]),
       pool.query(`SELECT * FROM dealernet_addresses_cl WHERE contact_id = $1 ORDER BY categoria, ranking DESC NULLS LAST`, [contactRow.id]),
       pool.query(`SELECT * FROM dealernet_emails_cl WHERE contact_id = $1 ORDER BY categoria, ranking DESC NULLS LAST`, [contactRow.id]),
+      pool.query(`SELECT * FROM dealernet_relacionados_cl WHERE contact_id = $1 ORDER BY relacion, nombre`, [contactRow.id]),
     ])
 
     return NextResponse.json({
@@ -244,6 +261,7 @@ export async function GET(request: NextRequest) {
       phones: phonesRes.rows,
       addresses: addressesRes.rows,
       emails: emailsRes.rows,
+      relacionados: relacionadosRes.rows,
     })
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })

@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import {
   Search, Phone, Mail, MapPin, Loader2, CheckCircle2,
-  AlertCircle, ExternalLink, MessageCircle, Building2
+  AlertCircle, ExternalLink, MessageCircle, Building2,
+  Copy, Check, Users, UserRound
 } from 'lucide-react'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
@@ -12,6 +13,7 @@ const PRODUCTS = [
   { code: '3410', label: 'Directorio Teléfonos', description: 'Solo números — más económico' },
   { code: '3407', label: 'Contactabilidad', description: 'Teléfonos + clasificación + calidad' },
   { code: '3408', label: 'Verificación Múltiple', description: 'Emails + direcciones' },
+  { code: '3421', label: 'Relacionados', description: 'Familiares y sociedades — RUT, nombre y relación' },
 ] as const
 
 const TIPBUSQ_OPTIONS = [
@@ -41,6 +43,8 @@ interface Phone {
   categoria: 'probable' | 'alternativo'
   clasificacion: string | null
   ind_whatsapp: boolean | null
+  idimagen: string | null
+  relacion: string | null
   ranking: number | null
 }
 
@@ -57,6 +61,13 @@ interface Email {
   ranking: number | null
 }
 
+interface Relacionado {
+  rut: number | null
+  dv: string | null
+  nombre: string | null
+  relacion: string | null
+}
+
 interface LookupResult {
   nombre_titular: string | null
   rut_num: number
@@ -64,6 +75,7 @@ interface LookupResult {
   phones: Phone[]
   addresses: Address[]
   emails: Email[]
+  relacionados: Relacionado[]
 }
 
 function rutificadorUrl(nombre: string) {
@@ -126,13 +138,18 @@ export default function DuenoLookup() {
     }
   }
 
+  // Al elegir un candidato no basta con copiar el RUT al formulario: el flujo
+  // completo es candidato → RUT → solicitud de teléfonos/contactos de una vez.
   function usarCandidato(c: Candidato) {
     if (c.rut == null || !c.dv) return
-    setRut(`${c.rut}-${c.dv}`)
+    const rutStr = `${c.rut}-${c.dv}`
+    setRut(rutStr)
+    void handleLookup(rutStr)
   }
 
-  async function handleLookup() {
-    if (!rut.trim() || selectedProducts.length === 0) return
+  async function handleLookup(rutOverride?: string) {
+    const rutValue = (rutOverride ?? rut).trim()
+    if (!rutValue || selectedProducts.length === 0) return
     setStatus('loading')
     setError('')
     setResult(null)
@@ -141,7 +158,7 @@ export default function DuenoLookup() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rut: rut.trim(),
+          rut: rutValue,
           product_codes: selectedProducts,
           portal_url: portalUrl.trim() || null,
           notes: notes.trim() || null,
@@ -160,6 +177,7 @@ export default function DuenoLookup() {
         phones: data.phones ?? [],
         addresses: data.addresses ?? [],
         emails: data.emails ?? [],
+        relacionados: data.relacionados ?? [],
       })
       setStatus('success')
     } catch (e) {
@@ -233,8 +251,9 @@ export default function DuenoLookup() {
                       {c.razonSocial || `${c.nombres ?? ''} ${c.apellidos ?? ''}`.trim() || 'Sin nombre'}
                     </p>
                     <p className="text-[10px] text-slate-500">
-                      {c.rut != null ? `RUT ${c.rut.toLocaleString('es-CL')}-${c.dv}` : 'Sin RUT'}
+                      {c.rut != null ? `RUT ${c.rut.toLocaleString('es-CL')}${c.dv ? `-${c.dv}` : ''}` : 'Sin RUT'}
                       {c.propietario ? ` · ${c.propietario}` : ''}
+                      {c.rut != null && c.dv ? ' · clic para pedir teléfonos' : ''}
                     </p>
                   </div>
                   {c.probabilidad && (
@@ -373,7 +392,7 @@ export default function DuenoLookup() {
         )}
 
         <button
-          onClick={handleLookup}
+          onClick={() => handleLookup()}
           disabled={status === 'loading' || !rut.trim() || selectedProducts.length === 0}
           className="w-full flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium py-2 rounded-lg transition-colors"
         >
@@ -381,14 +400,83 @@ export default function DuenoLookup() {
           {status === 'loading' ? 'Obteniendo...' : 'Obtener dueño'}
         </button>
 
-        {result && <ResultCard result={result} />}
+        {result && (
+          <ResultCard
+            result={result}
+            onLookupRut={(r) => { setRut(r); void handleLookup(r) }}
+          />
+        )}
       </div>
     </div>
   )
 }
 
-function ResultCard({ result }: { result: LookupResult }) {
+// Copia al portapapeles con feedback (check verde ~1.5s). navigator.clipboard
+// requiere contexto seguro — en http plano (VPS sin TLS en dev) se cae al
+// truco del <textarea> + execCommand.
+function useCopy() {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+
+  async function copy(key: string, text: string) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(prev => (prev === key ? null : prev)), 1500)
+    } catch { /* portapapeles no disponible */ }
+  }
+
+  return { copiedKey, copy }
+}
+
+function CopyButton({ copied, onClick, title }: { copied: boolean; onClick: () => void; title: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-[var(--c-hover)] transition-colors flex-shrink-0"
+    >
+      {copied ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+    </button>
+  )
+}
+
+// Foto de perfil (WhatsApp) asociada al número. La sirve el proxy
+// /api/chile/dealernet-imagen — si no hay plantilla configurada o la imagen
+// no existe, el onError esconde el <img> y queda el ícono genérico.
+function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
+  const [failed, setFailed] = useState(false)
+  if (!idimagen || failed) {
+    return (
+      <span className="w-6 h-6 rounded-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] flex items-center justify-center flex-shrink-0">
+        <UserRound size={12} className="text-slate-600" />
+      </span>
+    )
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}`}
+      alt="Foto de perfil"
+      onError={() => setFailed(true)}
+      className="w-6 h-6 rounded-full object-cover border border-[var(--c-border-strong)] flex-shrink-0"
+    />
+  )
+}
+
+function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut: (rut: string) => void }) {
   const rutFormatted = `${result.rut_num.toLocaleString('es-CL')}-${result.rut_dv}`
+  const { copiedKey, copy } = useCopy()
 
   return (
     <div className="space-y-3 pt-1 border-t border-[var(--c-border-card)]">
@@ -404,22 +492,93 @@ function ResultCard({ result }: { result: LookupResult }) {
 
       {result.phones.length > 0 && (
         <div className="space-y-1">
-          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Teléfonos</p>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Teléfonos</p>
+            <button
+              onClick={() => copy('all-phones', result.phones.map(p => p.phone_e164).join('\n'))}
+              className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 px-1.5 py-0.5 rounded border border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors"
+            >
+              {copiedKey === 'all-phones' ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+              Copiar todos
+            </button>
+          </div>
           {result.phones.map((p, i) => (
             <div key={i} className="flex items-center gap-1.5 text-[11px]">
-              <Phone size={10} className="text-slate-500 flex-shrink-0" />
-              <span className="font-mono text-slate-200">{p.phone_e164}</span>
-              {p.ind_whatsapp && <MessageCircle size={10} className="text-green-500" aria-label="WhatsApp" />}
-              <span className={`text-[9px] px-1.5 py-0.5 rounded ${p.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
-                {p.categoria}
-              </span>
-              {p.clasificacion && (
-                <span className="text-[9px] text-slate-600">
-                  {p.clasificacion === 'C' ? 'celular' : p.clasificacion === 'F' ? 'fijo' : p.clasificacion}
-                </span>
-              )}
+              <PhoneAvatar idimagen={p.idimagen} />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-slate-200">{p.phone_e164}</span>
+                  {p.ind_whatsapp && <MessageCircle size={10} className="text-green-500" aria-label="WhatsApp" />}
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded ${p.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
+                    {p.categoria}
+                  </span>
+                  {p.clasificacion && (
+                    <span className="text-[9px] text-slate-600">
+                      {p.clasificacion === 'C' ? 'celular' : p.clasificacion === 'F' ? 'fijo' : p.clasificacion}
+                    </span>
+                  )}
+                </div>
+                {p.relacion && (
+                  <p className="text-[10px] text-sky-400/90 truncate">
+                    {/^relaci/i.test(p.relacion) ? p.relacion : `Relación directa con ${p.relacion}`}
+                  </p>
+                )}
+              </div>
+              <div className="ml-auto">
+                <CopyButton
+                  copied={copiedKey === `phone-${i}`}
+                  onClick={() => copy(`phone-${i}`, p.phone_e164)}
+                  title="Copiar número"
+                />
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {result.relacionados.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Users size={11} className="text-slate-500" />
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Relacionados</p>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-[var(--c-border-strong)]">
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr className="text-left text-slate-500 bg-[var(--c-hover)]">
+                  <th className="px-2 py-1.5 font-semibold">RUT</th>
+                  <th className="px-2 py-1.5 font-semibold">Nombre</th>
+                  <th className="px-2 py-1.5 font-semibold">Relación</th>
+                  <th className="px-2 py-1.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {result.relacionados.map((r, i) => {
+                  const rutStr = r.rut != null && r.dv ? `${r.rut}-${r.dv}` : null
+                  return (
+                    <tr key={i} className="border-t border-[var(--c-border-strong)]">
+                      <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">
+                        {r.rut != null ? `${r.rut.toLocaleString('es-CL')}${r.dv ? `-${r.dv}` : ''}` : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 text-slate-200">{r.nombre ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-slate-400">{r.relacion ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                        {rutStr && (
+                          <button
+                            onClick={() => onLookupRut(rutStr)}
+                            title={`Pedir teléfonos de ${r.nombre ?? rutStr}`}
+                            className="text-[9px] text-blue-400 hover:text-blue-300 border border-blue-900/50 hover:bg-blue-950/30 rounded px-1.5 py-0.5 transition-colors"
+                          >
+                            Pedir teléfonos
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -456,7 +615,7 @@ function ResultCard({ result }: { result: LookupResult }) {
         </div>
       )}
 
-      {result.phones.length === 0 && result.emails.length === 0 && result.addresses.length === 0 && (
+      {result.phones.length === 0 && result.emails.length === 0 && result.addresses.length === 0 && result.relacionados.length === 0 && (
         <p className="text-[11px] text-slate-500 text-center py-2">Sin datos de contacto para este RUT</p>
       )}
     </div>

@@ -1078,12 +1078,12 @@ export async function finishDealernetByRut(
     for (const phone of lookup.phones) {
       await pool.query(
         `INSERT INTO dealernet_phones_cl
-           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, ranking, calidad, product_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, relacion, ranking, calidad, product_code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (contact_id, phone_e164, product_code) DO UPDATE SET
            categoria = EXCLUDED.categoria, ranking = EXCLUDED.ranking, calidad = EXCLUDED.calidad`,
         [contactId, phone.phone_e164, phone.phone_raw, phone.categoria, phone.clasificacion,
-         phone.ind_whatsapp, phone.idimagen, phone.ranking, phone.calidad, phone.product_code],
+         phone.ind_whatsapp, phone.idimagen, phone.relacion, phone.ranking, phone.calidad, phone.product_code],
       )
     }
   } catch {
