@@ -42,8 +42,8 @@ Códigos de retorno (`retcode`):
 | 99 | Error Dealernet |
 | 999 | Error en parámetro obligatorio |
 
-Productos documentados (lista completa del protocolo general; solo 3407,
-3408 y 3410 están implementados hoy en `DEALERNET_PRODUCTS`):
+Productos documentados (lista completa del protocolo general; 3407, 3408,
+3410 y 3421 están implementados hoy en `DEALERNET_PRODUCTS`):
 
 3401 Comportamiento Civil · 3402 Comportamiento Laboral · 3403 Comportamiento
 Penal · 3404 Boletín Concursal · 3407 Contactabilidad · 3408 Verificación
@@ -117,7 +117,44 @@ Implementado en `web/lib/dealernet.ts` como `queryDealernetBuscadorMultiple`
 y expuesto en `web/app/api/chile/dealernet-buscar/route.ts` +
 `web/components/chile/DuenoLookup.tsx`.
 
-## 3. Pestaña "Dealer" en la app
+## 3. Registros de Relacionados (producto 3421)
+
+Devuelve la tabla "Relacionados" que muestra el portal DealerNet: filas
+RUT / NOMBRE / RELACIÓN (Titular, Sociedad, Socio, Cónyuge, Hijo, Hija,
+Empleador, ...). Se consulta por RUT igual que 3407/3410, agregando
+`<prod cod="3421"/>`.
+
+Como la estructura XML exacta del payload no está en la doc versionada (vive
+en el PDF v11 de 103 páginas), el extractor `extractRelacionados` de
+`web/lib/dealernet.ts` recorre el payload del producto en profundidad y toma
+como relacionado cualquier nodo con un campo de relación (`relacion`,
+`glsrelacion`, `vinculo`, `parentesco`, ...) junto a un RUT o nombre. Si el
+DV no viene, se calcula (`computeRutDv`). Persistencia en
+`dealernet_relacionados_cl` (migración 0053); UI en
+`web/components/chile/DuenoLookup.tsx` con botón "Pedir teléfonos" por fila
+para encadenar la consulta de contactabilidad del relacionado.
+
+Lo mismo aplica a la "relación" por teléfono: cuando 3407/3410 anotan de
+quién es un número (cónyuge/hijo/sociedad), `extractPhoneRelacion` la captura
+por alias y se guarda en `dealernet_phones_cl.relacion`.
+
+## 4. Foto de perfil por teléfono (`idimagen`)
+
+Cada teléfono puede traer un `idimagen` (referencia a la foto de perfil de
+WhatsApp que muestra el portal). El web service solo entrega el id; la
+imagen la sirve el portal por HTTP con una URL que no está en la doc. Se
+configura como plantilla en el `.env`:
+
+```
+DEALERNET_IMAGE_URL_TEMPLATE=https://.../imagen?id={id}
+```
+
+(abrir una ficha en el portal → clic derecho sobre la foto → "Copiar
+dirección de imagen" → reemplazar el id por `{id}`). La app la proxea vía
+`/api/chile/dealernet-imagen?id=...` (cache 24h, sin filtrar la URL interna
+al navegador); sin plantilla configurada la UI muestra un avatar genérico.
+
+## 5. Pestaña "Dealer" en la app
 
 Toda la funcionalidad de DealerNet (config de credenciales + búsqueda por
 RUT + Buscador Múltiple por dirección/rol) está consolidada en una sola
