@@ -136,16 +136,17 @@ export default function DealerNetPanel() {
           )}
         </div>
         <p className="text-[11px] text-slate-500">
-          Para mostrar la foto (WhatsApp) junto a cada número en Dueños. Pega la URL con la que
-          abres el portal DealerNet en el navegador (solo el dominio). Si las fotos no cargan,
-          agrega también la cookie de sesión (DevTools → Network → cualquier petición al portal →
-          header <code className="bg-slate-900 px-1 py-0.5 rounded">Cookie</code>).
+          La foto (WhatsApp) junto a cada número en Dueños ya funciona sin configurar nada —
+          apunta a <code className="bg-slate-900 px-1 py-0.5 rounded">suite.dealernet.cl</code>.
+          Estos campos son solo por si el dominio del portal cambia o el endpoint empieza a
+          exigir sesión (cookie: DevTools → Network → petición al portal → header{' '}
+          <code className="bg-slate-900 px-1 py-0.5 rounded">Cookie</code>).
         </p>
         <div>
-          <label className="text-[11px] font-medium text-slate-300 block mb-1">URL del portal</label>
+          <label className="text-[11px] font-medium text-slate-300 block mb-1">URL del portal (override)</label>
           <input
             type="url"
-            placeholder={current?.portal_base_url || 'https://portal.dealernet.cl'}
+            placeholder={current?.portal_base_url || 'https://suite.dealernet.cl (default)'}
             value={portalUrl}
             onChange={(e) => setPortalUrl(e.target.value)}
             className="w-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500"

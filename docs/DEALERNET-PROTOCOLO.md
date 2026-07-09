@@ -142,28 +142,31 @@ por alias y se guarda en `dealernet_phones_cl.relacion`.
 
 Cada teléfono puede traer un `idimagen` (referencia a la foto de perfil de
 WhatsApp que muestra el portal). El web service solo entrega el id; la
-imagen la sirve el portal web con este path (confirmado inspeccionando el
-DOM del portal — el atributo `id_imagen` del `<img>` coincide con el
-`idimagen` del WS):
+imagen la sirve el portal web `suite.dealernet.cl` **sin exigir sesión**
+(verificado por curl sin cookie ni headers) en:
 
 ```
-{portal}/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}|60|60|1
+https://suite.dealernet.cl/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}|{ancho}|{alto}|1
 ```
 
-Config en `.env`, editable desde la UI de `/dealer` (sección "Fotos de
-perfil por teléfono"):
+El path salió de inspeccionar el DOM del portal — el atributo `id_imagen`
+del `<img>` coincide con el `idimagen` del WS. El portal pide 60|60 (PNG
+~11KB); nosotros usamos 120|120 (JPEG ~3KB, más nítido). Un id inexistente
+responde 500 con HTML. Ojo: `www.dealernet.cl` es solo el sitio de marketing
+y responde 500 a cualquier path de la app.
 
-- `DEALERNET_PORTAL_BASE_URL` — dominio donde se abre el portal en el
-  navegador. Ojo: NO es `www.dealernet.cl` (ese host es solo el sitio de
-  marketing y responde 500 a cualquier path de la app).
-- `DEALERNET_IMAGE_COOKIE` — opcional; header `Cookie` de una sesión del
-  portal si el endpoint exige sesión (probable: es una app ASP clásica).
-- `DEALERNET_IMAGE_URL_TEMPLATE` — opcional; URL completa con `{id}` que
-  pisa la construida con el base URL, por si el path cambia.
+Ese default vive en `web/app/api/chile/dealernet-imagen/route.ts` y funciona
+sin configuración. Overrides opcionales en `.env`, editables desde la UI de
+`/dealer` (sección "Fotos de perfil por teléfono"), por si el host/path
+cambian o el endpoint empieza a exigir sesión:
+
+- `DEALERNET_PORTAL_BASE_URL` — dominio del portal.
+- `DEALERNET_IMAGE_COOKIE` — header `Cookie` de una sesión del portal.
+- `DEALERNET_IMAGE_URL_TEMPLATE` — URL completa con `{id}`; pisa todo.
 
 La app la proxea vía `/api/chile/dealernet-imagen?id=...` (cache 24h, con
-headers de navegador, sin filtrar URL interna/cookie al cliente); sin portal
-configurado o si la imagen no carga, la UI muestra un avatar genérico.
+headers de navegador, sin filtrar URL interna/cookie al cliente); si la
+imagen no carga, la UI muestra un avatar genérico.
 
 ## 5. Pestaña "Dealer" en la app
 

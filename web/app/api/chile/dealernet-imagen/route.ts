@@ -4,24 +4,23 @@ import { join } from 'path'
 
 // Proxy de la foto de perfil (WhatsApp) que DealerNet asocia a cada teléfono
 // vía `idimagen`. El web service SOAP solo entrega el id — la imagen la sirve
-// el portal web de DealerNet en (path confirmado inspeccionando el DOM del
-// portal, donde `id_imagen` coincide con el `idimagen` del WS):
+// el portal web (suite.dealernet.cl) en un endpoint que NO exige sesión
+// (verificado por curl sin cookie ni headers). El path salió de inspeccionar
+// el DOM del portal, donde `id_imagen` del <img> coincide con el `idimagen`
+// del WS; el formato es CODCOMP={id}|ancho|alto|1 (a 120px devuelve JPEG más
+// liviano y nítido que el 60px PNG que usa el propio portal).
 //
-//   {portal}/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}|60|60|1
-//
-// Config en .env (editable desde la UI de /dealer):
-// - DEALERNET_PORTAL_BASE_URL   https://<host del portal> (el dominio donde
-//                               se abre DealerNet en el navegador)
-// - DEALERNET_IMAGE_COOKIE     (opcional) header Cookie de una sesión del
-//                               portal, por si el endpoint exige sesión
-// - DEALERNET_IMAGE_URL_TEMPLATE (opcional) URL completa con {id} — pisa la
-//                               construida con el base URL, por si el path
-//                               cambia en una versión futura del portal
+// Overrides opcionales en .env (editables desde la UI de /dealer), por si el
+// host/path cambian o el endpoint empieza a exigir sesión:
+// - DEALERNET_PORTAL_BASE_URL    https://<host del portal>
+// - DEALERNET_IMAGE_COOKIE       header Cookie de una sesión del portal
+// - DEALERNET_IMAGE_URL_TEMPLATE URL completa con {id} — pisa todo lo demás
 //
 // Se proxea en vez de apuntar el <img> directo al portal para no filtrar la
 // URL interna/cookie al navegador y poder cachear.
 
-const PORTAL_IMAGE_PATH = '/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}%7C60%7C60%7C1'
+const DEFAULT_PORTAL_BASE_URL = 'https://suite.dealernet.cl'
+const PORTAL_IMAGE_PATH = '/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}%7C120%7C120%7C1'
 
 // Prioridad .env en disco > process.env — misma lógica (y motivo) que
 // getDealernetCreds en web/lib/dealernet.ts: los guardados en caliente desde
@@ -31,19 +30,19 @@ function readEnvKey(content: string | null, key: string): string | null {
   return fromFile || process.env[key] || null
 }
 
-function getImageConfig(): { url: string | null; cookie: string | null; referer: string | null } {
+function getImageConfig(): { url: string; cookie: string | null; referer: string } {
   let content: string | null = null
   try {
     content = readFileSync(join(process.cwd(), '.env'), 'utf-8')
   } catch { /* sin .env en disco */ }
 
   const template = readEnvKey(content, 'DEALERNET_IMAGE_URL_TEMPLATE')
-  const base = readEnvKey(content, 'DEALERNET_PORTAL_BASE_URL')?.replace(/\/+$/, '') ?? null
+  const base = (readEnvKey(content, 'DEALERNET_PORTAL_BASE_URL') ?? DEFAULT_PORTAL_BASE_URL).replace(/\/+$/, '')
   const cookie = readEnvKey(content, 'DEALERNET_IMAGE_COOKIE')
 
   const url = template && template.includes('{id}')
     ? template
-    : base ? `${base}${PORTAL_IMAGE_PATH}` : null
+    : `${base}${PORTAL_IMAGE_PATH}`
 
   return { url, cookie, referer: base }
 }
@@ -56,12 +55,6 @@ export async function GET(request: NextRequest) {
   }
 
   const { url: template, cookie, referer } = getImageConfig()
-  if (!template) {
-    // Sin portal configurado la UI simplemente no muestra avatar (el <img>
-    // esconde con onError) — no es un error de servidor.
-    return new Response('DEALERNET_PORTAL_BASE_URL no configurado', { status: 404 })
-  }
-
   const url = template.replace('{id}', encodeURIComponent(id))
   try {
     const res = await fetch(url, {
