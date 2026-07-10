@@ -104,4 +104,6 @@ Los `siiCode` hardcodeados en `catastro/page.tsx` (Vitacura `15160`, Las Condes 
 | Satélite de Google (tiles gratis) en los visores | ✅ Hecho (2026-07-10) |
 | Botón "Google Earth" junto a coordenadas | ✅ Hecho (2026-07-10) |
 | Fase 1: unificación — `/chile/catastro` es el visor único (clic en parcela → ficha completa, polígono del rol seleccionado, deep-links `?zona=&rol=&tab=`, búsqueda global de respaldo, `/chile/street` redirige) | ✅ Hecho (2026-07-10) |
-| Fases 2-4 | 💡 Backlog (este documento) |
+| Fase 2: capas analíticas — coropleta avalúo/m² (quintiles del viewport, rampa azul validada), capa deuda TGR (rojo/verde/sin certificado), leyenda, tooltips; `parcels-bbox?enrich=1` con JOIN a `sii_roles_cl` + `tgr_certificados` | ✅ Hecho (2026-07-10) |
+| Fase 2: farming — dibujo de polígono/rect/círculo (leaflet-draw), panel con conteo + avalúos (`sii-roles-in-zone` ahora devuelve también la lista con `include_roles`), lista clicable y export CSV (`;` + BOM para Excel es-CL) | ✅ Hecho (2026-07-10) |
+| Fases 3-4 (Oferta real, Ventas CBR, oportunidades en mapa, PDF, watchlists, modo terreno) | 💡 Backlog (este documento) |

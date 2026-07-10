@@ -7,7 +7,7 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
-  Phone, MessageCircle, Landmark, Globe
+  Phone, MessageCircle, Landmark, Globe, Download
 } from 'lucide-react'
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
@@ -172,6 +172,11 @@ export default function CatastroPage() {
   const [drawnShape, setDrawnShape] = useState<DrawnShape | null>(null)
   const [zoneCount, setZoneCount] = useState<number | null>(null)
   const [zoneCountLoading, setZoneCountLoading] = useState(false)
+  // Farming: stats + roles dentro de la zona dibujada (sii-roles-in-zone)
+  const [zoneStats, setZoneStats] = useState<{ avaluo_promedio: number | null; avaluo_total: number | null } | null>(null)
+  const [zoneRoles, setZoneRoles] = useState<any[] | null>(null)
+  // Capa analítica sobre los polígonos del mapa (coropletas)
+  const [analyticLayer, setAnalyticLayer] = useState<'none' | 'avaluo_m2' | 'tgr'>('none')
 
   // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
   const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
@@ -457,23 +462,47 @@ export default function CatastroPage() {
       .finally(() => setBuildingUnitsLoading(false))
   }, [zone.siiCode])
 
-  // Count SII roles within a drawn zone (polygon/circle/rectangle)
+  // Roles SII dentro de la zona dibujada: conteo + stats + lista (farming)
   useEffect(() => {
-    if (!drawnShape || !zone.siiCode) { setZoneCount(null); return }
+    if (!drawnShape || !zone.siiCode) { setZoneCount(null); setZoneStats(null); setZoneRoles(null); return }
     const controller = new AbortController()
     setZoneCountLoading(true)
     fetch('/api/chile/sii-roles-in-zone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sii_comuna_code: zone.siiCode, shape: drawnShape }),
+      body: JSON.stringify({ sii_comuna_code: zone.siiCode, shape: drawnShape, include_roles: true, roles_limit: 1000 }),
       signal: controller.signal,
     })
       .then(r => r.json())
-      .then(d => { if (d.success) setZoneCount(d.count) })
-      .catch(() => setZoneCount(null))
+      .then(d => {
+        if (d.success) {
+          setZoneCount(d.count)
+          setZoneStats({ avaluo_promedio: d.avaluo_promedio, avaluo_total: d.avaluo_total })
+          setZoneRoles(d.roles ?? [])
+        }
+      })
+      .catch(() => { setZoneCount(null); setZoneStats(null); setZoneRoles(null) })
       .finally(() => setZoneCountLoading(false))
     return () => controller.abort()
   }, [drawnShape, zone.siiCode])
+
+  // Export CSV de los roles de la zona dibujada (separador ; + BOM para Excel es-CL)
+  const exportZoneCsv = useCallback(() => {
+    if (!zoneRoles || zoneRoles.length === 0) return
+    const header = ['rol', 'direccion', 'destino', 'avaluo_fiscal_total', 'superficie_terreno_m2', 'nombre_propietario', 'lat', 'lng']
+    const lines = [header, ...zoneRoles.map((r: any) => [
+      r.rol, r.direccion ?? '', r.codigo_destino_principal ?? '', r.avaluo_fiscal_total ?? '',
+      r.superficie_terreno_m2 ?? '', r.nombre_propietario ?? '', r.lat ?? '', r.lng ?? '',
+    ])]
+    const csv = '\ufeff' + lines.map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `roles-${zone.id}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [zoneRoles, zone.id])
 
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
 
@@ -1368,12 +1397,107 @@ export default function CatastroPage() {
             comunaCode={zone.siiCode}
             onParcelClick={handleParcelClick}
             onZoomChange={setMapZoomLevel}
+            analyticLayer={analyticLayer}
+            enableDraw
+            onShapeDrawn={setDrawnShape}
+            drawnShape={drawnShape}
           />
           {mapZoomLevel < 15 && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none rounded-full bg-black/60 backdrop-blur px-3 py-1.5 text-[11px] text-slate-200">
               Acércate para ver las parcelas — clic en una abre su ficha
             </div>
           )}
+
+          {/* Selector de capa analítica */}
+          <div className="absolute top-3 right-3 z-[1000] flex gap-1 rounded-lg bg-black/60 backdrop-blur p-1">
+            {([
+              { id: 'none', label: 'Parcelas' },
+              { id: 'avaluo_m2', label: 'Avalúo/m²' },
+              { id: 'tgr', label: 'Deuda TGR' },
+            ] as const).map(l => (
+              <button
+                key={l.id}
+                onClick={() => setAnalyticLayer(l.id)}
+                className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors ${
+                  analyticLayer === l.id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-white/10'
+                }`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Panel de zona dibujada (farming) */}
+          {drawnShape && (
+            <div className="absolute bottom-8 right-3 z-[1000] w-72 rounded-xl bg-black/75 backdrop-blur border border-white/10 overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+                <MapPin size={12} className="text-cyan-400 flex-shrink-0" />
+                <p className="text-[11px] font-semibold text-white flex-1">Zona dibujada</p>
+                <button
+                  onClick={() => setDrawnShape(null)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  title="Quitar zona"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+              <div className="px-3 py-2 space-y-1.5">
+                {zoneCountLoading ? (
+                  <p className="text-[11px] text-slate-400 flex items-center gap-1.5"><RefreshCw size={10} className="animate-spin" />Analizando zona…</p>
+                ) : zoneCount != null ? (
+                  <>
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-[10px] text-slate-400">Roles SII</span>
+                      <span className="text-xs font-bold text-white">{zoneCount.toLocaleString('es-CL')}</span>
+                    </div>
+                    {zoneStats?.avaluo_promedio != null && (
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[10px] text-slate-400">Avalúo promedio</span>
+                        <span className="text-[11px] font-semibold text-emerald-300">{fmtCLP(zoneStats.avaluo_promedio)}</span>
+                      </div>
+                    )}
+                    {zoneStats?.avaluo_total != null && (
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[10px] text-slate-400">Avalúo total</span>
+                        <span className="text-[11px] font-semibold text-slate-200">{fmtCLP(zoneStats.avaluo_total)}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-500">Sin roles en la zona</p>
+                )}
+              </div>
+              {zoneRoles && zoneRoles.length > 0 && (
+                <>
+                  <div className="max-h-40 overflow-y-auto border-t border-white/10">
+                    {zoneRoles.slice(0, 200).map((r: any) => (
+                      <button
+                        key={r.rol}
+                        onClick={() => { setShowBuildingUnits(false); setLayerTab('catastro'); setSelectedRol({ rol: r.rol }) }}
+                        className="w-full flex items-center gap-2 text-left px-3 py-1.5 hover:bg-white/10 transition-colors"
+                      >
+                        <span className="text-[10px] font-mono text-blue-300 flex-shrink-0">{r.rol}</span>
+                        <span className="text-[10px] text-slate-400 truncate flex-1">{r.direccion ?? '—'}</span>
+                        {r.avaluo_fiscal_total != null && (
+                          <span className="text-[10px] text-slate-300 flex-shrink-0">{fmtCLP(r.avaluo_fiscal_total)}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="px-3 py-2 border-t border-white/10">
+                    <button
+                      onClick={exportZoneCsv}
+                      className="w-full flex items-center justify-center gap-1.5 text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      <Download size={12} />
+                      Exportar CSV ({zoneRoles.length}{zoneCount != null && zoneCount > zoneRoles.length ? ` de ${zoneCount}` : ''})
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="absolute bottom-1 left-2 z-[1000] pointer-events-none text-[9px] text-white/60 drop-shadow">
             Datos: SII catastral.cl · Mapa: Google
           </div>
