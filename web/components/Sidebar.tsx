@@ -18,7 +18,6 @@ import {
   Database,
   Upload,
   Link2,
-  Eye,
   UserSearch,
   Receipt,
   Contact,
@@ -140,12 +139,6 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       badge: 'NEW',
     },
     {
-      href: '/chile/street',
-      label: 'Visor catastral',
-      icon: Eye,
-      description: 'Mapa predial · roles · polígonos',
-    },
-    {
       href: '/settings',
       label: 'Subir datos SII',
       icon: Upload,
@@ -157,9 +150,6 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
 export default function Sidebar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
-
-  // El visor catastral ocupa toda la pantalla — ocultar sidebar completamente
-  if (pathname.startsWith('/chile/street')) return null
 
   // País por pertenencia a los módulos, no por prefijo: /dealer y /settings son
   // módulos de Chile aunque su ruta no empiece con /chile — con el prefijo, al

@@ -12,10 +12,11 @@ import {
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
-import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
-import { useSiiRolePins, type MapBounds } from '@/lib/use-sii-role-pins'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
-import GoogleMapsView from '@/components/map/GoogleMapsView'
+
+// Mapa unificado (ex Visor Catastral /chile/street): satélite de Google con
+// polígonos de parcelas clicables desde cadastre_parcels_cl.
+const StreetViewMap = nextDynamicImport(() => import('@/components/map/StreetViewMap'), { ssr: false })
 
 interface DrawnShape {
   type: 'polygon' | 'circle' | 'rectangle'
@@ -172,10 +173,34 @@ export default function CatastroPage() {
   const [zoneCount, setZoneCount] = useState<number | null>(null)
   const [zoneCountLoading, setZoneCountLoading] = useState(false)
 
-  // Map viewport bounds — updated by CadastreMap on every pan/zoom
-  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null)
+  // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
+  const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
+  const [mapZoomLevel, setMapZoomLevel] = useState(15)
+  // Resultados de otras comunas cuando la búsqueda local no encuentra nada
+  const [globalResults, setGlobalResults] = useState<any[] | null>(null)
 
   const PAGE_SIZE = 50
+
+  // Deep-links: restaurar ?zona=&rol=&tab= al montar (URL compartible)
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search)
+    const zona = sp.get('zona')
+    const rol = sp.get('rol')
+    const tab = sp.get('tab')
+    if (zona && ZONES.some(z => z.id === zona)) setZoneId(zona as ZoneId)
+    if (rol) setSelectedRol({ rol })
+    if (tab && LAYER_TABS.some(t => t.id === tab)) setLayerTab(tab as LayerTab)
+  }, [])
+
+  // Deep-links: reflejar zona/rol/tab en la URL sin recargar
+  useEffect(() => {
+    const sp = new URLSearchParams()
+    if (zoneId !== 'vitacura') sp.set('zona', zoneId)
+    if (selectedRol?.rol) sp.set('rol', selectedRol.rol)
+    if (layerTab !== 'catastro') sp.set('tab', layerTab)
+    const qs = sp.toString()
+    window.history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname)
+  }, [zoneId, selectedRol, layerTab])
 
   // Debounce search
   useEffect(() => {
@@ -204,8 +229,6 @@ export default function CatastroPage() {
   // Reset page on filter change
   useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
 
-  // Reset map bounds when zone changes so the hook doesn't use stale bbox
-  useEffect(() => { setMapBounds(null) }, [zoneId])
 
   // Fetch stats
   useEffect(() => {
@@ -257,6 +280,55 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setDetailLoading(false))
   }, [selectedRol, zone.siiCode])
+
+  // Polígono catastral del rol seleccionado para el mapa — misma cadena de
+  // fallback que tenía el visor /chile/street: polígono real de
+  // cadastre_parcels_cl → coords del propio SII → solo centro de zona.
+  useEffect(() => {
+    setMapPin(null)
+    const rol = rolDetail?.rol
+    if (!rol || !zone.siiCode) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/chile/parcel-geojson?rol=${encodeURIComponent(rol.rol)}&comuna=${zone.siiCode}`)
+        const data = await res.json()
+        if (cancelled) return
+        if (data.success && data.parcel) {
+          setMapPin({ lat: data.parcel.lat, lng: data.parcel.lng, label: rol.direccion ?? undefined, geojson: data.parcel.geojson })
+          return
+        }
+      } catch { /* ignore */ }
+      if (!cancelled && rol.lat && rol.lng) {
+        setMapPin({ lat: rol.lat, lng: rol.lng, label: rol.direccion ?? undefined })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [rolDetail, zone.siiCode])
+
+  // Clic en una parcela del mapa → abre la ficha completa del rol. Si la
+  // parcela es de otra comuna con zona configurada, salta a esa zona.
+  const handleParcelClick = useCallback((p: { rol: string; sii_comuna_code: string }) => {
+    const targetZone = p.sii_comuna_code === zone.siiCode ? zone : ZONES.find(z => z.siiCode === p.sii_comuna_code)
+    if (!targetZone) return
+    if (targetZone.id !== zoneId) setZoneId(targetZone.id)
+    setLayerTab('catastro')
+    setShowBuildingUnits(false)
+    setSelectedRol({ rol: p.rol })
+  }, [zone, zoneId])
+
+  // Si la búsqueda no encuentra nada en la comuna activa, buscar en todas las
+  // comunas (sii-search: rol o dirección con trigram + fallback mapasui) y
+  // ofrecer el salto — conserva la búsqueda global que tenía /chile/street.
+  useEffect(() => {
+    if (!search || loading || roles.length > 0) { setGlobalResults(null); return }
+    const controller = new AbortController()
+    fetch(`/api/chile/sii-search?q=${encodeURIComponent(search)}&limit=8`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) setGlobalResults(d.results ?? []) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [search, loading, roles])
 
   // Fetch contacto DealerNet ya guardado para este rol (cache — no vuelve a
   // golpear el web service hasta que el usuario pida "Actualizar")
@@ -403,11 +475,7 @@ export default function CatastroPage() {
     return () => controller.abort()
   }, [drawnShape, zone.siiCode])
 
-  const { parcels } = useCadastreParcels(zone.siiCode, zone.comuna)
-  const { rolePoints } = useSiiRolePins(zone.siiCode, mapBounds)
   const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
-  const pins = layerTab === 'catastro' ? allPins : []
-  const activeRolePoints = layerTab === 'catastro' ? rolePoints : []
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
@@ -1162,7 +1230,44 @@ export default function CatastroPage() {
                 {loading && roles.length === 0 ? (
                   <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Cargando roles...</div>
                 ) : roles.length === 0 ? (
-                  <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Sin resultados</div>
+                  <div className="p-3">
+                    <div className="flex items-center justify-center h-20 text-slate-700 text-xs">Sin resultados en {zone.label}</div>
+                    {globalResults && globalResults.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold px-1">Resultados en otras comunas</p>
+                        {globalResults.map((g: any) => {
+                          const gz = ZONES.find(z => z.siiCode === g.sii_comuna_code)
+                          return (
+                            <button
+                              key={g.id}
+                              disabled={!gz}
+                              onClick={() => {
+                                if (!gz) return
+                                setZoneId(gz.id)
+                                setSearchInput(''); setSearch('')
+                                setShowBuildingUnits(false)
+                                setSelectedRol({ rol: g.rol })
+                              }}
+                              className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-blue-800/50 hover:bg-blue-950/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={gz ? `Ver en ${g.comuna_nombre}` : 'Comuna sin zona configurada en este visor'}
+                            >
+                              <MapPin size={11} className="text-blue-400 flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-slate-300 truncate">{g.direccion ?? '—'}</p>
+                                <p className="text-[10px] text-slate-600 font-mono">
+                                  {g.comuna_nombre} · Rol {g.rol}
+                                  {g.source === 'mapasui_scrape' && <span className="ml-1.5 text-amber-500 font-sans">no oficial</span>}
+                                </p>
+                              </div>
+                              {g.avaluo_fiscal_total != null && (
+                                <span className="text-[11px] text-slate-400 font-medium flex-shrink-0">{fmtCLP(g.avaluo_fiscal_total)}</span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <table className="w-full text-[11px]">
                     <thead className="sticky top-0 bg-[var(--c-bg)] z-10">
@@ -1254,13 +1359,24 @@ export default function CatastroPage() {
           )}
         </div>
 
-        {/* RIGHT: map */}
+        {/* RIGHT: map — satélite Google + polígonos de parcelas clicables */}
         <div className="flex-1 relative">
-          <GoogleMapsView
-            selectedRol={rolDetail?.rol ? { lat: rolDetail.rol.lat, lng: rolDetail.rol.lng, direccion: rolDetail.rol.direccion } : null}
-            center={zone.center}
-            zoom={15}
+          <StreetViewMap
+            center={mapPin ? { lat: mapPin.lat, lng: mapPin.lng } : zone.center}
+            zoom={mapPin ? 18 : 15}
+            pin={mapPin}
+            comunaCode={zone.siiCode}
+            onParcelClick={handleParcelClick}
+            onZoomChange={setMapZoomLevel}
           />
+          {mapZoomLevel < 15 && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none rounded-full bg-black/60 backdrop-blur px-3 py-1.5 text-[11px] text-slate-200">
+              Acércate para ver las parcelas — clic en una abre su ficha
+            </div>
+          )}
+          <div className="absolute bottom-1 left-2 z-[1000] pointer-events-none text-[9px] text-white/60 drop-shadow">
+            Datos: SII catastral.cl · Mapa: Google
+          </div>
         </div>
       </div>
     </div>

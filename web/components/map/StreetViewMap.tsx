@@ -45,6 +45,11 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
   onParcelClickRef.current = onParcelClick
   const onZoomChangeRef = useRef(onZoomChange)
   onZoomChangeRef.current = onZoomChange
+  // Ref para que loadParcels (capturado por el listener de moveend registrado
+  // una sola vez al init) vea siempre la comuna actual — sin esto, al cambiar
+  // de zona en catastro se seguirían pidiendo parcelas de la comuna anterior.
+  const comunaCodeRef = useRef(comunaCode)
+  comunaCodeRef.current = comunaCode
 
   async function loadParcels() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -54,7 +59,8 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
 
     const b = map.getBounds()
     const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
-    const url = `/api/chile/parcels-bbox?bbox=${bbox}${comunaCode ? `&comuna=${comunaCode}` : ''}`
+    const comuna = comunaCodeRef.current
+    const url = `/api/chile/parcels-bbox?bbox=${bbox}${comuna ? `&comuna=${comuna}` : ''}`
 
     loadingRef.current = true
     try {
