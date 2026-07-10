@@ -4,7 +4,7 @@ import { useState } from 'react'
 import {
   Search, Phone, Mail, MapPin, Loader2, CheckCircle2,
   AlertCircle, ExternalLink, MessageCircle, Building2,
-  Copy, Check, Users, UserRound
+  Copy, Check, Users, UserRound, ChevronDown, ChevronRight
 } from 'lucide-react'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
@@ -87,8 +87,9 @@ function rutificadorCoUrl(nombre: string) {
 }
 
 export default function DuenoLookup() {
-  // Nombre → rutificador
+  // Nombre → rutificador (card plegada por defecto)
   const [nombre, setNombre] = useState('')
+  const [nombreOpen, setNombreOpen] = useState(false)
 
   // RUT → DealerNet
   const [rut, setRut] = useState('')
@@ -187,9 +188,9 @@ export default function DuenoLookup() {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div className="space-y-4">
       {/* Card 0: Buscador Múltiple — dirección/rol → candidatos a RUT */}
-      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 space-y-3 lg:col-span-2">
+      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Building2 size={14} className="text-purple-400" />
           <p className="text-sm font-semibold text-slate-200">Buscar dueño por dirección / rol</p>
@@ -266,55 +267,6 @@ export default function DuenoLookup() {
             </div>
           )
         )}
-      </div>
-
-      {/* Card 1: buscar por nombre */}
-      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <Search size={14} className="text-amber-400" />
-          <p className="text-sm font-semibold text-slate-200">Buscar por nombre</p>
-        </div>
-        <p className="text-[11px] text-slate-500">
-          Ingresa el nombre del propietario para obtener su RUT en fuentes públicas.
-          El RUT resultante lo usas en el buscador de la derecha.
-        </p>
-
-        <div>
-          <label className="text-[11px] font-medium text-slate-300 block mb-1">Nombre completo</label>
-          <input
-            type="text"
-            placeholder="ej. Juan Pedro González"
-            value={nombre}
-            onChange={(e) => setNombre(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && nombre.trim()) window.open(rutificadorUrl(nombre), '_blank')
-            }}
-            className="w-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <a
-            href={nombre.trim() ? rutificadorUrl(nombre) : '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => { if (!nombre.trim()) e.preventDefault() }}
-            className={`flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border transition-colors ${nombre.trim() ? 'bg-amber-600/20 border-amber-700/50 text-amber-300 hover:bg-amber-600/30' : 'bg-slate-900/20 border-slate-800/30 text-slate-600 cursor-not-allowed'}`}
-          >
-            <ExternalLink size={12} />
-            Buscar en NombreRutYFirma
-          </a>
-          <a
-            href={nombre.trim() ? rutificadorCoUrl(nombre) : '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => { if (!nombre.trim()) e.preventDefault() }}
-            className={`flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border transition-colors ${nombre.trim() ? 'bg-amber-600/20 border-amber-700/50 text-amber-300 hover:bg-amber-600/30' : 'bg-slate-900/20 border-slate-800/30 text-slate-600 cursor-not-allowed'}`}
-          >
-            <ExternalLink size={12} />
-            Buscar en Rutificador.co
-          </a>
-        </div>
       </div>
 
       {/* Card 2: RUT → contactos */}
@@ -407,6 +359,65 @@ export default function DuenoLookup() {
           />
         )}
       </div>
+
+      {/* Card 3: buscar por nombre en fuentes públicas — plegado por defecto
+          para no hacer ruido; es un flujo secundario. */}
+      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)]">
+        <button
+          onClick={() => setNombreOpen(o => !o)}
+          className="w-full flex items-center gap-2 p-4 text-left"
+        >
+          <Search size={14} className="text-amber-400" />
+          <p className="text-sm font-semibold text-slate-200">Buscar RUT por nombre</p>
+          <span className="text-[11px] text-slate-500 hidden sm:inline">fuentes públicas (NombreRutYFirma / Rutificador)</span>
+          {nombreOpen
+            ? <ChevronDown size={14} className="ml-auto text-slate-500" />
+            : <ChevronRight size={14} className="ml-auto text-slate-500" />}
+        </button>
+        {nombreOpen && (
+          <div className="px-4 pb-4 space-y-3">
+            <p className="text-[11px] text-slate-500">
+              Ingresa el nombre del propietario para obtener su RUT en fuentes públicas.
+              El RUT resultante lo pegas arriba en &quot;Obtener datos del dueño&quot;.
+            </p>
+            <div>
+              <label className="text-[11px] font-medium text-slate-300 block mb-1">Nombre completo</label>
+              <input
+                type="text"
+                placeholder="ej. Juan Pedro González"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && nombre.trim()) window.open(rutificadorUrl(nombre), '_blank')
+                }}
+                className="w-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] rounded-lg text-xs px-3 py-2 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-1.5">
+              <a
+                href={nombre.trim() ? rutificadorUrl(nombre) : '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => { if (!nombre.trim()) e.preventDefault() }}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border transition-colors ${nombre.trim() ? 'bg-amber-600/20 border-amber-700/50 text-amber-300 hover:bg-amber-600/30' : 'bg-slate-900/20 border-slate-800/30 text-slate-600 cursor-not-allowed'}`}
+              >
+                <ExternalLink size={12} />
+                Buscar en NombreRutYFirma
+              </a>
+              <a
+                href={nombre.trim() ? rutificadorCoUrl(nombre) : '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => { if (!nombre.trim()) e.preventDefault() }}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border transition-colors ${nombre.trim() ? 'bg-amber-600/20 border-amber-700/50 text-amber-300 hover:bg-amber-600/30' : 'bg-slate-900/20 border-slate-800/30 text-slate-600 cursor-not-allowed'}`}
+              >
+                <ExternalLink size={12} />
+                Buscar en Rutificador.co
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -452,10 +463,11 @@ function CopyButton({ copied, onClick, title }: { copied: boolean; onClick: () =
 }
 
 // Foto de perfil (WhatsApp) asociada al número. La sirve el proxy
-// /api/chile/dealernet-imagen — si no hay plantilla configurada o la imagen
-// no existe, el onError esconde el <img> y queda el ícono genérico.
+// /api/chile/dealernet-imagen — si no hay imagen o falla, queda el ícono
+// genérico. Clic en el avatar → lightbox con la foto en grande.
 function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
   const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
   if (!idimagen || failed) {
     return (
       <span className="w-8 h-8 rounded-full bg-[var(--c-card)] border border-[var(--c-border-strong)] flex items-center justify-center flex-shrink-0">
@@ -464,13 +476,34 @@ function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
     )
   }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}`}
-      alt="Foto de perfil"
-      onError={() => setFailed(true)}
-      className="w-8 h-8 rounded-full object-cover border border-[var(--c-border-strong)] flex-shrink-0"
-    />
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Ver foto en grande"
+        className="flex-shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/60"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}`}
+          alt="Foto de perfil"
+          onError={() => setFailed(true)}
+          className="w-8 h-8 rounded-full object-cover border border-[var(--c-border-strong)] cursor-zoom-in hover:ring-2 hover:ring-blue-500/60 transition-shadow"
+        />
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center cursor-zoom-out p-6"
+          onClick={() => setOpen(false)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}&size=480`}
+            alt="Foto de perfil"
+            className="max-w-[85vw] max-h-[85vh] w-72 sm:w-96 rounded-2xl border border-slate-600 shadow-2xl object-contain"
+          />
+        </div>
+      )}
+    </>
   )
 }
 
