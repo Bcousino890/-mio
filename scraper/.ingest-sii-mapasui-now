@@ -17,3 +17,5 @@ Historial:
   en la ingesta manual de las 02:35 (~19 h sin lotes). Se ingesta el output
   acumulado ya, se relanza el scrape (ver .launch-sii-mapasui) para que tome
   el script nuevo, y el workflow gana un cron horario de respaldo.
+
+bump 2026-07-10T04:22:19+00:00: primera pasada del watchdog (verificación end-to-end tras #127)
