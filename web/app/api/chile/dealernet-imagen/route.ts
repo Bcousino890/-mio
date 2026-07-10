@@ -20,7 +20,9 @@ import { join } from 'path'
 // URL interna/cookie al navegador y poder cachear.
 
 const DEFAULT_PORTAL_BASE_URL = 'https://suite.dealernet.cl'
-const PORTAL_IMAGE_PATH = '/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}%7C120%7C120%7C1'
+// El formato es CODCOMP={id}|ancho|alto|1 — {size} se reemplaza según el
+// query param `size` (avatar 120, lightbox más grande).
+const PORTAL_IMAGE_PATH = '/tlfw/asp/system/tlfw.system.reziseImage.aspx?CODCOMP={id}%7C{size}%7C{size}%7C1'
 
 // Prioridad .env en disco > process.env — misma lógica (y motivo) que
 // getDealernetCreds en web/lib/dealernet.ts: los guardados en caliente desde
@@ -55,7 +57,13 @@ export async function GET(request: NextRequest) {
   }
 
   const { url: template, cookie, referer } = getImageConfig()
-  const url = template.replace('{id}', encodeURIComponent(id))
+  // size: 120 para el avatar, hasta 600 para el lightbox. Se acota para no
+  // pedirle al portal imágenes arbitrariamente grandes.
+  const sizeParam = parseInt(request.nextUrl.searchParams.get('size') ?? '', 10)
+  const size = Math.min(600, Math.max(40, Number.isFinite(sizeParam) ? sizeParam : 120))
+  const url = template
+    .replace('{id}', encodeURIComponent(id))
+    .replace(/\{size\}/g, String(size))
   try {
     const res = await fetch(url, {
       redirect: 'follow',
