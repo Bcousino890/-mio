@@ -37,7 +37,7 @@ interface IngestaStatus {
 // horario al día) es un estado SANO y se pinta en calma, no como alarma.
 const NIVEL_UI: Record<NivelIngesta, { dot: string; pulse: boolean; label: string }> = {
   ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lotes cada ~10 min)' },
-  al_dia: { dot: 'bg-emerald-500', pulse: false, label: 'Al día (scrape en reposo · cron horario)' },
+  al_dia: { dot: 'bg-emerald-500', pulse: false, label: 'Al día (scrape en reposo · datos completos)' },
   estancado: { dot: 'bg-amber-500', pulse: false, label: 'Sin ingesta reciente' },
   sin_datos: { dot: 'bg-slate-500', pulse: false, label: 'Sin datos todavía' },
 }
