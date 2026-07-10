@@ -7,7 +7,9 @@ import Link from 'next/link'
 import {
   Search, X, ChevronLeft, Loader2, MapPin, Home, Building2,
   Landmark, AlertCircle, ArrowLeft, ExternalLink, PanelLeftClose, PanelLeftOpen,
+  Globe,
 } from 'lucide-react'
+import { googleEarthUrl } from '@/lib/map-links'
 
 const StreetViewMap = nextDynamic(() => import('@/components/map/StreetViewMap'), { ssr: false })
 
@@ -354,6 +356,18 @@ export default function StreetPage() {
                 <ExternalLink size={13} />
                 Ver detalles en SII
               </a>
+
+              {(pinCoords || (selected.lat != null && selected.lng != null)) && (
+                <a
+                  href={googleEarthUrl(pinCoords?.lat ?? selected.lat!, pinCoords?.lng ?? selected.lng!)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 text-[11px] font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 rounded-lg px-3 py-2.5 transition-all"
+                >
+                  <Globe size={13} />
+                  Ver en Google Earth
+                </a>
+              )}
             </div>
           </div>
         ) : (
@@ -483,7 +497,7 @@ export default function StreetPage() {
         )}
 
         <div className="absolute bottom-6 right-4 z-[1000] text-[10px] text-white/60 bg-black/40 backdrop-blur px-2.5 py-1.5 rounded-lg border border-white/10">
-          Datos: SII catastral.cl · Mapa: Esri
+          Datos: SII catastral.cl · Mapa: Google
         </div>
       </div>
     </div>

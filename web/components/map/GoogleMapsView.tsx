@@ -51,18 +51,15 @@ export default function GoogleMapsView({ selectedRol, center, zoom = 15 }: Props
         attributionControl: true,
       })
 
-      // Satélite (Esri World Imagery) + capa de límites/nombres encima, mismo
-      // esquema que el Visor Catastral (/chile/street) — antes esta ficha
-      // solo tenía calles OSM, sin opción de ver la imagen satelital.
-      L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        { attribution: 'Esri, Maxar', maxZoom: 21, maxNativeZoom: 20 }
-      ).addTo(map)
-
-      L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-        { maxZoom: 21, maxNativeZoom: 20, opacity: 0.9 }
-      ).addTo(map)
+      // Satélite híbrido de Google (lyrs=y: imagen + nombres de calles),
+      // tiles estáticos gratis sin API key — mismo esquema que el Visor
+      // Catastral (/chile/street) y que ListingMatchMap.
+      L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        subdomains: ['0', '1', '2', '3'],
+        attribution: '© Google',
+        maxZoom: 21,
+        maxNativeZoom: 20,
+      }).addTo(map)
 
       const icon = L.icon({
         iconUrl: BLUE_ICON_URL,

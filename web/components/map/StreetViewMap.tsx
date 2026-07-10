@@ -107,25 +107,16 @@ export default function StreetViewMap({ center, zoom = 17, pin, comunaCode, onPa
         inertiaDeceleration: 3500,
       })
 
-      L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        {
-          attribution: 'Esri, Maxar',
-          maxZoom: 21,
-          maxNativeZoom: 20,
-          className: 'satellite-layer'
-        }
-      ).addTo(map)
-
-      L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-        {
-          maxZoom: 21,
-          maxNativeZoom: 20,
-          opacity: 0.9,
-          className: 'labels-layer'
-        }
-      ).addTo(map)
+      // Satélite híbrido de Google (lyrs=y: imagen + nombres de calles en una
+      // sola capa), tiles estáticos gratis sin API key — mismo patrón que
+      // ListingMatchMap. Sustituye a las dos capas Esri anteriores.
+      L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        subdomains: ['0', '1', '2', '3'],
+        attribution: '© Google',
+        maxZoom: 21,
+        maxNativeZoom: 20,
+        className: 'satellite-layer',
+      }).addTo(map)
 
       mapRef.current = map
 

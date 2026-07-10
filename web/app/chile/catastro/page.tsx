@@ -7,8 +7,9 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
-  Phone, MessageCircle, Landmark
+  Phone, MessageCircle, Landmark, Globe
 } from 'lucide-react'
+import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { useCadastreParcels } from '@/lib/use-cadastre-parcels'
@@ -776,15 +777,27 @@ export default function CatastroPage() {
                         <div className="flex px-3 py-2 border-b border-[var(--c-border-card)]/40">
                           <span className="text-[11px] text-slate-600 w-28 flex-shrink-0">Coordenadas</span>
                           {rolDetail.rol?.lat && rolDetail.rol?.lng ? (
-                            <a
-                              href={`https://www.google.com/maps/search/${rolDetail.rol.lat},${rolDetail.rol.lng}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[11px] text-blue-400 hover:text-blue-300 font-medium cursor-pointer inline-flex items-center gap-1"
-                            >
-                              {rolDetail.rol.lat.toFixed(6)}, {rolDetail.rol.lng.toFixed(6)}
-                              <ExternalLink size={9} />
-                            </a>
+                            <span className="inline-flex items-center gap-2 flex-wrap">
+                              <a
+                                href={googleMapsUrl(rolDetail.rol.lat, rolDetail.rol.lng)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] text-blue-400 hover:text-blue-300 font-medium cursor-pointer inline-flex items-center gap-1"
+                              >
+                                {rolDetail.rol.lat.toFixed(6)}, {rolDetail.rol.lng.toFixed(6)}
+                                <ExternalLink size={9} />
+                              </a>
+                              <a
+                                href={googleEarthUrl(rolDetail.rol.lat, rolDetail.rol.lng)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Ver en Google Earth (vista 3D)"
+                                className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5"
+                              >
+                                <Globe size={9} />
+                                Google Earth
+                              </a>
+                            </span>
                           ) : (
                             <span className="text-[11px] text-slate-500 italic">Cargando coordenadas...</span>
                           )}
