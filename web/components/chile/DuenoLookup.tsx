@@ -13,7 +13,7 @@ const PRODUCTS = [
   { code: '3410', label: 'Directorio Teléfonos', description: 'Solo números — más económico' },
   { code: '3407', label: 'Contactabilidad', description: 'Teléfonos + clasificación + calidad' },
   { code: '3408', label: 'Verificación Múltiple', description: 'Emails + direcciones' },
-  { code: '3421', label: 'Relacionados', description: 'Familiares y sociedades — RUT, nombre y relación' },
+  { code: '3421', label: 'Relacionados (extra)', description: 'Normalmente ya vienen incluidos con Directorio Teléfonos — marcar solo si no aparecen' },
 ] as const
 
 const TIPBUSQ_OPTIONS = [
@@ -40,7 +40,7 @@ interface Candidato {
 interface Phone {
   phone_e164: string
   phone_raw: string
-  categoria: 'probable' | 'alternativo'
+  categoria: 'probable' | 'alternativo' | 'laboral'
   clasificacion: string | null
   ind_whatsapp: boolean | null
   idimagen: string | null
@@ -458,8 +458,8 @@ function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
   const [failed, setFailed] = useState(false)
   if (!idimagen || failed) {
     return (
-      <span className="w-6 h-6 rounded-full bg-[var(--c-hover)] border border-[var(--c-border-strong)] flex items-center justify-center flex-shrink-0">
-        <UserRound size={12} className="text-slate-600" />
+      <span className="w-8 h-8 rounded-full bg-[var(--c-card)] border border-[var(--c-border-strong)] flex items-center justify-center flex-shrink-0">
+        <UserRound size={14} className="text-slate-600" />
       </span>
     )
   }
@@ -469,31 +469,55 @@ function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
       src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}`}
       alt="Foto de perfil"
       onError={() => setFailed(true)}
-      className="w-6 h-6 rounded-full object-cover border border-[var(--c-border-strong)] flex-shrink-0"
+      className="w-8 h-8 rounded-full object-cover border border-[var(--c-border-strong)] flex-shrink-0"
     />
   )
 }
 
+const CATEGORIA_BADGE: Record<string, string> = {
+  probable: 'bg-green-950/40 text-green-400 border border-green-900/40',
+  alternativo: 'bg-slate-900/40 text-slate-400 border border-slate-800/50',
+  laboral: 'bg-blue-950/40 text-blue-400 border border-blue-900/40',
+}
+
 function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut: (rut: string) => void }) {
   const rutFormatted = `${result.rut_num.toLocaleString('es-CL')}-${result.rut_dv}`
+  const rutPlano = `${result.rut_num}-${result.rut_dv}`
   const { copiedKey, copy } = useCopy()
 
   return (
-    <div className="space-y-3 pt-1 border-t border-[var(--c-border-card)]">
-      <div className="flex items-center gap-1.5">
-        <CheckCircle2 size={13} className="text-emerald-400 flex-shrink-0" />
-        <div>
+    <div className="space-y-3 pt-2 border-t border-[var(--c-border-card)]">
+      {/* Titular: nombre y RUT, ambos copiables */}
+      <div className="flex items-center gap-2 rounded-lg bg-[var(--c-hover)] border border-[var(--c-border-strong)] px-2.5 py-2">
+        <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
+        <div className="min-w-0 flex-1">
           {result.nombre_titular && (
-            <p className="text-[11px] text-slate-200 font-semibold">{result.nombre_titular}</p>
+            <div className="flex items-center gap-1">
+              <p className="text-xs text-slate-100 font-semibold truncate">{result.nombre_titular}</p>
+              <CopyButton
+                copied={copiedKey === 'titular-nombre'}
+                onClick={() => copy('titular-nombre', result.nombre_titular!)}
+                title="Copiar nombre"
+              />
+            </div>
           )}
-          <p className="text-[10px] text-slate-500">RUT {rutFormatted}</p>
+          <div className="flex items-center gap-1">
+            <p className="text-[11px] font-mono text-slate-400">{rutFormatted}</p>
+            <CopyButton
+              copied={copiedKey === 'titular-rut'}
+              onClick={() => copy('titular-rut', rutPlano)}
+              title="Copiar RUT"
+            />
+          </div>
         </div>
       </div>
 
       {result.phones.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Teléfonos</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+              Teléfonos <span className="text-slate-600">({result.phones.length})</span>
+            </p>
             <button
               onClick={() => copy('all-phones', result.phones.map(p => p.phone_e164).join('\n'))}
               className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 px-1.5 py-0.5 rounded border border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors"
@@ -502,33 +526,68 @@ function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut
               Copiar todos
             </button>
           </div>
-          {result.phones.map((p, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-[11px]">
-              <PhoneAvatar idimagen={p.idimagen} />
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-slate-200">{p.phone_e164}</span>
-                  {p.ind_whatsapp && <MessageCircle size={10} className="text-green-500" aria-label="WhatsApp" />}
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded ${p.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
-                    {p.categoria}
-                  </span>
-                  {p.clasificacion && (
-                    <span className="text-[9px] text-slate-600">
-                      {p.clasificacion === 'C' ? 'celular' : p.clasificacion === 'F' ? 'fijo' : p.clasificacion}
+          <div className="space-y-1">
+            {result.phones.map((p, i) => (
+              /* foto — número — relación — copiar */
+              <div key={i} className="flex items-center gap-2 rounded-lg border border-[var(--c-border-strong)] bg-[var(--c-hover)] px-2 py-1.5">
+                <PhoneAvatar idimagen={p.idimagen} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-mono text-xs text-slate-100">{p.phone_e164}</span>
+                    {p.ind_whatsapp && (
+                      <a
+                        href={`https://wa.me/${p.phone_e164.replace(/\D/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Abrir WhatsApp"
+                        className="text-green-500 hover:text-green-400"
+                      >
+                        <MessageCircle size={11} />
+                      </a>
+                    )}
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${CATEGORIA_BADGE[p.categoria] ?? CATEGORIA_BADGE.alternativo}`}>
+                      {p.categoria}
                     </span>
+                    {p.clasificacion && (
+                      <span className="text-[9px] text-slate-500">
+                        {p.clasificacion === 'C' ? 'celular' : p.clasificacion === 'F' ? 'fijo' : p.clasificacion}
+                      </span>
+                    )}
+                  </div>
+                  {p.relacion && (
+                    <p className="text-[10px] text-amber-400/90 truncate">
+                      {/^relaci/i.test(p.relacion) ? p.relacion : `Relación directa con ${p.relacion}`}
+                    </p>
                   )}
                 </div>
-                {p.relacion && (
-                  <p className="text-[10px] text-sky-400/90 truncate">
-                    {/^relaci/i.test(p.relacion) ? p.relacion : `Relación directa con ${p.relacion}`}
-                  </p>
-                )}
-              </div>
-              <div className="ml-auto">
                 <CopyButton
                   copied={copiedKey === `phone-${i}`}
                   onClick={() => copy(`phone-${i}`, p.phone_e164)}
                   title="Copiar número"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {result.emails.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+            Correos <span className="text-slate-600">({result.emails.length})</span>
+          </p>
+          {result.emails.map((e, i) => (
+            <div key={i} className="flex items-center gap-1.5 text-[11px]">
+              <Mail size={10} className="text-slate-500 flex-shrink-0" />
+              <span className="text-slate-200">{e.email}</span>
+              <span className={`text-[9px] px-1.5 py-0.5 rounded ${CATEGORIA_BADGE[e.categoria] ?? CATEGORIA_BADGE.alternativo}`}>
+                {e.categoria}
+              </span>
+              <div className="ml-auto">
+                <CopyButton
+                  copied={copiedKey === `email-${i}`}
+                  onClick={() => copy(`email-${i}`, e.email)}
+                  title="Copiar correo"
                 />
               </div>
             </div>
@@ -536,11 +595,34 @@ function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut
         </div>
       )}
 
+      {result.addresses.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+            Direcciones <span className="text-slate-600">({result.addresses.length})</span>
+          </p>
+          {result.addresses.map((a, i) => (
+            <div key={i} className="flex items-start gap-1.5 text-[11px]">
+              <MapPin size={10} className="text-slate-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="text-slate-200">{a.direccion}</span>
+                {a.ubicacion && <p className="text-[10px] text-slate-500">{a.ubicacion}</p>}
+              </div>
+              <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${CATEGORIA_BADGE[a.categoria] ?? CATEGORIA_BADGE.alternativo}`}>
+                {a.categoria}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Relacionados: siempre al final, como en el impreso de DealerNet */}
       {result.relacionados.length > 0 && (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Users size={11} className="text-slate-500" />
-            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Relacionados</p>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+              Relacionados <span className="text-slate-600">({result.relacionados.length})</span>
+            </p>
           </div>
           <div className="overflow-x-auto rounded-lg border border-[var(--c-border-strong)]">
             <table className="w-full text-[10px]">
@@ -556,12 +638,32 @@ function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut
                 {result.relacionados.map((r, i) => {
                   const rutStr = r.rut != null && r.dv ? `${r.rut}-${r.dv}` : null
                   return (
-                    <tr key={i} className="border-t border-[var(--c-border-strong)]">
+                    <tr key={i} className="border-t border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors">
                       <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">
-                        {r.rut != null ? `${r.rut.toLocaleString('es-CL')}${r.dv ? `-${r.dv}` : ''}` : '—'}
+                        <span className="inline-flex items-center gap-0.5">
+                          {r.rut != null ? `${r.rut.toLocaleString('es-CL')}${r.dv ? `-${r.dv}` : ''}` : '—'}
+                          {rutStr && (
+                            <CopyButton
+                              copied={copiedKey === `rel-rut-${i}`}
+                              onClick={() => copy(`rel-rut-${i}`, rutStr)}
+                              title="Copiar RUT"
+                            />
+                          )}
+                        </span>
                       </td>
-                      <td className="px-2 py-1.5 text-slate-200">{r.nombre ?? '—'}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{r.relacion ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-slate-200">
+                        <span className="inline-flex items-center gap-0.5">
+                          {r.nombre ?? '—'}
+                          {r.nombre && (
+                            <CopyButton
+                              copied={copiedKey === `rel-nombre-${i}`}
+                              onClick={() => copy(`rel-nombre-${i}`, r.nombre!)}
+                              title="Copiar nombre"
+                            />
+                          )}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-amber-400/90 whitespace-nowrap">{r.relacion ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         {rutStr && (
                           <button
@@ -579,39 +681,6 @@ function ResultCard({ result, onLookupRut }: { result: LookupResult; onLookupRut
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {result.emails.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Correos</p>
-          {result.emails.map((e, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-[11px]">
-              <Mail size={10} className="text-slate-500 flex-shrink-0" />
-              <span className="text-slate-200">{e.email}</span>
-              <span className={`text-[9px] px-1.5 py-0.5 rounded ${e.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
-                {e.categoria}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {result.addresses.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Direcciones</p>
-          {result.addresses.map((a, i) => (
-            <div key={i} className="flex items-start gap-1.5 text-[11px]">
-              <MapPin size={10} className="text-slate-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <span className="text-slate-200">{a.direccion}</span>
-                {a.ubicacion && <p className="text-[10px] text-slate-500">{a.ubicacion}</p>}
-              </div>
-              <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${a.categoria === 'probable' ? 'bg-green-950/40 text-green-400 border border-green-900/40' : 'bg-slate-900/40 text-slate-500 border border-slate-800/50'}`}>
-                {a.categoria}
-              </span>
-            </div>
-          ))}
         </div>
       )}
 

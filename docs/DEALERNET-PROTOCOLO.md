@@ -117,26 +117,59 @@ Implementado en `web/lib/dealernet.ts` como `queryDealernetBuscadorMultiple`
 y expuesto en `web/app/api/chile/dealernet-buscar/route.ts` +
 `web/components/chile/DuenoLookup.tsx`.
 
-## 3. Registros de Relacionados (producto 3421)
+## 3. Relacionados y estructura real de 3410 (verificada contra producción)
 
-Devuelve la tabla "Relacionados" que muestra el portal DealerNet: filas
-RUT / NOMBRE / RELACIÓN (Titular, Sociedad, Socio, Cónyuge, Hijo, Hija,
-Empleador, ...). Se consulta por RUT igual que 3407/3410, agregando
-`<prod cod="3421"/>`.
+La respuesta real de **3410 (Directorio Teléfonos)** trae bastante más de lo
+que documenta el protocolo resumido — capturada vía
+`/api/chile/dealernet-debug` contra producción:
 
-Como la estructura XML exacta del payload no está en la doc versionada (vive
-en el PDF v11 de 103 páginas), el extractor `extractRelacionados` de
-`web/lib/dealernet.ts` recorre el payload del producto en profundidad y toma
-como relacionado cualquier nodo con un campo de relación (`relacion`,
-`glsrelacion`, `vinculo`, `parentesco`, ...) junto a un RUT o nombre. Si el
-DV no viene, se calcula (`computeRutDv`). Persistencia en
-`dealernet_relacionados_cl` (migración 0053); UI en
+```xml
+<colect>
+  <img>  <!-- mapa idext → id interno del portal para las fotos -->
+    <d iddatlocal="4153486" idinsdatlocal="5193382" idext="13387802"/>
+  </img>
+  <resumen>...conteos...</resumen>
+  <telefono_contacto_probable>
+    <d>
+      <telefono>56 (9) 98889226</telefono>
+      <clasificacion>C</clasificacion>
+      <ind_whatsapp>1</ind_whatsapp>
+      <idimagen>13387802</idimagen>   <!-- = idext; el portal usa iddatlocal -->
+      <ranking>4.5</ranking><calidad>2.7</calidad>
+      <relacionados><relacion>Titular</relacion><relacion>Sociedad</relacion></relacionados>
+    </d>
+  </telefono_contacto_probable>
+  <telefono_contacto_alternativo>...</telefono_contacto_alternativo>
+  <telefono_contacto_laboral>...</telefono_contacto_laboral>  <!-- 3ª categoría -->
+  <relacionados>  <!-- ¡la tabla completa viene incluida en 3410! -->
+    <d><clasificacion>P</clasificacion><rut>6166610</rut><dv>9</dv>
+       <nombres>Ricardo</nombres><apellidos>Serrano Munoz</apellidos>
+       <organizacion/><relacion>Titular</relacion></d>
+    ...
+  </relacionados>
+</colect>
+```
+
+Puntos clave que salieron de esto:
+
+- **La tabla de relacionados viene incluida gratis en 3410** — no hace falta
+  el producto 3421 para verla (3421 queda como opción extra por si algún RUT
+  no la trae). `extractRelacionados` corre sobre el payload de TODOS los
+  productos y deduplica.
+- **Relación por teléfono**: anidada y múltiple
+  (`<relacionados><relacion>…`), se aplana a "Titular, Sociedad" —
+  `extractPhoneRelacion`.
+- **Categoría `laboral`**: tercera lista de teléfonos; migración 0054 amplía
+  el CHECK de `dealernet_phones_cl`.
+- **Empresas**: nombre en `<organizacion>` (con `<nombres/>`/`<apellidos/>`
+  vacíos).
+- **Fotos**: el `<idimagen>` del teléfono es un id externo que el endpoint
+  de imágenes rechaza; hay que traducirlo con el bloque `<img>`
+  (`idext → iddatlocal`) — `buildImageIdMap`. Ver §4.
+
+Persistencia en `dealernet_relacionados_cl` (migración 0053); UI en
 `web/components/chile/DuenoLookup.tsx` con botón "Pedir teléfonos" por fila
 para encadenar la consulta de contactabilidad del relacionado.
-
-Lo mismo aplica a la "relación" por teléfono: cuando 3407/3410 anotan de
-quién es un número (cónyuge/hijo/sociedad), `extractPhoneRelacion` la captura
-por alias y se guarda en `dealernet_phones_cl.relacion`.
 
 ## 4. Foto de perfil por teléfono (`idimagen`)
 

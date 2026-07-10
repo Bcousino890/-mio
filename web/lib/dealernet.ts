@@ -188,7 +188,7 @@ function getProductWrapper(prd: Record<string, unknown>): any {
 export interface DealernetPhone {
   phone_raw: string
   phone_e164: string
-  categoria: 'probable' | 'alternativo'
+  categoria: 'probable' | 'alternativo' | 'laboral'
   clasificacion: string | null
   ind_whatsapp: boolean | null
   idimagen: string | null
@@ -249,9 +249,20 @@ function firstScalar(entries: Map<string, unknown>, aliases: string[]): string |
 const RELACION_ALIASES = ['relacion', 'relaciondirecta', 'glsrelacion', 'tiporelacion', 'vinculo', 'parentesco', 'relacionadocon']
 const RELACION_NOMBRE_ALIASES = ['nomrelacion', 'nombrerelacion', 'nomrelacionado', 'nombrerelacionado']
 
-// "Relación" de un teléfono: de quién es el número cuando no es del titular
-// (ej. cónyuge/hijo/sociedad). Se arma un solo string legible para UI/BD.
+// "Relación" de un teléfono: con quién se vincula el número (Titular,
+// Sociedad, Cónyuge, ...). En el XML real de producción viene anidada y
+// puede ser múltiple:
+//   <d><telefono>...</telefono><relacionados><relacion>Titular</relacion>
+//   <relacion>Sociedad</relacion></relacionados></d>
+// → "Titular, Sociedad" (así lo rotula el portal: "Relación directa con
+// Titular, Sociedad"). Se mantienen los alias planos como fallback por si
+// otros productos lo entregan sin anidar.
 function extractPhoneRelacion(d: Record<string, unknown>): string | null {
+  const nested = (d as any)?.relacionados?.relacion
+  if (nested != null) {
+    const parts = toArray(nested).map(v => String(v).trim()).filter(Boolean)
+    if (parts.length > 0) return parts.join(', ')
+  }
   const entries = normalizedEntries(d)
   const relacion = firstScalar(entries, RELACION_ALIASES)
   const nombre = firstScalar(entries, RELACION_NOMBRE_ALIASES)
@@ -259,16 +270,31 @@ function extractPhoneRelacion(d: Record<string, unknown>): string | null {
   return relacion ?? nombre
 }
 
-// Id de la foto de perfil (WhatsApp) del número. En el DOM del portal el
-// atributo del <img> es `id_imagen` y su valor es el `CODCOMP` de la URL de
-// la imagen — pero el nombre exacto en el XML del WS no está en la doc
-// versionada. Se busca por alias (normalizedEntries ya colapsa `id_imagen`,
-// `id imagen`, etc. a `idimagen`) para no depender de un único nombre —
-// justo por asumir sólo `idimagen` las fotos no aparecían.
+// Id de la foto de perfil (WhatsApp) del número. Se busca por alias
+// (normalizedEntries colapsa `id_imagen`, `id imagen`, etc. a `idimagen`)
+// para no depender de un único nombre.
 const IDIMAGEN_ALIASES = ['idimagen', 'idimg', 'idfoto', 'idfotoperfil', 'codcomp', 'codimagen', 'imgid']
 
 function extractIdImagen(d: Record<string, unknown>): string | null {
   return firstScalar(normalizedEntries(d), IDIMAGEN_ALIASES)
+}
+
+// OJO: el <idimagen> de cada teléfono es un id EXTERNO que el endpoint de
+// imágenes del portal no acepta (responde 500). El <colect> trae un bloque
+// <img> que lo traduce al id interno con el que el portal sí sirve la foto
+// (verificado contra producción: idext 13387802 → 500, su iddatlocal
+// 4153486 → 200 image/jpeg):
+//   <img><d iddatlocal="4153486" idinsdatlocal="..." idext="13387802"/></img>
+// iddatlocal es el CODCOMP de tlfw.system.reziseImage.aspx (ver
+// /api/chile/dealernet-imagen).
+function buildImageIdMap(colect: any): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const d of toArray<any>(colect?.img?.d)) {
+    const idext = d?.['@_idext'] != null ? String(d['@_idext']) : null
+    const idLocal = d?.['@_iddatlocal'] != null ? String(d['@_iddatlocal']) : null
+    if (idext && idLocal) map.set(idext, idLocal)
+  }
+  return map
 }
 
 // 3407 (Contactabilidad) y 3410 (Directorio Teléfonos) cuelgan los bloques
@@ -278,19 +304,23 @@ function extractIdImagen(d: Record<string, unknown>): string | null {
 // extractor mira primero el envoltorio y cae a <colect> si no existe.
 function extractPhones(colect: any, productCode: string): DealernetPhone[] {
   const scope = colect?.telefonos ?? colect
+  const imageIds = buildImageIdMap(colect)
   const out: DealernetPhone[] = []
-  for (const categoria of ['probable', 'alternativo'] as const) {
+  // La tercera categoría (laboral) aparece en respuestas reales de 3410 —
+  // "TELÉFONOS ... LABORALES 6" en el impreso del portal.
+  for (const categoria of ['probable', 'alternativo', 'laboral'] as const) {
     const block = scope?.[`telefono_contacto_${categoria}`]
     for (const d of toArray(block?.d)) {
       const raw = String(d?.telefono ?? '').trim()
       if (!raw) continue
+      const rawIdImagen = extractIdImagen(d ?? {})
       out.push({
         phone_raw: raw,
         phone_e164: normalizePhoneCl(raw),
         categoria,
         clasificacion: d?.clasificacion != null ? String(d.clasificacion) : null,
         ind_whatsapp: d?.ind_whatsapp != null ? String(d.ind_whatsapp) === '1' : null,
-        idimagen: extractIdImagen(d ?? {}),
+        idimagen: rawIdImagen != null ? (imageIds.get(rawIdImagen) ?? rawIdImagen) : null,
         relacion: extractPhoneRelacion(d ?? {}),
         ranking: numOrNull(d?.ranking),
         calidad: numOrNull(d?.calidad),
@@ -353,16 +383,23 @@ export interface DealernetRelacionado {
 
 const REL_RUT_ALIASES = ['rut', 'rutrel', 'rutnum', 'rutrelacionado']
 const REL_DV_ALIASES = ['dv', 'digito', 'dvrel', 'digitorel']
-const REL_NOMBRE_ALIASES = ['nombre', 'nombrecompleto', 'razonsocial', 'dsporg', 'glsnombre', 'nomrelacionado']
+// 'organizacion': en el XML real las empresas vienen con <nombres/> y
+// <apellidos/> vacíos y la razón social en <organizacion> — sin este alias
+// las Sociedades salían sin nombre ("—") en la tabla.
+const REL_NOMBRE_ALIASES = ['nombre', 'nombrecompleto', 'razonsocial', 'organizacion', 'dsporg', 'glsnombre', 'nomrelacionado']
 const REL_NOMBRES_ALIASES = ['nombres', 'dspnombres']
 const REL_APELLIDOS_ALIASES = ['apellidos', 'dspapellidos', 'apellido']
 
-// 3421 (Registros de Relacionados) devuelve filas RUT/NOMBRE/RELACIÓN (la
-// tabla "Relacionados" del portal DealerNet: Titular, Sociedad, Socio,
-// Cónyuge, Hijo, Empleador, ...). Como la estructura exacta del XML no está
-// en la doc versionada, se recorre el payload del producto en profundidad y
-// se toma como relacionado cualquier nodo que tenga un campo de relación
-// junto a un RUT o nombre — resistente a cambios de envoltorio/anidación.
+// Filas RUT/NOMBRE/RELACIÓN de la tabla "Relacionados" del portal (Titular,
+// Sociedad, Socio, Cónyuge, Hijo, Empleador, ...). En el XML real vienen
+// incluidas en la propia respuesta de 3410 (Directorio Teléfonos), en
+// <colect><relacionados><d>clasificacion/rut/dv/nombres/apellidos/
+// organizacion/relacion</d>...</relacionados> — además del producto 3421.
+// Se recorre el payload del producto en profundidad y se toma como
+// relacionado cualquier nodo que tenga un campo de relación junto a un RUT
+// o nombre — resistente a cambios de envoltorio/anidación. Los bloques
+// <relacionados> POR TELÉFONO (solo <relacion>, sin RUT ni nombre) no
+// cumplen esa condición, así que no se duplican aquí.
 function extractRelacionados(wrapper: unknown, productCode: string): DealernetRelacionado[] {
   const out: DealernetRelacionado[] = []
   const seen = new Set<string>()
@@ -454,15 +491,24 @@ export function parseDealernetResponse(xml: string, productsRequested: string[])
     const d = wrapper?.ROOT?.D
     if (!d) continue
     if (!nombreTitular && d['@_nombre']) nombreTitular = String(d['@_nombre'])
-    if (productCode === DEALERNET_PRODUCTS.REGISTROS_RELACIONADOS) {
-      relacionados.push(...extractRelacionados(d, productCode))
-    }
+    // Los relacionados vienen incluidos en la respuesta de 3410 (y en 3421
+    // si se pide) — se extraen de todos los productos y se deduplican abajo.
+    relacionados.push(...extractRelacionados(d, productCode))
     const colect = d?.result?.colect
     if (!colect) continue
     phones.push(...extractPhones(colect, productCode))
     addresses.push(...extractAddresses(colect, productCode))
     emails.push(...extractEmails(colect, productCode))
   }
+
+  // Mismo relacionado puede llegar por más de un producto (3410 y 3421).
+  const relSeen = new Set<string>()
+  const relacionadosUnicos = relacionados.filter(r => {
+    const key = `${r.rut ?? ''}|${r.nombre ?? ''}|${r.relacion ?? ''}`
+    if (relSeen.has(key)) return false
+    relSeen.add(key)
+    return true
+  })
 
   return {
     retcode: result.retcode != null ? Number(result.retcode) : null,
@@ -471,7 +517,7 @@ export function parseDealernetResponse(xml: string, productsRequested: string[])
     phones,
     addresses,
     emails,
-    relacionados,
+    relacionados: relacionadosUnicos,
     productsRequested,
     raw: parsed,
   }
