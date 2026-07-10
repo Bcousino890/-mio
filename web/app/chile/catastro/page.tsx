@@ -10,7 +10,6 @@ import {
   Phone, MessageCircle, Landmark, Globe, Download
 } from 'lucide-react'
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
-import { MOCK_LISTING_PINS, type CadastreListingPin } from '@/lib/mock-chile-cadastre'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 
@@ -25,14 +24,17 @@ interface DrawnShape {
   radius?: number
 }
 
-const CONFIDENCE_LABEL: Record<CadastreListingPin['location_confidence'], string> = {
+// Confianza de la resolución de identidad de un anuncio (listings_cl.location_confidence)
+type LocationConfidence = 'confirmed' | 'candidate' | 'pin_suspect' | 'none'
+
+const CONFIDENCE_LABEL: Record<LocationConfidence, string> = {
   confirmed: 'Confirmado (catastro)',
   candidate: 'Candidato',
   pin_suspect: 'Pin sospechoso',
   none: 'Sin resolver',
 }
 
-const CONFIDENCE_COLOR: Record<CadastreListingPin['location_confidence'], string> = {
+const CONFIDENCE_COLOR: Record<LocationConfidence, string> = {
   confirmed: '#22c55e',
   candidate: '#f59e0b',
   pin_suspect: '#ef4444',
@@ -177,6 +179,21 @@ export default function CatastroPage() {
   const [zoneRoles, setZoneRoles] = useState<any[] | null>(null)
   // Capa analítica sobre los polígonos del mapa (coropletas)
   const [analyticLayer, setAnalyticLayer] = useState<'none' | 'avaluo_m2' | 'tgr'>('none')
+  // Oferta: anuncios reales de listings_cl (pipeline Portal Inmobiliario)
+  const [ofertaListings, setOfertaListings] = useState<any[]>([])
+  const [ofertaLoading, setOfertaLoading] = useState(false)
+  const [ofertaTotal, setOfertaTotal] = useState(0)
+  const [ofertaPage, setOfertaPage] = useState(1)
+  const [ofertaTotalPages, setOfertaTotalPages] = useState(1)
+  const [ofertaOperation, setOfertaOperation] = useState<'all' | 'sale' | 'rent'>('all')
+  // Ventas: transacciones CBR (sii_transacciones_cl)
+  const [ventasList, setVentasList] = useState<any[] | null>(null)
+  const [ventasLoading, setVentasLoading] = useState(false)
+  const [ventasTotal, setVentasTotal] = useState(0)
+  const [ventasPage, setVentasPage] = useState(1)
+  const [ventasTotalPages, setVentasTotalPages] = useState(1)
+  // Historial de ventas CBR del rol seleccionado (ficha)
+  const [rolVentas, setRolVentas] = useState<any[] | null>(null)
 
   // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
   const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
@@ -334,6 +351,82 @@ export default function CatastroPage() {
       .catch(() => {})
     return () => controller.abort()
   }, [search, loading, roles])
+
+  // Oferta: anuncios reales de la comuna (listings_cl vía /api/chile/anuncios)
+  useEffect(() => { setOfertaPage(1) }, [zoneId, ofertaOperation])
+  useEffect(() => {
+    if (layerTab !== 'oferta' || !zone.siiCode) return
+    const controller = new AbortController()
+    setOfertaLoading(true)
+    const params = new URLSearchParams({ comuna_code: zone.siiCode, page: String(ofertaPage), page_size: '50', sort: 'recent' })
+    if (ofertaOperation !== 'all') params.set('operation', ofertaOperation)
+    fetch(`/api/chile/anuncios?${params}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setOfertaListings(d.data ?? [])
+          setOfertaTotal(d.total ?? 0)
+          setOfertaTotalPages(d.total_pages ?? 1)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setOfertaLoading(false))
+    return () => controller.abort()
+  }, [layerTab, zone.siiCode, ofertaPage, ofertaOperation])
+
+  // Ventas: transacciones CBR de la comuna
+  useEffect(() => { setVentasPage(1) }, [zoneId])
+  useEffect(() => {
+    if (layerTab !== 'ventas' || !zone.siiCode) return
+    const controller = new AbortController()
+    setVentasLoading(true)
+    fetch(`/api/chile/sii-transacciones?sii_comuna_code=${zone.siiCode}&page=${ventasPage}&page_size=50`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setVentasList(d.data ?? [])
+          setVentasTotal(d.total ?? 0)
+          setVentasTotalPages(d.total_pages ?? 1)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setVentasLoading(false))
+    return () => controller.abort()
+  }, [layerTab, zone.siiCode, ventasPage])
+
+  // Historial de compraventas CBR del rol seleccionado (ficha)
+  useEffect(() => {
+    setRolVentas(null)
+    if (!selectedRol || !zone.siiCode) return
+    const controller = new AbortController()
+    fetch(`/api/chile/sii-transacciones?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) setRolVentas(d.data ?? []) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [selectedRol, zone.siiCode])
+
+  // Pins de oferta en el mapa (solo en la pestaña Oferta), coloreados por
+  // confianza de la resolución de identidad del anuncio
+  const ofertaPins = useMemo(() => {
+    if (layerTab !== 'oferta') return []
+    return ofertaListings
+      .filter((l: any) => l.latitude != null && l.longitude != null)
+      .map((l: any) => ({
+        id: String(l.id),
+        lat: Number(l.latitude),
+        lng: Number(l.longitude),
+        color: CONFIDENCE_COLOR[(l.location_confidence ?? 'none') as LocationConfidence] ?? CONFIDENCE_COLOR.none,
+        label: `${l.address ?? l.external_id} · ${l.price ? fmtCLP(l.price) : 's/precio'}`,
+      }))
+  }, [layerTab, ofertaListings])
+
+  const handleOfertaPinClick = useCallback((id: string) => {
+    const l = ofertaListings.find((x: any) => String(x.id) === id)
+    if (l?.latitude != null && l?.longitude != null) {
+      setMapPin({ lat: Number(l.latitude), lng: Number(l.longitude), label: `${l.address ?? l.external_id} · ${l.price ? fmtCLP(l.price) : ''}` })
+    }
+  }, [ofertaListings])
 
   // Fetch contacto DealerNet ya guardado para este rol (cache — no vuelve a
   // golpear el web service hasta que el usuario pida "Actualizar")
@@ -504,7 +597,6 @@ export default function CatastroPage() {
     URL.revokeObjectURL(url)
   }, [zoneRoles, zone.id])
 
-  const allPins = useMemo(() => MOCK_LISTING_PINS.filter((p) => p.comuna === zone.comuna), [zone.comuna])
 
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(page * PAGE_SIZE, total)
@@ -1169,13 +1261,29 @@ export default function CatastroPage() {
                       </div>
                     )}
 
-                    {/* Ventas históricas — no disponible vía SII, requiere Conservador de Bienes Raíces */}
+                    {/* Ventas históricas — compraventas CBR (sii_transacciones_cl) */}
                     <div>
-                      <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Ventas históricas</p>
-                      <div className="rounded-xl border border-dashed border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-4 text-center">
-                        <span className="inline-block text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded mb-2">Próximamente</span>
-                        <p className="text-[11px] text-slate-600">El historial de compraventas proviene del Conservador de Bienes Raíces, no del SII. Estamos evaluando fuentes de datos (ej. databam.cl) para incorporarlo.</p>
-                      </div>
+                      <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Ventas históricas (CBR)</p>
+                      {rolVentas === null ? (
+                        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-3 text-center text-[11px] text-slate-600">Buscando compraventas…</div>
+                      ) : rolVentas.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-3 text-center">
+                          <p className="text-[11px] text-slate-600">Sin compraventas registradas para este rol en el dataset CBR cargado.</p>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-hidden">
+                          {rolVentas.map((t: any, i: number) => (
+                            <div key={`${t.foja_numero_anio ?? i}`} className="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-border-card)]/40 last:border-0">
+                              <span className="text-[11px] text-slate-400 whitespace-nowrap flex-shrink-0">{t.fecha_escritura ? new Date(t.fecha_escritura).toLocaleDateString('es-CL') : '—'}</span>
+                              <span className="text-[10px] text-slate-600 truncate flex-1">{t.foja_numero_anio ? `Foja ${t.foja_numero_anio}` : ''}{t.cbr_nombre ? ` · ${t.cbr_nombre}` : ''}</span>
+                              <span className="text-[11px] font-semibold text-slate-200 whitespace-nowrap">
+                                {t.monto_uf != null ? `${t.monto_uf.toLocaleString('es-CL')} UF` : t.monto_clp != null ? fmtCLP(t.monto_clp) : '—'}
+                              </span>
+                              {t.uf_por_m2 != null && <span className="text-[10px] text-slate-500 whitespace-nowrap">{t.uf_por_m2.toLocaleString('es-CL')} UF/m²</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {/* Building links */}
@@ -1356,34 +1464,159 @@ export default function CatastroPage() {
           )}
 
           {layerTab === 'oferta' && (
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              <p className="text-[10px] text-slate-600 px-1">Anuncios de demostración — pendiente conexión a fuente de oferta en vivo (scraper Portalinmobiliario).</p>
-              {allPins.length === 0 ? (
-                <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Sin anuncios para {zone.label}</div>
-              ) : (
-                allPins.map((p) => (
-                  <div key={p.id} className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5">
-                    <p className="text-xs font-medium text-slate-300">{p.title}</p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: CONFIDENCE_COLOR[p.location_confidence] }} />
-                      <span className="text-[10px] text-slate-500">{CONFIDENCE_LABEL[p.location_confidence]}</span>
-                      {p.rol_matriz && <span className="text-[10px] text-slate-600 font-mono">Rol: {p.rol_matriz}</span>}
-                      {p.agency_count > 1 && <span className="text-[10px] text-blue-400 font-medium">{p.agency_count} corredoras</span>}
-                    </div>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-[var(--c-border-card)]">
+                <select
+                  value={ofertaOperation}
+                  onChange={e => setOfertaOperation(e.target.value as 'all' | 'sale' | 'rent')}
+                  className="text-xs bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-lg px-2 py-1.5 text-slate-400 focus:outline-none focus:border-blue-600/50"
+                >
+                  <option value="all">Venta + arriendo</option>
+                  <option value="sale">Venta</option>
+                  <option value="rent">Arriendo</option>
+                </select>
+                <p className="text-[11px] text-slate-600 ml-auto">
+                  {ofertaLoading ? 'Cargando…' : `${ofertaTotal.toLocaleString('es-CL')} anuncios`}
+                </p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {!ofertaLoading && ofertaListings.length === 0 && (
+                  <div className="flex flex-col items-center justify-center h-40 gap-2 text-center px-4">
+                    <p className="text-xs text-slate-600">Sin anuncios para {zone.label}</p>
+                    <p className="text-[10px] text-slate-700">La oferta se alimenta del pipeline de captación (Portal Inmobiliario → <Link href="/chile/captar-url" className="text-blue-500 hover:text-blue-400">Captar desde URL</Link>).</p>
                   </div>
-                ))
+                )}
+                {ofertaListings.map((l: any) => {
+                  const conf = (l.location_confidence ?? 'none') as LocationConfidence
+                  return (
+                    <div
+                      key={l.id}
+                      onClick={() => handleOfertaPinClick(String(l.id))}
+                      className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 cursor-pointer hover:border-blue-800/50 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-medium text-slate-300 flex-1">{l.address ?? l.external_id}</p>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-xs font-semibold text-emerald-300">{l.price ? fmtCLP(l.price) : '—'}</p>
+                          {l.price_uf != null && <p className="text-[10px] text-slate-600">{Number(l.price_uf).toLocaleString('es-CL')} UF</p>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${l.operation === 'rent' ? 'bg-violet-950/50 text-violet-400' : 'bg-blue-950/50 text-blue-400'}`}>
+                          {l.operation === 'rent' ? 'Arriendo' : 'Venta'}
+                        </span>
+                        {l.square_meters > 0 && <span className="text-[10px] text-slate-500">{l.square_meters} m²{l.price_sqm > 0 ? ` · ${fmtCLP(l.price_sqm)}/m²` : ''}</span>}
+                        {l.bedrooms != null && <span className="text-[10px] text-slate-500">{l.bedrooms}D{l.bathrooms != null ? `/${l.bathrooms}B` : ''}</span>}
+                        {l.days_on_market != null && <span className="text-[10px] text-slate-600">{l.days_on_market} días</span>}
+                        {l.advertiser_type === 'particular' && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-950/50 text-emerald-400">Particular</span>}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: CONFIDENCE_COLOR[conf] }} />
+                        <span className="text-[10px] text-slate-500">{CONFIDENCE_LABEL[conf]}</span>
+                        {l.rol_matriz_candidate && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setShowBuildingUnits(false); setLayerTab('catastro'); setSelectedRol({ rol: l.rol_matriz_candidate }) }}
+                            className="text-[10px] font-mono text-blue-400 hover:text-blue-300"
+                            title="Abrir ficha del rol"
+                          >
+                            Rol {l.rol_matriz_candidate}
+                          </button>
+                        )}
+                        {l.source_url && (
+                          <a
+                            href={l.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="ml-auto text-[10px] text-slate-500 hover:text-slate-300 inline-flex items-center gap-1"
+                          >
+                            Portal <ExternalLink size={9} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              {ofertaTotalPages > 1 && (
+                <div className="flex-none flex items-center justify-between px-3 py-2 border-t border-[var(--c-border-card)]">
+                  <button onClick={() => setOfertaPage(p => Math.max(1, p - 1))} disabled={ofertaPage <= 1}
+                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                    <ChevronLeft size={13} />Anterior
+                  </button>
+                  <span className="text-[11px] text-slate-600">{ofertaPage} / {ofertaTotalPages.toLocaleString('es-CL')}</span>
+                  <button onClick={() => setOfertaPage(p => Math.min(ofertaTotalPages, p + 1))} disabled={ofertaPage >= ofertaTotalPages}
+                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                    Siguiente<ChevronRight size={13} />
+                  </button>
+                </div>
               )}
             </div>
           )}
 
           {layerTab === 'ventas' && (
-            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
-              <Clock size={32} className="text-slate-700" />
-              <div className="max-w-xs">
-                <span className="inline-block text-[10px] font-semibold bg-slate-800/60 text-slate-400 px-2 py-0.5 rounded mb-2">Próximamente</span>
-                <p className="text-sm font-medium text-slate-500 mb-1">Historial de ventas</p>
-                <p className="text-xs text-slate-700">El SII no publica compraventas ni propietarios — esos datos viven en el Conservador de Bienes Raíces. Estamos evaluando fuentes (ej. databam.cl) para incorporar esta capa.</p>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-[var(--c-border-card)]">
+                <p className="text-[11px] text-slate-500">Compraventas CBR · {zone.label}</p>
+                <p className="text-[11px] text-slate-600 ml-auto">
+                  {ventasLoading ? 'Cargando…' : `${ventasTotal.toLocaleString('es-CL')} escrituras`}
+                </p>
               </div>
+              {!ventasLoading && ventasList !== null && ventasList.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+                  <Clock size={32} className="text-slate-700" />
+                  <div className="max-w-xs">
+                    <p className="text-sm font-medium text-slate-500 mb-1">Sin transacciones cargadas para {zone.label}</p>
+                    <p className="text-xs text-slate-700">Las compraventas provienen del Conservador de Bienes Raíces (dataset CSV por jurisdicción). La tabla <span className="font-mono">sii_transacciones_cl</span> ya existe — falta importar el dataset de esta comuna (ETL migración 0030).</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-[var(--c-bg)] z-10">
+                      <tr className="border-b border-[var(--c-border-card)] text-slate-600">
+                        <th className="text-left px-3 py-2 font-medium">Fecha</th>
+                        <th className="text-left px-3 py-2 font-medium">Rol / Dirección</th>
+                        <th className="text-right px-3 py-2 font-medium">Monto</th>
+                        <th className="text-right px-3 py-2 font-medium">UF/m²</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ventasList ?? []).map((t: any, i: number) => (
+                        <tr
+                          key={`${t.rol}-${t.foja_numero_anio ?? i}`}
+                          onClick={() => { setShowBuildingUnits(false); setLayerTab('catastro'); setSelectedRol({ rol: t.rol }) }}
+                          className={`border-b border-[var(--c-border-card)]/30 cursor-pointer hover:bg-[var(--c-active)] transition-colors ${i % 2 === 1 ? 'bg-[var(--c-card)]/30' : ''}`}
+                        >
+                          <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{t.fecha_escritura ? new Date(t.fecha_escritura).toLocaleDateString('es-CL') : '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className="font-mono text-blue-400">{t.rol}</span>
+                            {t.direccion && <span className="text-slate-500 ml-1.5">{t.direccion}</span>}
+                          </td>
+                          <td className="px-3 py-2 text-right whitespace-nowrap">
+                            <span className="text-slate-300 font-medium">{t.monto_uf != null ? `${t.monto_uf.toLocaleString('es-CL')} UF` : t.monto_clp != null ? fmtCLP(t.monto_clp) : '—'}</span>
+                            {t.monto_uf != null && t.monto_clp != null && <span className="block text-[10px] text-slate-600">{fmtCLP(t.monto_clp)}</span>}
+                          </td>
+                          <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{t.uf_por_m2 != null ? t.uf_por_m2.toLocaleString('es-CL') : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {ventasTotalPages > 1 && (
+                <div className="flex-none flex items-center justify-between px-3 py-2 border-t border-[var(--c-border-card)]">
+                  <button onClick={() => setVentasPage(p => Math.max(1, p - 1))} disabled={ventasPage <= 1}
+                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                    <ChevronLeft size={13} />Anterior
+                  </button>
+                  <span className="text-[11px] text-slate-600">{ventasPage} / {ventasTotalPages.toLocaleString('es-CL')}</span>
+                  <button onClick={() => setVentasPage(p => Math.min(ventasTotalPages, p + 1))} disabled={ventasPage >= ventasTotalPages}
+                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                    Siguiente<ChevronRight size={13} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1401,6 +1634,8 @@ export default function CatastroPage() {
             enableDraw
             onShapeDrawn={setDrawnShape}
             drawnShape={drawnShape}
+            extraPins={ofertaPins}
+            onExtraPinClick={handleOfertaPinClick}
           />
           {mapZoomLevel < 15 && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none rounded-full bg-black/60 backdrop-blur px-3 py-1.5 text-[11px] text-slate-200">

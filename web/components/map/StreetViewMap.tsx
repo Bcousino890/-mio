@@ -21,6 +21,15 @@ export interface DrawnShape {
 
 export type AnalyticLayer = 'none' | 'avaluo_m2' | 'tgr'
 
+/** Pin adicional (ej. anuncios de oferta) — círculo coloreado con tooltip. */
+export interface ExtraPin {
+  id: string
+  lat: number
+  lng: number
+  color?: string
+  label?: string
+}
+
 interface Props {
   center: { lat: number; lng: number }
   zoom?: number
@@ -35,6 +44,8 @@ interface Props {
   onShapeDrawn?: (shape: DrawnShape | null) => void
   /** Solo se usa para limpiar la capa dibujada cuando el padre la resetea a null. */
   drawnShape?: DrawnShape | null
+  extraPins?: ExtraPin[]
+  onExtraPinClick?: (id: string) => void
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,6 +100,7 @@ interface LegendState {
 export default function StreetViewMap({
   center, zoom = 17, pin, comunaCode, onParcelClick, onZoomChange,
   analyticLayer = 'none', enableDraw = false, onShapeDrawn, drawnShape,
+  extraPins, onExtraPinClick,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -108,6 +120,10 @@ export default function StreetViewMap({
   onZoomChangeRef.current = onZoomChange
   const onShapeDrawnRef = useRef(onShapeDrawn)
   onShapeDrawnRef.current = onShapeDrawn
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extraPinsLayerRef = useRef<any>(null)
+  const onExtraPinClickRef = useRef(onExtraPinClick)
+  onExtraPinClickRef.current = onExtraPinClick
   // Refs para que loadParcels (capturado por el listener de moveend
   // registrado una sola vez al init) vea siempre los valores actuales.
   const comunaCodeRef = useRef(comunaCode)
@@ -118,6 +134,7 @@ export default function StreetViewMap({
 
   const [legend, setLegend] = useState<LegendState | null>(null)
   const [currentZoom, setCurrentZoom] = useState(zoom)
+  const [mapReady, setMapReady] = useState(false)
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function styleForProps(p: any) {
@@ -287,6 +304,7 @@ export default function StreetViewMap({
       }
 
       mapRef.current = map
+      setMapReady(true)
 
       // Cargar predios al mover/hacer zoom
       map.on('moveend zoomend', () => {
@@ -323,6 +341,26 @@ export default function StreetViewMap({
   useEffect(() => {
     if (drawnShape == null && drawnItemsRef.current) drawnItemsRef.current.clearLayers()
   }, [drawnShape])
+
+  // Pins adicionales (ej. anuncios de oferta) — círculos con tooltip
+  useEffect(() => {
+    const map = mapRef.current
+    const L = (window as any).L
+    if (!map || !L) return
+    if (extraPinsLayerRef.current) { extraPinsLayerRef.current.remove(); extraPinsLayerRef.current = null }
+    if (!extraPins || extraPins.length === 0) return
+    const group = L.layerGroup()
+    extraPins.forEach(p => {
+      const m = L.circleMarker([p.lat, p.lng], {
+        radius: 7, color: '#ffffff', weight: 2, fillColor: p.color ?? '#3b82f6', fillOpacity: 0.95,
+      })
+      if (p.label) m.bindTooltip(p.label, { direction: 'top' })
+      m.on('click', () => onExtraPinClickRef.current?.(p.id))
+      group.addLayer(m)
+    })
+    group.addTo(map)
+    extraPinsLayerRef.current = group
+  }, [extraPins, mapReady])
 
   // Actualiza centro, pin y polígono cuando cambia la selección
   useEffect(() => {
