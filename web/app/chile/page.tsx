@@ -73,7 +73,7 @@ export default async function ChilePage() {
             Scrape SII
           </Link>
           <Link
-            href="/chile/street"
+            href="/chile/catastro"
             className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
           >
             <MapPinned size={12} />

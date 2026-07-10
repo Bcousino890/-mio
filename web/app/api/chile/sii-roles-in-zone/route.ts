@@ -13,6 +13,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const siiComunaCode = String(body.sii_comuna_code ?? '').trim()
     const shape = body.shape as ZoneShape | undefined
+    // Con include_roles=true devuelve además la lista de roles dentro de la
+    // zona (para el panel de farming y el export CSV del visor).
+    const includeRoles = body.include_roles === true
+    const rolesLimit = Math.min(Number(body.roles_limit ?? 500), 2000)
 
     if (!siiComunaCode || !shape) {
       return NextResponse.json({ success: false, error: 'sii_comuna_code and shape required' }, { status: 400 })
@@ -48,11 +52,42 @@ export async function POST(request: NextRequest) {
     )
 
     const row = result.rows[0]
+
+    // Lista de roles dentro de la zona. DISTINCT ON (sr.rol) porque un mismo
+    // rol puede tener varias filas en sii_roles_cl (reprocesos) y varias
+    // parcelas pueden intersectar la zona — se toma la fila de mayor avalúo.
+    let roles: unknown[] | undefined
+    if (includeRoles) {
+      const rolesResult = await pool.query(
+        `SELECT DISTINCT ON (sr.rol)
+                sr.rol, sr.direccion, sr.avaluo_fiscal_total, sr.superficie_terreno_m2,
+                sr.codigo_destino_principal, sr.nombre_propietario, sr.lat, sr.lng
+         FROM cadastre_parcels_cl cp
+         JOIN chile_comunas cc ON cp.comuna_id = cc.id
+         JOIN sii_roles_cl sr ON cp.rol = sr.rol AND cc.sii_comuna_code = sr.sii_comuna_code
+         WHERE cc.sii_comuna_code = $1 AND ${geoCondition}
+         ORDER BY sr.rol, sr.avaluo_fiscal_total DESC NULLS LAST
+         LIMIT ${rolesLimit}`,
+        params
+      )
+      roles = rolesResult.rows.map(r => ({
+        rol: r.rol,
+        direccion: r.direccion,
+        avaluo_fiscal_total: r.avaluo_fiscal_total != null ? Number(r.avaluo_fiscal_total) : null,
+        superficie_terreno_m2: r.superficie_terreno_m2 != null ? Number(r.superficie_terreno_m2) : null,
+        codigo_destino_principal: r.codigo_destino_principal,
+        nombre_propietario: r.nombre_propietario,
+        lat: r.lat != null ? Number(r.lat) : null,
+        lng: r.lng != null ? Number(r.lng) : null,
+      }))
+    }
+
     return NextResponse.json({
       success: true,
       count: Number(row?.count ?? 0),
       avaluo_promedio: row?.avaluo_promedio ? Number(row.avaluo_promedio) : null,
       avaluo_total: row?.avaluo_total ? Number(row.avaluo_total) : null,
+      ...(roles !== undefined ? { roles } : {}),
     })
   } catch (error) {
     return NextResponse.json(
