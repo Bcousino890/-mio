@@ -11,22 +11,29 @@ import { pool } from '@/lib/db'
  * Nota: a diferencia de TGR (que escribe rol por rol), esta tabla se llena por
  * LOTES — la ingesta incremental de run-sii-mapasui.sh re-ingesta el JSONL
  * cada SII_INGEST_INTERVAL_SEC (default 600 s), y el cron de respaldo
- * (ingest-sii-mapasui-now.yml, minuto :23) lo re-ingesta cada hora. El upsert
- * bumpea updated_at aunque el lote no traiga predios nuevos, así que
- * GREATEST(created_at, updated_at) refleja la última escritura real.
+ * (ingest-sii-mapasui-now.yml, cada 30 min) lo re-ingesta aunque el scrape ya
+ * haya terminado. El upsert bumpea updated_at aunque el lote no traiga predios
+ * nuevos, así que GREATEST(created_at, updated_at) refleja la última escritura.
  *
  * El latido tiene TRES niveles, no un binario activo/inactivo, porque "scrape
- * en reposo entre lotes" es un estado SANO y no debe pintarse como la alarma
- * de "pipeline muerto 19 h" que motivó este panel:
+ * en reposo / comuna completa" es un estado SANO y no debe pintarse como la
+ * alarma de "pipeline muerto 19 h" que motivó este panel:
  *   - ingestando (<15 min): el scrape está escribiendo ahora mismo, o acaba de
  *     correr un lote/cron. 1.5× la cadencia incremental de 600 s.
- *   - al_dia (<2 h): sin lote reciente pero el cron horario lo mantiene fresco;
- *     típico cuando el scrape de la comuna ya terminó. NO es un problema.
- *   - estancado (>=2 h): ni la ingesta incremental ni DOS crones horarios
- *     escribieron — el pipeline está realmente caído y hay que mirarlo.
+ *   - al_dia (<6 h): sin lote reciente pero el cron de respaldo lo mantiene
+ *     fresco; típico cuando el scrape de la comuna ya terminó. NO es problema.
+ *   - estancado (>=6 h): ni la ingesta incremental ni el cron de respaldo
+ *     escribieron en horas — el pipeline (o GitHub Actions / VPS / DB) está
+ *     realmente caído y hay que mirarlo.
+ *
+ * ¿Por qué 6 h y no 2 h? Los scheduled runs de GitHub Actions se descartan y
+ * retrasan mucho: aun pidiendo el cron cada 30 min, se han observado gaps
+ * reales de ~3 h30 entre corridas. 6 h deja margen de sobra sobre ese jitter
+ * (sin falsas alarmas en reposo normal) pero sigue MUY por debajo de las 19 h
+ * que el usuario consideró un fallo, así que una caída real se detecta a tiempo.
  */
 const VENTANA_INGESTANDO_SEG = 15 * 60
-const VENTANA_AL_DIA_SEG = 2 * 60 * 60
+const VENTANA_AL_DIA_SEG = 6 * 60 * 60
 
 type NivelIngesta = 'ingestando' | 'al_dia' | 'estancado' | 'sin_datos'
 
