@@ -42,11 +42,13 @@ async function main() {
   }
 
   let total = 0
+  let fallos = 0
   for (const filePath of files) {
     console.log(`\n→ Ingestando ${filePath}...`)
     const result = await ingestMapasuiPrediosFile({ filePath })
     if (!result.ok) {
       console.error(`  ✗ ${result.error}`)
+      fallos++
       continue
     }
     total += result.count
@@ -54,6 +56,13 @@ async function main() {
   }
 
   console.log(`\nTotal ingestado: ${total} predios en sii_mapasui_predios_cl`)
+  // Salir con error si alguna ingesta falló (BD caída, JSONL corrupto...):
+  // el cron de respaldo corre este script y un exit 0 con fallos dejaría el
+  // workflow en verde mientras la BD se queda atrás en silencio.
+  if (fallos > 0) {
+    console.error(`✗ ${fallos} archivo(s) fallaron — saliendo con código 1`)
+    process.exit(1)
+  }
 }
 
 main().catch((err) => {

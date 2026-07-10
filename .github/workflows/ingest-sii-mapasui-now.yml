@@ -1,4 +1,4 @@
-name: Ingestar predios SII mapasui ya extraídos (bajo demanda)
+name: Watchdog + ingesta de predios SII mapasui
 
 # El scrape de mapasui (run-sii-mapasui.sh) solo ingesta a
 # sii_mapasui_predios_cl al terminar TODA la comuna (paso [3/3], al final del
@@ -38,6 +38,78 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ── Watchdog del scrape ──────────────────────────────────────────────
+      # El scrape es un nohup suelto en el VPS: si muere (OOM, reboot, crash
+      # tras 3 reintentos internos) nadie lo relanzaba y el pipeline requería
+      # monitoreo humano. Este paso lo hace autónomo:
+      #   - proceso vivo y con progreso           → no tocar
+      #   - proceso vivo pero SIN progreso en 6 h → colgado: matar y relanzar
+      #   - muerto y .sii-mapasui-complete existe → comuna completa, todo bien
+      #   - muerto sin marcador                   → murió a medias: relanzar
+      # El relanzamiento reutiliza los parámetros de la corrida original
+      # (.sii-mapasui-params) y retoma desde los checkpoints, sin perder nada.
+      - name: Watchdog — relanzar scrape si murió o se colgó
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            LOCK=/tmp/casafari-scrape-sii-mapasui.lock
+            OUT=scraper/sii-scraper/output
+
+            necesita_relanzar=""
+            PID=$(cat "$LOCK" 2>/dev/null || true)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+              # Vivo. ¿Progresa? Checkpoints o JSONL tocados en las últimas 6 h.
+              # (Los backoffs anti-429 duran minutos; 6 h sin escribir = colgado.)
+              if [ -d "$OUT" ] && [ -n "$(find "$OUT/checkpoints" "$OUT/predios" -newermt '-6 hours' -print -quit 2>/dev/null)" ]; then
+                echo "✓ Scrape vivo y con progreso (PID $PID) — nada que hacer."
+              elif [ -n "$(find "$LOCK" -newermt '-6 hours' -print -quit 2>/dev/null)" ]; then
+                # Corrida joven (<6 h): aún puede estar en venv/descubrimiento
+                # sin haber escrito nada — no juzgarla todavía.
+                echo "✓ Scrape vivo, corrida reciente (PID $PID) — esperando progreso."
+              elif [ -f "$OUT/.sii-mapasui-complete" ]; then
+                # Vivo sin escribir pero ya completó antes (p. ej. corrida de
+                # verificación); no es un cuelgue.
+                echo "✓ Scrape vivo, comuna ya completa — nada que hacer."
+              else
+                echo "⚠ Scrape vivo pero sin progreso en 6 h (PID $PID) — colgado. Matando..."
+                pkill -9 -f "run-sii-mapasui.sh" || true
+                pkill -9 -f "sii-scraper/run.py" || true
+                rm -f "$LOCK"
+                necesita_relanzar=1
+              fi
+            elif [ -f "$OUT/.sii-mapasui-complete" ]; then
+              echo "✓ Scrape terminado ($(cat "$OUT/.sii-mapasui-complete")) — comuna completa, nada que relanzar."
+              rm -f "$LOCK"
+            else
+              echo "⚠ Scrape muerto sin completar — relanzando..."
+              rm -f "$LOCK"
+              necesita_relanzar=1
+            fi
+
+            if [ -n "$necesita_relanzar" ]; then
+              # Mismos parámetros que la corrida original si quedaron en disco.
+              if [ -f "$OUT/.sii-mapasui-params" ]; then
+                set -a; source "$OUT/.sii-mapasui-params"; set +a
+                echo "  (params: comuna ${SII_COMUNA_NOMBRE:-?} ${SII_COMUNA_CODE:-?})"
+              fi
+              mkdir -p scraper/output
+              chmod +x scraper/sii-scraper/run-sii-mapasui.sh
+              nohup bash scraper/sii-scraper/run-sii-mapasui.sh \
+                > "scraper/output/watchdog-relaunch-$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &
+              NEWPID=$!
+              disown
+              sleep 3
+              if kill -0 "$NEWPID" 2>/dev/null; then
+                echo "▶ Scrape relanzado por el watchdog (PID $NEWPID)."
+              else
+                echo "✗ El relanzamiento no arrancó — revisar scraper/output/ en el VPS."
+                exit 1
+              fi
+            fi
+          EOF
 
       - name: Ingestar output/predios/*.jsonl existente
         run: |
