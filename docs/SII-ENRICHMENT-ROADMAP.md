@@ -101,7 +101,7 @@ Los `siiCode` hardcodeados en `catastro/page.tsx` (Vitacura `15160`, Las Condes 
 
 | Ítem | Estado |
 |---|---|
-| Satélite de Google (tiles gratis) en street y catastro | ✅ Hecho (2026-07-10) |
-| Botón "Google Earth" junto a coordenadas (ambas fichas) | ✅ Hecho (2026-07-10) |
-| Fase 1 (unificación de módulos, deep-links, búsqueda única) | ⏳ Pendiente de decisión |
+| Satélite de Google (tiles gratis) en los visores | ✅ Hecho (2026-07-10) |
+| Botón "Google Earth" junto a coordenadas | ✅ Hecho (2026-07-10) |
+| Fase 1: unificación — `/chile/catastro` es el visor único (clic en parcela → ficha completa, polígono del rol seleccionado, deep-links `?zona=&rol=&tab=`, búsqueda global de respaldo, `/chile/street` redirige) | ✅ Hecho (2026-07-10) |
 | Fases 2-4 | 💡 Backlog (este documento) |
