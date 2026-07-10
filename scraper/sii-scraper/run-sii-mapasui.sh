@@ -77,6 +77,43 @@ if [ "$SII_MANZANAS_STAGE" != "manzanas" ] && [ "$SII_MANZANAS_STAGE" != "manzan
 fi
 
 cd scraper/sii-scraper
+mkdir -p output
+
+# Estado en disco para el watchdog (ingest-sii-mapasui-now.yml):
+#  - .sii-mapasui-params: con qué comuna/etapa se lanzó esta corrida, para que
+#    un relanzamiento automático use los MISMOS parámetros (no los defaults).
+#  - .sii-mapasui-complete: existe solo si una corrida terminó entera. El
+#    watchdog relanza cuando el proceso está muerto Y este marcador no existe
+#    (murió a medias); si existe, el estado es "comuna completa", no un fallo.
+PARAMS_FILE="output/.sii-mapasui-params"
+COMPLETE_MARKER="output/.sii-mapasui-complete"
+cat > "$PARAMS_FILE" <<PARAMS
+SII_COMUNA_CODE=${SII_COMUNA_CODE}
+SII_COMUNA_NOMBRE=${SII_COMUNA_NOMBRE}
+SII_MANZANAS_STAGE=${SII_MANZANAS_STAGE}
+SII_RPS=${SII_RPS}
+SII_CONCURRENCY=${SII_CONCURRENCY}
+PARAMS
+rm -f "$COMPLETE_MARKER"
+
+# Reintentos con backoff para las etapas Python: un crash transitorio (racha
+# de 429, red, OOM puntual) se cura solo sin esperar al watchdog. Los
+# checkpoints hacen que cada reintento retome donde quedó, no desde cero.
+run_stage() {
+  local nombre="$1"; shift
+  local intento
+  for intento in 1 2 3; do
+    if "$@"; then return 0; fi
+    echo "⚠ Etapa ${nombre} falló (intento ${intento}/3)"
+    if [ "$intento" -lt 3 ]; then
+      local espera=$((intento * 120))
+      echo "  … reintentando en ${espera}s"
+      sleep "$espera"
+    fi
+  done
+  echo "✗ Etapa ${nombre} falló 3 veces — abortando (el watchdog relanzará)."
+  return 1
+}
 
 if [ ! -d venv ]; then
   echo "▶ Creando virtualenv e instalando dependencias del scraper SII..."
@@ -102,7 +139,7 @@ cat > config.json <<JSON
 JSON
 
 echo "▶ [1/3] Descubriendo manzanas (${SII_MANZANAS_STAGE})..."
-./venv/bin/python run.py "$SII_MANZANAS_STAGE" --config config.json
+run_stage "manzanas" ./venv/bin/python run.py "$SII_MANZANAS_STAGE" --config config.json
 
 # El ingest (Node) importa `pg` desde scraper/package.json. El deploy excluye
 # node_modules del rsync, así que si no están, se instalan una vez. Se instala
@@ -134,7 +171,7 @@ SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"
 INGEST_LOOP_PID=$!
 
 echo "▶ [2/3] Extrayendo predios..."
-./venv/bin/python run.py predios --config config.json
+run_stage "predios" ./venv/bin/python run.py predios --config config.json
 
 kill "$INGEST_LOOP_PID" 2>/dev/null || true
 wait "$INGEST_LOOP_PID" 2>/dev/null || true
@@ -152,5 +189,8 @@ if [ ! -d sii-scraper/output/predios ]; then
 fi
 echo "▶ [3/3] Ingestando predios en sii_mapasui_predios_cl..."
 DATABASE_URL="$DATABASE_URL" node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
+
+# Marcador de corrida completa: el watchdog deja de relanzar cuando existe.
+date -Iseconds > "sii-scraper/${COMPLETE_MARKER}"
 
 echo "✅ Scrape + ingesta SII completados para ${SII_COMUNA_NOMBRE} (${SII_COMUNA_CODE})."
