@@ -1,0 +1,9 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/diag-predio-depth.yml, que mide la distribución real de
+predios por manzana en Las Condes (opción 3, para calibrar el sondeo por
+vacíos). De solo lectura: no escribe en BD ni toca checkpoints ni el scrape.
+
+Historial:
+- 2026-07-11 — primera medición: por qué Las Condes captura 80.611 y no ~390k.
+  Muestra 12 manzanas, ceiling 600, para ver cuántas superan el tope viejo de
+  150 predios y cuál es el mayor hueco interno (calibra probe_depth).

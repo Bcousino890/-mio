@@ -1,0 +1,64 @@
+name: Diag profundidad de predios SII (opción 3)
+
+# DIAGNÓSTICO de solo lectura para calibrar el sondeo por vacíos: mide la
+# distribución real de predios por manzana en una muestra de manzanas ya
+# descubiertas de Las Condes (sin el tope viejo de 150). No escribe en BD ni
+# toca checkpoints; no interfiere con la pausa del scrape.
+#
+# Copia diag_predio_depth.py al VPS (scp desde el checkout del runner) para no
+# depender del deploy, y lo corre con el venv y el .env (proxy) del VPS.
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Cuántas manzanas muestrear"
+        required: false
+        default: "12"
+      ceiling:
+        description: "Tope de predio_id a sondear"
+        required: false
+        default: "600"
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/sii-scraper/.diag-predio-depth'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Copiar el script de diagnóstico al VPS
+        run: |
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.VPS_PORT || 22 }}" \
+            scraper/sii-scraper/diag_predio_depth.py \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/scraper/sii-scraper/diag_predio_depth.py"
+
+      - name: Correr el diagnóstico en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari/scraper/sii-scraper
+            if [ ! -d venv ]; then echo "✗ No hay venv en el VPS"; exit 1; fi
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            MANZANAS=output/manzanas/las_condes.jsonl
+            if [ ! -f "\$MANZANAS" ]; then echo "✗ No existe \$MANZANAS"; exit 1; fi
+            ./venv/bin/python diag_predio_depth.py \
+              --manzanas-file "\$MANZANAS" \
+              --comuna 15108 \
+              --sample "${{ github.event.inputs.sample || '12' }}" \
+              --ceiling "${{ github.event.inputs.ceiling || '600' }}" \
+              --probe-depth 50 \
+              --rps 8 --concurrency 8
+          EOF

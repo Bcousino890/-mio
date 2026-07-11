@@ -24,6 +24,7 @@ on:
       - '!scraper/sii-scraper/.check-sii-status'
       - '!scraper/.ingest-sii-mapasui-now'
       - '!scraper/.stop-sii-mapasui'
+      - '!scraper/sii-scraper/.diag-predio-depth'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
