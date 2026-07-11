@@ -7,10 +7,11 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
-  Phone, MessageCircle, Landmark, Globe, Download
+  Phone, MessageCircle, Landmark, Globe, Download, Bookmark, Trash2
 } from 'lucide-react'
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
+import { DESTINO_LABELS, MATERIAL_LABELS, CALIDAD_LABELS } from '@/lib/sii-labels'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 
 // Mapa unificado (ex Visor Catastral /chile/street): satélite de Google con
@@ -48,32 +49,6 @@ const LAYER_TABS = [
 ] as const
 type LayerTab = (typeof LAYER_TABS)[number]['id']
 
-// SII destination code labels
-const DESTINO_LABELS: Record<string, string> = {
-  H: 'Habitacional', C: 'Comercio', O: 'Oficina', I: 'Industria',
-  A: 'Agrícola', B: 'Agroindustrial', D: 'Deporte/Recreación',
-  E: 'Educación', F: 'Forestal', G: 'Hotel/Motel', L: 'Bodega',
-  M: 'Minería', P: 'Administración Pública', Q: 'Culto',
-  S: 'Salud', T: 'Transporte', V: 'Otros', W: 'Sitio Eriazo', Z: 'Estacionamiento',
-}
-
-// Clases de material según resolución SII (verificado externamente; el código
-// "D" y los códigos de condición especial no están documentados públicamente,
-// por eso no se incluyen — se muestra el código crudo en esos casos).
-const MATERIAL_LABELS: Record<string, string> = {
-  A: 'Acero',
-  B: 'Hormigón armado',
-  C: 'Albañilería (ladrillo, piedra o bloque de cemento)',
-  E: 'Madera',
-}
-
-const CALIDAD_LABELS: Record<string, string> = {
-  '1': 'Superior',
-  '2': 'Media superior',
-  '3': 'Media',
-  '4': 'Media inferior',
-  '5': 'Inferior',
-}
 
 const DESTINO_OPTIONS = Object.entries(DESTINO_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -179,6 +154,9 @@ export default function CatastroPage() {
   const [zoneRoles, setZoneRoles] = useState<any[] | null>(null)
   // Capa analítica sobre los polígonos del mapa (coropletas)
   const [analyticLayer, setAnalyticLayer] = useState<'none' | 'avaluo_m2' | 'tgr'>('none')
+  // Zonas guardadas (watchlist local, localStorage — sin backend)
+  const [savedZones, setSavedZones] = useState<{ id: string; name: string; zoneId: ZoneId; shape: DrawnShape; savedAt: string }[]>([])
+  const [savedZonesOpen, setSavedZonesOpen] = useState(false)
   // Oferta: anuncios reales de listings_cl (pipeline Portal Inmobiliario)
   const [ofertaListings, setOfertaListings] = useState<any[]>([])
   const [ofertaLoading, setOfertaLoading] = useState(false)
@@ -186,6 +164,7 @@ export default function CatastroPage() {
   const [ofertaPage, setOfertaPage] = useState(1)
   const [ofertaTotalPages, setOfertaTotalPages] = useState(1)
   const [ofertaOperation, setOfertaOperation] = useState<'all' | 'sale' | 'rent'>('all')
+  const [ofertaSoloOportunidades, setOfertaSoloOportunidades] = useState(false)
   // Ventas: transacciones CBR (sii_transacciones_cl)
   const [ventasList, setVentasList] = useState<any[] | null>(null)
   const [ventasLoading, setVentasLoading] = useState(false)
@@ -194,6 +173,8 @@ export default function CatastroPage() {
   const [ventasTotalPages, setVentasTotalPages] = useState(1)
   // Historial de ventas CBR del rol seleccionado (ficha)
   const [rolVentas, setRolVentas] = useState<any[] | null>(null)
+  // Valoración automática (AVM v1) por comparables de oferta
+  const [avm, setAvm] = useState<any>(null)
 
   // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
   const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
@@ -353,13 +334,16 @@ export default function CatastroPage() {
   }, [search, loading, roles])
 
   // Oferta: anuncios reales de la comuna (listings_cl vía /api/chile/anuncios)
-  useEffect(() => { setOfertaPage(1) }, [zoneId, ofertaOperation])
+  useEffect(() => { setOfertaPage(1) }, [zoneId, ofertaOperation, ofertaSoloOportunidades])
   useEffect(() => {
     if (layerTab !== 'oferta' || !zone.siiCode) return
     const controller = new AbortController()
     setOfertaLoading(true)
-    const params = new URLSearchParams({ comuna_code: zone.siiCode, page: String(ofertaPage), page_size: '50', sort: 'recent' })
+    // with_discount=1 siempre: cada tarjeta muestra su descuento vs la
+    // mediana $/m² de la comuna (misma CTE que /chile/oportunidades)
+    const params = new URLSearchParams({ comuna_code: zone.siiCode, page: String(ofertaPage), page_size: '50', sort: 'recent', with_discount: '1' })
     if (ofertaOperation !== 'all') params.set('operation', ofertaOperation)
+    if (ofertaSoloOportunidades) params.set('only_opportunities', 'true')
     fetch(`/api/chile/anuncios?${params}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -372,7 +356,7 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setOfertaLoading(false))
     return () => controller.abort()
-  }, [layerTab, zone.siiCode, ofertaPage, ofertaOperation])
+  }, [layerTab, zone.siiCode, ofertaPage, ofertaOperation, ofertaSoloOportunidades])
 
   // Ventas: transacciones CBR de la comuna
   useEffect(() => { setVentasPage(1) }, [zoneId])
@@ -406,6 +390,18 @@ export default function CatastroPage() {
     return () => controller.abort()
   }, [selectedRol, zone.siiCode])
 
+  // Valoración estimada (AVM) del rol seleccionado — comparables de oferta
+  useEffect(() => {
+    setAvm(null)
+    if (!selectedRol || !zone.siiCode) return
+    const controller = new AbortController()
+    fetch(`/api/chile/avm?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) setAvm(d) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [selectedRol, zone.siiCode])
+
   // Pins de oferta en el mapa (solo en la pestaña Oferta), coloreados por
   // confianza de la resolución de identidad del anuncio
   const ofertaPins = useMemo(() => {
@@ -417,7 +413,7 @@ export default function CatastroPage() {
         lat: Number(l.latitude),
         lng: Number(l.longitude),
         color: CONFIDENCE_COLOR[(l.location_confidence ?? 'none') as LocationConfidence] ?? CONFIDENCE_COLOR.none,
-        label: `${l.address ?? l.external_id} · ${l.price ? fmtCLP(l.price) : 's/precio'}`,
+        label: `${l.address ?? l.external_id} · ${l.price ? fmtCLP(l.price) : 's/precio'}${l.discount_ratio != null && l.discount_ratio >= 0.15 ? ` · −${Math.round(l.discount_ratio * 100)}% vs mediana` : ''}`,
       }))
   }, [layerTab, ofertaListings])
 
@@ -578,6 +574,38 @@ export default function CatastroPage() {
       .finally(() => setZoneCountLoading(false))
     return () => controller.abort()
   }, [drawnShape, zone.siiCode])
+
+  // Zonas guardadas: persistencia en localStorage (watchlist ligera)
+  const SAVED_ZONES_KEY = 'casafari:zonas-cl'
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SAVED_ZONES_KEY)
+      if (raw) setSavedZones(JSON.parse(raw))
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const persistSavedZones = useCallback((zones: typeof savedZones) => {
+    setSavedZones(zones)
+    try { localStorage.setItem(SAVED_ZONES_KEY, JSON.stringify(zones)) } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const saveCurrentZone = useCallback(() => {
+    if (!drawnShape) return
+    const name = window.prompt('Nombre de la zona', `${zone.label} · ${new Date().toLocaleDateString('es-CL')}`)
+    if (!name?.trim()) return
+    persistSavedZones([
+      ...savedZones,
+      { id: crypto.randomUUID(), name: name.trim(), zoneId, shape: drawnShape, savedAt: new Date().toISOString() },
+    ])
+  }, [drawnShape, savedZones, zone.label, zoneId, persistSavedZones])
+
+  const loadSavedZone = useCallback((z: typeof savedZones[number]) => {
+    if (z.zoneId !== zoneId) { setZoneId(z.zoneId); setSelectedRol(null) }
+    setDrawnShape(z.shape)
+    setSavedZonesOpen(false)
+  }, [zoneId])
 
   // Export CSV de los roles de la zona dibujada (separador ; + BOM para Excel es-CL)
   const exportZoneCsv = useCallback(() => {
@@ -940,7 +968,17 @@ export default function CatastroPage() {
                     <ChevronLeft size={15} />
                   </button>
                   <span className="text-xs font-semibold text-slate-200">Rol {selectedRol.rol}</span>
-                  <span className="ml-auto text-[10px] text-slate-600">{zone.label}</span>
+                  <a
+                    href={`/chile/informe-predio?comuna=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto flex items-center gap-1 text-[10px] font-semibold text-blue-400 hover:text-blue-300 border border-blue-900/50 bg-blue-950/30 rounded-md px-2 py-1 transition-colors"
+                    title="Abrir informe imprimible del predio"
+                  >
+                    <ExternalLink size={10} />
+                    Informe
+                  </a>
+                  <span className="text-[10px] text-slate-600">{zone.label}</span>
                 </div>
                 {detailLoading ? (
                   <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Cargando...</div>
@@ -1204,6 +1242,38 @@ export default function CatastroPage() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Valoración estimada (AVM v1) — comparables de oferta */}
+                    {avm && avm.enough && avm.estimated_value != null && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Valoración estimada</p>
+                        <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-lg font-bold text-blue-300">{fmtCLP(avm.estimated_value)}</span>
+                            <span className="text-[10px] text-slate-500">{formatUF(avm.estimated_value, 0)}</span>
+                          </div>
+                          {avm.estimated_min != null && avm.estimated_max != null && (
+                            <p className="text-[11px] text-slate-500 mt-0.5">Rango {fmtCLP(avm.estimated_min)} – {fmtCLP(avm.estimated_max)}</p>
+                          )}
+                          <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-blue-900/30 text-[10px] text-slate-500">
+                            <BarChart3 size={10} className="text-blue-400 flex-shrink-0" />
+                            <span>
+                              {avm.median_sqm ? `${fmtCLP(Math.round(avm.median_sqm))}/m² · ` : ''}
+                              {avm.n_comparables} anuncios de venta {avm.scope === 'radio' ? '(1 km)' : '(comuna)'} · {avm.base_surface_m2} m² {avm.base_surface_type}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-600 mt-1.5 italic">Valor de oferta (no de cierre) — referencial, con sesgo al alza. No es tasación.</p>
+                        </div>
+                      </div>
+                    )}
+                    {avm && !avm.enough && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Valoración estimada</p>
+                        <div className="rounded-xl border border-dashed border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-2.5 text-[11px] text-slate-600">
+                          Muestra insuficiente de anuncios de venta en {zone.label} para estimar ({avm.n_comparables} comparables, se necesitan ≥5).
+                        </div>
+                      </div>
+                    )}
 
                     {/* Distribución de superficies */}
                     {(rolDetail.rol?.superficie_terreno_m2 || rolDetail.construcciones?.length > 0) && (
@@ -1475,6 +1545,15 @@ export default function CatastroPage() {
                   <option value="sale">Venta</option>
                   <option value="rent">Arriendo</option>
                 </select>
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={ofertaSoloOportunidades}
+                    onChange={e => setOfertaSoloOportunidades(e.target.checked)}
+                    className="accent-emerald-600"
+                  />
+                  Solo oportunidades <span className="text-slate-600">(≥15% bajo mediana)</span>
+                </label>
                 <p className="text-[11px] text-slate-600 ml-auto">
                   {ofertaLoading ? 'Cargando…' : `${ofertaTotal.toLocaleString('es-CL')} anuncios`}
                 </p>
@@ -1509,6 +1588,11 @@ export default function CatastroPage() {
                         {l.bedrooms != null && <span className="text-[10px] text-slate-500">{l.bedrooms}D{l.bathrooms != null ? `/${l.bathrooms}B` : ''}</span>}
                         {l.days_on_market != null && <span className="text-[10px] text-slate-600">{l.days_on_market} días</span>}
                         {l.advertiser_type === 'particular' && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-950/50 text-emerald-400">Particular</span>}
+                        {l.discount_ratio != null && l.discount_ratio >= 0.15 && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300" title={l.median_sqm ? `Mediana comuna: ${fmtCLP(Number(l.median_sqm))}/m²` : undefined}>
+                            −{Math.round(l.discount_ratio * 100)}% vs mediana
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-1.5">
                         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: CONFIDENCE_COLOR[conf] }} />
@@ -1636,6 +1720,7 @@ export default function CatastroPage() {
             drawnShape={drawnShape}
             extraPins={ofertaPins}
             onExtraPinClick={handleOfertaPinClick}
+            showLocate
           />
           {mapZoomLevel < 15 && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none rounded-full bg-black/60 backdrop-blur px-3 py-1.5 text-[11px] text-slate-200">
@@ -1643,7 +1728,7 @@ export default function CatastroPage() {
             </div>
           )}
 
-          {/* Selector de capa analítica */}
+          {/* Selector de capa analítica + zonas guardadas */}
           <div className="absolute top-3 right-3 z-[1000] flex gap-1 rounded-lg bg-black/60 backdrop-blur p-1">
             {([
               { id: 'none', label: 'Parcelas' },
@@ -1660,7 +1745,46 @@ export default function CatastroPage() {
                 {l.label}
               </button>
             ))}
+            {savedZones.length > 0 && (
+              <button
+                onClick={() => setSavedZonesOpen(v => !v)}
+                className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors ${
+                  savedZonesOpen ? 'bg-cyan-700 text-white' : 'text-cyan-300 hover:bg-white/10'
+                }`}
+                title="Zonas guardadas"
+              >
+                <Bookmark size={11} />
+                {savedZones.length}
+              </button>
+            )}
           </div>
+
+          {/* Dropdown de zonas guardadas */}
+          {savedZonesOpen && savedZones.length > 0 && (
+            <div className="absolute top-12 right-3 z-[1000] w-64 rounded-xl bg-black/80 backdrop-blur border border-white/10 overflow-hidden">
+              <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-white/70 border-b border-white/10">Zonas guardadas</p>
+              <div className="max-h-56 overflow-y-auto">
+                {savedZones.map(z => {
+                  const zMeta = ZONES.find(zz => zz.id === z.zoneId)
+                  return (
+                    <div key={z.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 transition-colors">
+                      <button onClick={() => loadSavedZone(z)} className="flex-1 min-w-0 text-left">
+                        <p className="text-[11px] font-medium text-white truncate">{z.name}</p>
+                        <p className="text-[10px] text-slate-500">{zMeta?.label ?? z.zoneId} · {new Date(z.savedAt).toLocaleDateString('es-CL')}</p>
+                      </button>
+                      <button
+                        onClick={() => persistSavedZones(savedZones.filter(sz => sz.id !== z.id))}
+                        className="text-slate-500 hover:text-red-400 transition-colors flex-shrink-0"
+                        title="Eliminar zona guardada"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Panel de zona dibujada (farming) */}
           {drawnShape && (
@@ -1668,6 +1792,14 @@ export default function CatastroPage() {
               <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
                 <MapPin size={12} className="text-cyan-400 flex-shrink-0" />
                 <p className="text-[11px] font-semibold text-white flex-1">Zona dibujada</p>
+                <button
+                  onClick={saveCurrentZone}
+                  className="flex items-center gap-1 text-[10px] font-semibold text-cyan-300 hover:text-cyan-200 transition-colors"
+                  title="Guardar esta zona para volver a cargarla después"
+                >
+                  <Bookmark size={11} />
+                  Guardar
+                </button>
                 <button
                   onClick={() => setDrawnShape(null)}
                   className="text-slate-400 hover:text-white transition-colors"

@@ -42,10 +42,13 @@ interface Props {
   /** Habilita el control de dibujo (polígono/rectángulo/círculo) para farming. */
   enableDraw?: boolean
   onShapeDrawn?: (shape: DrawnShape | null) => void
-  /** Solo se usa para limpiar la capa dibujada cuando el padre la resetea a null. */
+  /** Zona dibujada, controlada por el padre: al cambiar (p. ej. restaurar una
+   *  zona guardada) la capa se re-renderiza; null la limpia. */
   drawnShape?: DrawnShape | null
   extraPins?: ExtraPin[]
   onExtraPinClick?: (id: string) => void
+  /** Muestra el botón de geolocalización (modo terreno). */
+  showLocate?: boolean
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,7 +103,7 @@ interface LegendState {
 export default function StreetViewMap({
   center, zoom = 17, pin, comunaCode, onParcelClick, onZoomChange,
   analyticLayer = 'none', enableDraw = false, onShapeDrawn, drawnShape,
-  extraPins, onExtraPinClick,
+  extraPins, onExtraPinClick, showLocate = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,6 +127,12 @@ export default function StreetViewMap({
   const extraPinsLayerRef = useRef<any>(null)
   const onExtraPinClickRef = useRef(onExtraPinClick)
   onExtraPinClickRef.current = onExtraPinClick
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const userLocRef = useRef<any>(null)
+  // Última shape que salió de un gesto del usuario (dibujar/editar) — sirve
+  // para no re-encuadrar el mapa cuando el padre nos devuelve esa misma shape.
+  const lastUserShapeRef = useRef<string | null>(null)
+  const [locating, setLocating] = useState(false)
   // Refs para que loadParcels (capturado por el listener de moveend
   // registrado una sola vez al init) vea siempre los valores actuales.
   const comunaCodeRef = useRef(comunaCode)
@@ -293,13 +302,22 @@ export default function StreetViewMap({
         map.on((L as any).Draw.Event.CREATED, (e: any) => {
           drawnItems.clearLayers()
           drawnItems.addLayer(e.layer)
-          onShapeDrawnRef.current?.(shapeFromLayer(e.layer, e.layerType))
+          const shape = shapeFromLayer(e.layer, e.layerType)
+          lastUserShapeRef.current = JSON.stringify(shape)
+          onShapeDrawnRef.current?.(shape)
         })
-        map.on((L as any).Draw.Event.DELETED, () => onShapeDrawnRef.current?.(null))
+        map.on((L as any).Draw.Event.DELETED, () => {
+          lastUserShapeRef.current = null
+          onShapeDrawnRef.current?.(null)
+        })
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         map.on((L as any).Draw.Event.EDITED, (e: any) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          e.layers.eachLayer((layer: any) => onShapeDrawnRef.current?.(shapeFromLayer(layer)))
+          e.layers.eachLayer((layer: any) => {
+            const shape = shapeFromLayer(layer)
+            lastUserShapeRef.current = JSON.stringify(shape)
+            onShapeDrawnRef.current?.(shape)
+          })
         })
       }
 
@@ -337,10 +355,62 @@ export default function StreetViewMap({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyticLayer])
 
-  // Limpiar la capa dibujada cuando el padre resetea la zona
+  // Zona dibujada controlada por el padre: sincroniza la capa con la prop.
+  // Cuando la shape viene de un gesto del usuario (echo del padre) no se
+  // re-encuadra; cuando viene de fuera (zona guardada restaurada), sí.
   useEffect(() => {
-    if (drawnShape == null && drawnItemsRef.current) drawnItemsRef.current.clearLayers()
-  }, [drawnShape])
+    const L = (window as any).L
+    const drawnItems = drawnItemsRef.current
+    const map = mapRef.current
+    if (!drawnItems || !L || !map) return
+    drawnItems.clearLayers()
+    if (!drawnShape) { lastUserShapeRef.current = null; return }
+    const style = { color: '#22d3ee', fillOpacity: 0.1, weight: 2 }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let layer: any = null
+    if (drawnShape.type === 'circle' && drawnShape.center && drawnShape.radius) {
+      layer = L.circle(drawnShape.center, { radius: drawnShape.radius, ...style })
+    } else if (drawnShape.coordinates && drawnShape.coordinates.length >= 3) {
+      layer = L.polygon(drawnShape.coordinates, style)
+    }
+    if (!layer) return
+    drawnItems.addLayer(layer)
+    const fromUser = lastUserShapeRef.current === JSON.stringify(drawnShape)
+    if (!fromUser) {
+      try { map.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 18 }) } catch { /* ignore */ }
+    }
+  }, [drawnShape, mapReady])
+
+  // Geolocalización (modo terreno): centra el mapa en el usuario con un
+  // círculo de precisión — para captadores caminando la zona.
+  function locateMe() {
+    const map = mapRef.current
+    const L = (window as any).L
+    if (!map || !L || !navigator.geolocation) return
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false)
+        const { latitude, longitude, accuracy } = pos.coords
+        if (userLocRef.current) { userLocRef.current.remove(); userLocRef.current = null }
+        const group = L.layerGroup()
+        group.addLayer(L.circle([latitude, longitude], { radius: accuracy, color: '#06b6d4', weight: 1, fillOpacity: 0.08 }))
+        group.addLayer(L.marker([latitude, longitude], {
+          icon: L.divIcon({
+            className: '',
+            html: `<div style="width:16px;height:16px;border-radius:50%;background:#06b6d4;border:3px solid #fff;box-shadow:0 0 10px rgba(6,182,212,0.9)"></div>`,
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+          }),
+        }))
+        group.addTo(map)
+        userLocRef.current = group
+        map.setView([latitude, longitude], Math.max(map.getZoom(), 17))
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
 
   // Pins adicionales (ej. anuncios de oferta) — círculos con tooltip
   useEffect(() => {
@@ -407,6 +477,24 @@ export default function StreetViewMap({
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
+
+      {/* Botón de geolocalización (modo terreno) */}
+      {showLocate && (
+        <button
+          onClick={locateMe}
+          disabled={locating}
+          title="Mi ubicación"
+          className="absolute top-14 right-3 z-[1000] w-9 h-9 flex items-center justify-center rounded-lg bg-black/60 backdrop-blur text-slate-200 hover:bg-black/80 transition-colors disabled:opacity-50"
+        >
+          {locating ? (
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
+          )}
+        </button>
+      )}
 
       {/* Leyenda de la capa analítica */}
       {showLegend && legend.layer === 'avaluo_m2' && (

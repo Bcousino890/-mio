@@ -23,6 +23,11 @@ export async function GET(request: NextRequest) {
   const bathroomsMin = sp.get('bathrooms_min') ? Number(sp.get('bathrooms_min')) : null
   const onlyDrops = sp.get('only_drops') === 'true'
   const onlyIdentityResolved = sp.get('only_identity_resolved') === 'true'
+  // Oportunidades: precio/m² ≥15% bajo la mediana de su comuna+operación
+  // (mismo criterio que /chile/oportunidades). with_discount añade
+  // median_sqm/discount_ratio a cada fila sin filtrar.
+  const onlyOpportunities = sp.get('only_opportunities') === 'true'
+  const withDiscount = onlyOpportunities || sp.get('with_discount') === '1'
 
   // Comuna filter (by name or by sii_comuna_code)
   const comunaName = sp.get('comuna')?.trim()
@@ -72,6 +77,11 @@ export async function GET(request: NextRequest) {
     if (onlyIdentityResolved) {
       conditions.push(`l.location_confidence = 'confirmed'`)
     }
+    if (onlyOpportunities) {
+      // LEFT JOIN a medians: si la comuna no tiene mediana confiable
+      // (<5 anuncios), la condición es false y el anuncio queda fuera.
+      conditions.push(`l.price > 0 AND l.square_meters > 0 AND (l.price::numeric / l.square_meters) < m.median_sqm * 0.85`)
+    }
 
     // Comuna filtering
     if (comunaName) {
@@ -114,12 +124,38 @@ export async function GET(request: NextRequest) {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
 
-    const countResult = await pool.query(`SELECT COUNT(*) AS total FROM listings_cl l LEFT JOIN chile_comunas c ON c.id = l.comuna_id ${whereClause}`, params)
+    // Mediana $/m² por comuna+operación (solo cuando se pide descuento) —
+    // misma CTE que /chile/oportunidades.
+    const mediansCte = withDiscount
+      ? `WITH medians AS (
+           SELECT comuna_id, operation,
+                  percentile_cont(0.5) WITHIN GROUP (ORDER BY price::numeric / square_meters) AS median_sqm
+           FROM listings_cl
+           WHERE is_active AND price > 0 AND square_meters > 0 AND comuna_id IS NOT NULL
+           GROUP BY comuna_id, operation
+           HAVING count(*) >= 5
+         ) `
+      : ''
+    const mediansJoin = withDiscount
+      ? 'LEFT JOIN medians m ON m.comuna_id = l.comuna_id AND m.operation = l.operation'
+      : ''
+
+    const countResult = await pool.query(
+      `${mediansCte}SELECT COUNT(*) AS total FROM listings_cl l LEFT JOIN chile_comunas c ON c.id = l.comuna_id ${mediansJoin} ${whereClause}`,
+      params
+    )
     const total = Number(countResult.rows[0]?.total ?? 0)
 
     const dataParams = [...params, pageSize, offset]
+    const discountSelect = withDiscount
+      ? `round(m.median_sqm) AS median_sqm,
+         CASE WHEN l.price > 0 AND l.square_meters > 0 AND m.median_sqm > 0
+              THEN round((1 - (l.price::numeric / l.square_meters) / m.median_sqm)::numeric, 3)
+         END AS discount_ratio,`
+      : ''
     const query = `
-      SELECT
+      ${mediansCte}SELECT
+        ${discountSelect}
         l.id,
         l.external_id,
         l.operation,
@@ -151,6 +187,7 @@ export async function GET(request: NextRequest) {
         l.property_type
       FROM listings_cl l
       LEFT JOIN chile_comunas c ON c.id = l.comuna_id
+      ${mediansJoin}
       ${whereClause}
       ORDER BY ${SORT_CLAUSES[sort]}
       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
