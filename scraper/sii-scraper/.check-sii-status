@@ -14,3 +14,9 @@ Historial de consultas:
   predios; verificar cuántas manzanas lleva descubiertas manzanas-geo para
   decidir si la arquitectura de ingesta al final de la comuna es viable o
   hay que cambiarla a incremental.
+- 2026-07-11 — post modo-cola (#132) y relanzamiento determinista: el dashboard
+  sigue en 1 comuna (Las Condes, 80.611). Verificar que el proceso corre el
+  run-sii-mapasui.sh NUEVO (modo cola), en qué comuna/etapa va, si ya existe
+  output/.complete-15108 y si arrancó el descubrimiento de manzanas de Vitacura
+  (15160). Confirmar que va a avanzar a Vitacura, no que quedó re-corriendo
+  Las Condes.
