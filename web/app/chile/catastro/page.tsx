@@ -12,6 +12,7 @@ import {
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { DESTINO_LABELS, MATERIAL_LABELS, CALIDAD_LABELS } from '@/lib/sii-labels'
+import { normalizeClRol } from '@/lib/sii-catastro-ingest'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 
 // Mapa unificado (ex Visor Catastral /chile/street): satélite de Google con
@@ -191,7 +192,7 @@ export default function CatastroPage() {
     const rol = sp.get('rol')
     const tab = sp.get('tab')
     if (zona && ZONES.some(z => z.id === zona)) setZoneId(zona as ZoneId)
-    if (rol) setSelectedRol({ rol })
+    if (rol) setSelectedRol({ rol: normalizeClRol(rol) })
     if (tab && LAYER_TABS.some(t => t.id === tab)) setLayerTab(tab as LayerTab)
   }, [])
 
@@ -317,7 +318,7 @@ export default function CatastroPage() {
     if (targetZone.id !== zoneId) setZoneId(targetZone.id)
     setLayerTab('catastro')
     setShowBuildingUnits(false)
-    setSelectedRol({ rol: p.rol })
+    setSelectedRol({ rol: normalizeClRol(p.rol) })
   }, [zone, zoneId])
 
   // Si la búsqueda no encuentra nada en la comuna activa, buscar en todas las
@@ -443,20 +444,6 @@ export default function CatastroPage() {
       .catch(() => {})
   }, [selectedRol, zone.siiCode])
 
-  // Certificado TGR ya guardado en BD para este rol (bulk scraper o consulta
-  // on-demand previa) — se muestra de inmediato, sin golpear tesoreria.cl.
-  useEffect(() => {
-    setTgrCert(null)
-    setTgrError(null)
-    setTgrCandidatos(null)
-    setTgrCandidatosError(null)
-    if (!selectedRol || !zone.siiCode) return
-    fetch(`/api/chile/tgr-lookup?rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
-      .then(r => r.json())
-      .then(d => { if (d.success && d.certificado) setTgrCert(d.certificado) })
-      .catch(() => {})
-  }, [selectedRol, zone.siiCode])
-
   // Dispara la consulta automática al formulario de TGR (Certificado de Deuda)
   // para el rol seleccionado — reemplaza el flujo manual de abrir tesoreria.cl
   // y tipear el rol a mano. Puede tardar ~10-25s porque corre un navegador
@@ -482,6 +469,32 @@ export default function CatastroPage() {
       .catch(() => setTgrError('Error de red al consultar TGR'))
       .finally(() => setTgrLoading(false))
   }, [selectedRol, zone.siiCode, zone.comuna])
+
+  // Certificado TGR ya guardado en BD para este rol (bulk scraper o consulta
+  // on-demand previa) — se muestra de inmediato, sin golpear tesoreria.cl. Si
+  // no hay nada cacheado todavía, dispara la consulta en vivo automáticamente
+  // (el usuario ya no tiene que apretar "Consultar en TGR" a mano) — puede
+  // demorar unos segundos porque corre un navegador headless real.
+  useEffect(() => {
+    setTgrCert(null)
+    setTgrError(null)
+    setTgrCandidatos(null)
+    setTgrCandidatosError(null)
+    if (!selectedRol || !zone.siiCode) return
+    let cancelled = false
+    fetch(`/api/chile/tgr-lookup?rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return
+        if (d.success && d.certificado) {
+          setTgrCert(d.certificado)
+        } else {
+          consultarTgrAhora()
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [selectedRol, zone.siiCode, consultarTgrAhora])
 
   // Con el nombre que entregó TGR, busca candidatos a RUT en DealerNet
   // (Buscador Múltiple, tipbusq=nombre) para completar automáticamente el

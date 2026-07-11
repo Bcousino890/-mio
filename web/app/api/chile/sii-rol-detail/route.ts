@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { normalizeClRol } from '@/lib/sii-catastro-ingest'
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
   const siiComunaCode = sp.get('sii_comuna_code')?.trim()
-  const rol = sp.get('rol')?.trim()
-  if (!siiComunaCode || !rol) {
+  const rolParam = sp.get('rol')?.trim()
+  if (!siiComunaCode || !rolParam) {
     return NextResponse.json({ success: false, error: 'sii_comuna_code and rol required' }, { status: 400 })
   }
+  // El rol puede llegar con ceros a la izquierda (clic en el mapa sobre una
+  // parcela cuyo rol crudo no viene normalizado, o un deep-link viejo) — se
+  // normaliza al mismo formato "manzana-predio" sin ceros que usa la columna
+  // sii_roles_cl.rol, si no, el match exacto de abajo nunca encuentra el rol.
+  const rol = normalizeClRol(rolParam)
 
   try {
     const rolRes = await pool.query(

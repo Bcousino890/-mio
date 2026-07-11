@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { normalizeClRol } from '@/lib/sii-catastro-ingest'
 
 /**
  * GET /api/chile/sii-search?q=&comuna=&limit=20
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
 
     if (rolMatch) {
       const [, siiCode, manzana, predio] = rolMatch
-      const params: any[] = [`${manzana}-${predio}`]
+      const params: any[] = [normalizeClRol(`${manzana}-${predio}`)]
       let whereClause = 'rol = $1'
       if (siiCode) {
         params.push(siiCode)
