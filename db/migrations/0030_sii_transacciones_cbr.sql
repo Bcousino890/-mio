@@ -1,11 +1,17 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 0029 · Transacciones CBR — historial de escrituras por rol SII
 -- ─────────────────────────────────────────────────────────────────────────────
--- Fuente: Conservador de Bienes Raíces (CBR) — dataset CSV público disponible
--- por jurisdicción (~70 CBR en Chile). Contiene escrituras de compraventa
--- desde 2000 aprox., con monto en CLP y UF.
+-- Fuente: compraventas del Conservador de Bienes Raíces (CBR), con monto en
+-- CLP y UF. OJO: NO existe un CSV público del CBR con precios (ver
+-- docs/CBR-TRANSACCIONES-REPOS-2026.md). El registro es por jurisdicción
+-- (~70 CBR) y solo expone el Índice de Propiedad (foja/número/año, SIN monto);
+-- el SII solo publica agregados. Los precios de cierre viven en el Formulario
+-- 2890 del SII, no publicado masivamente. Vía real → proveedor comercial
+-- (databam/TocToc) importado por CSV vía POST /api/admin/transacciones-upload.
 --
--- Referencia de implementación ETL: FelipeCabelloE/api-catastral
+-- Referencia de implementación ETL (solo esquema/transformación, NO fuente de
+-- datos): FelipeCabelloE/api-catastral (backend de catastral.cl; su ETL lee un
+-- CSV F.2890 privado de Tremen/Newmark, no commiteado en el repo)
 --   scripts/etl_cbr.py    — normalización CSV → PostgreSQL
 --   scripts/compute_h3.py — cálculo índice H3 nivel 8 para comparables
 --
