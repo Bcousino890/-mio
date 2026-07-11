@@ -27,6 +27,8 @@ export default function InformePredioPage() {
   const [ventas, setVentas] = useState<any[] | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [entorno, setEntorno] = useState<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [avm, setAvm] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -58,6 +60,10 @@ export default function InformePredioPage() {
     fetch(`/api/chile/sii-transacciones?sii_comuna_code=${comuna}&rol=${encodeURIComponent(rol)}`)
       .then(res => res.json())
       .then(d => { if (d.success) setVentas(d.data ?? []) })
+      .catch(() => {})
+    fetch(`/api/chile/avm?sii_comuna_code=${comuna}&rol=${encodeURIComponent(rol)}`)
+      .then(res => res.json())
+      .then(d => { if (d.success) setAvm(d) })
       .catch(() => {})
   }, [comuna, rol])
 
@@ -125,6 +131,27 @@ export default function InformePredioPage() {
           </p>
           <p className="text-[11px] text-slate-400 mt-1">Generado el {new Date().toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })} · Fuente: SII (archivo oficial de roles), TGR, CBR</p>
         </header>
+
+        {/* Valoración estimada (AVM v1) — comparables de oferta */}
+        {avm && avm.enough && avm.estimated_value != null && (
+          <section className="mb-6">
+            <h2 className="text-[13px] font-bold uppercase tracking-wide text-slate-700 mb-2">Valoración estimada de mercado</h2>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <div className="flex items-baseline gap-3">
+                <span className="text-2xl font-bold text-blue-800">{formatCLP(avm.estimated_value)}</span>
+                <span className="text-sm text-blue-600">{formatUF(avm.estimated_value, 0)}</span>
+              </div>
+              {avm.estimated_min != null && avm.estimated_max != null && (
+                <p className="text-[12px] text-slate-600 mt-1">Rango estimado: {formatCLP(avm.estimated_min)} – {formatCLP(avm.estimated_max)}</p>
+              )}
+              <p className="text-[11px] text-slate-500 mt-2">
+                Basado en {avm.n_comparables} anuncios de venta {avm.scope === 'radio' ? 'en 1 km a la redonda' : 'de la comuna'}
+                {avm.median_sqm ? ` · mediana ${formatCLP(Math.round(avm.median_sqm))}/m²` : ''} × {avm.base_surface_m2} m² {avm.base_surface_type}.
+              </p>
+              <p className="text-[10px] text-slate-400 mt-1 italic">Valor de oferta (precio de publicación, no de cierre); referencial y con sesgo al alza conocido. No constituye tasación comercial.</p>
+            </div>
+          </section>
+        )}
 
         {/* Avalúos */}
         <section className="mb-6">

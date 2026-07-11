@@ -173,6 +173,8 @@ export default function CatastroPage() {
   const [ventasTotalPages, setVentasTotalPages] = useState(1)
   // Historial de ventas CBR del rol seleccionado (ficha)
   const [rolVentas, setRolVentas] = useState<any[] | null>(null)
+  // Valoración automática (AVM v1) por comparables de oferta
+  const [avm, setAvm] = useState<any>(null)
 
   // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
   const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
@@ -384,6 +386,18 @@ export default function CatastroPage() {
     fetch(`/api/chile/sii-transacciones?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => { if (d.success) setRolVentas(d.data ?? []) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [selectedRol, zone.siiCode])
+
+  // Valoración estimada (AVM) del rol seleccionado — comparables de oferta
+  useEffect(() => {
+    setAvm(null)
+    if (!selectedRol || !zone.siiCode) return
+    const controller = new AbortController()
+    fetch(`/api/chile/avm?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) setAvm(d) })
       .catch(() => {})
     return () => controller.abort()
   }, [selectedRol, zone.siiCode])
@@ -1228,6 +1242,38 @@ export default function CatastroPage() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Valoración estimada (AVM v1) — comparables de oferta */}
+                    {avm && avm.enough && avm.estimated_value != null && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Valoración estimada</p>
+                        <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-lg font-bold text-blue-300">{fmtCLP(avm.estimated_value)}</span>
+                            <span className="text-[10px] text-slate-500">{formatUF(avm.estimated_value, 0)}</span>
+                          </div>
+                          {avm.estimated_min != null && avm.estimated_max != null && (
+                            <p className="text-[11px] text-slate-500 mt-0.5">Rango {fmtCLP(avm.estimated_min)} – {fmtCLP(avm.estimated_max)}</p>
+                          )}
+                          <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-blue-900/30 text-[10px] text-slate-500">
+                            <BarChart3 size={10} className="text-blue-400 flex-shrink-0" />
+                            <span>
+                              {avm.median_sqm ? `${fmtCLP(Math.round(avm.median_sqm))}/m² · ` : ''}
+                              {avm.n_comparables} anuncios de venta {avm.scope === 'radio' ? '(1 km)' : '(comuna)'} · {avm.base_surface_m2} m² {avm.base_surface_type}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-600 mt-1.5 italic">Valor de oferta (no de cierre) — referencial, con sesgo al alza. No es tasación.</p>
+                        </div>
+                      </div>
+                    )}
+                    {avm && !avm.enough && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Valoración estimada</p>
+                        <div className="rounded-xl border border-dashed border-[var(--c-border-card)] bg-[var(--c-card)]/50 px-3 py-2.5 text-[11px] text-slate-600">
+                          Muestra insuficiente de anuncios de venta en {zone.label} para estimar ({avm.n_comparables} comparables, se necesitan ≥5).
+                        </div>
+                      </div>
+                    )}
 
                     {/* Distribución de superficies */}
                     {(rolDetail.rol?.superficie_terreno_m2 || rolDetail.construcciones?.length > 0) && (
