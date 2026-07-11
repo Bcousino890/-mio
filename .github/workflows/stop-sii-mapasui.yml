@@ -1,0 +1,53 @@
+name: Stop SII mapasui (pausa el scrape)
+
+# Detiene el scrape SII y lo deja PAUSADO: mata el proceso en el VPS y crea el
+# flag output/.sii-mapasui-paused. Mientras el flag exista, el watchdog
+# (ingest-sii-mapasui-now.yml) no relanza y run-sii-mapasui.sh sale de
+# inmediato. Se reanuda con el botón de launch (.launch-sii-mapasui), que
+# limpia el flag. Los checkpoints se conservan.
+#
+# Igual que los otros: se dispara con push a un archivo centinela porque la API
+# de GitHub de este entorno no permite lanzar workflow_dispatch.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.stop-sii-mapasui'
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Matar el scrape y crear el flag de pausa
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+            OUT=scraper/sii-scraper/output
+            echo "⚠ Deteniendo scrape SII mapasui..."
+            pkill -9 -f "run-sii-mapasui.sh" || true
+            pkill -9 -f "sii-scraper/run.py" || true
+            rm -f /tmp/casafari-scrape-sii-mapasui.lock
+            mkdir -p "$OUT"
+            date -Iseconds > "$OUT/.sii-mapasui-paused"
+            echo "⏸ Scrape SII PAUSADO. Flag: $OUT/.sii-mapasui-paused"
+            echo "  (el watchdog no relanzará hasta que se limpie el flag con el botón de launch)"
+            echo ""
+            echo "── Procesos del scraper restantes (deberían ser ninguno) ──"
+            ps aux | grep -E 'run-sii-mapasui|sii-scraper/run\.py' | grep -v grep || echo "(ninguno)"
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "Scrape SII detenido y pausado en el VPS."
+          echo "Reanudar: pushear scraper/sii-scraper/.launch-sii-mapasui (limpia el flag y relanza la cola)."

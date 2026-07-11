@@ -67,6 +67,9 @@ jobs:
             set -e
             cd /opt/casafari
             mkdir -p scraper/output
+            # Reanudar: limpiar el flag de pausa (stop-sii-mapasui.yml) para que
+            # el watchdog vuelva a relanzar y run-sii-mapasui.sh no salga solo.
+            rm -f scraper/sii-scraper/output/.sii-mapasui-paused
             chmod +x scraper/sii-scraper/run-sii-mapasui.sh
             # SII_COMUNA_CODE vacío (push al centinela / dispatch sin input) =>
             # modo COLA: run-sii-mapasui.sh recorre comunas-queue.json solo

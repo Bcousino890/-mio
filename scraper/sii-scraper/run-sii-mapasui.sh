@@ -89,6 +89,14 @@ SII_CONCURRENCY="${SII_CONCURRENCY:-8}"
 cd scraper/sii-scraper
 mkdir -p output
 
+# Pausa manual (stop-sii-mapasui.yml): si el flag existe, no arrancar. Se limpia
+# al apretar el botón de launch (scrape-sii-mapasui.yml). Defensa extra por si
+# algo lanza el script directamente estando en pausa.
+if [ -f output/.sii-mapasui-paused ]; then
+  echo "⏸ Scrape SII PAUSADO (output/.sii-mapasui-paused) — no se arranca. Reanudar con el botón de launch."
+  exit 0
+fi
+
 QUEUE_FILE="comunas-queue.json"
 PARAMS_FILE="output/.sii-mapasui-params"
 ALL_COMPLETE_MARKER="output/.sii-mapasui-complete"

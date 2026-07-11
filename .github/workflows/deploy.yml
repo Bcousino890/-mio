@@ -23,6 +23,7 @@ on:
       - '!scraper/sii-scraper/.launch-sii-mapasui'
       - '!scraper/sii-scraper/.check-sii-status'
       - '!scraper/.ingest-sii-mapasui-now'
+      - '!scraper/.stop-sii-mapasui'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:

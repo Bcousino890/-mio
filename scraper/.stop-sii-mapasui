@@ -1,0 +1,15 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/stop-sii-mapasui.yml, que SSHea al VPS, MATA el scrape SII en
+curso y crea el flag de pausa output/.sii-mapasui-paused.
+
+Mientras exista ese flag:
+  - el watchdog (ingest-sii-mapasui-now.yml) NO relanza el scrape;
+  - run-sii-mapasui.sh sale de inmediato si lo lanzan.
+
+Para REANUDAR: apretar el botón de launch (.launch-sii-mapasui), que limpia el
+flag antes de arrancar. Los checkpoints se conservan: reanuda donde quedó.
+
+Historial de stops:
+- 2026-07-11 — stop de Vitacura: la corrida usaba los topes viejos (predio_max
+  150, grilla 100 m) que subcapturan (~21% en Las Condes). Se detiene para
+  rehacer el pipeline con sondeo de predios por vacíos y re-scrapear completo.

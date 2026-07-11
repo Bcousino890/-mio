@@ -58,6 +58,13 @@ jobs:
             LOCK=/tmp/casafari-scrape-sii-mapasui.lock
             OUT=scraper/sii-scraper/output
 
+            # Pausa manual (stop-sii-mapasui.yml): mientras exista el flag, el
+            # watchdog NO relanza. Se limpia al apretar el botón de launch.
+            if [ -f "$OUT/.sii-mapasui-paused" ]; then
+              echo "⏸ Scrape SII PAUSADO ($(cat "$OUT/.sii-mapasui-paused")) — el watchdog no relanza."
+              exit 0
+            fi
+
             necesita_relanzar=""
             PID=$(cat "$LOCK" 2>/dev/null || true)
             if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
