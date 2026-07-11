@@ -37,7 +37,7 @@ import {
 // y /api/chile/dealernet-lookup) — sin esto, este pipeline volvía a golpear el
 // web service aunque el mismo rol/RUT ya se hubiera consultado desde la ficha
 // o desde /chile/dealer, duplicando el gasto.
-import { getCachedBuscadorMultiple, saveBuscadorMultipleCache, getCachedContactByRut } from '@/lib/dealernet-cache'
+import { getCachedBuscadorMultiple, saveBuscadorMultipleCache, getCachedContactByRut, logDealernetQuery } from '@/lib/dealernet-cache'
 
 // ─── Umbrales del match (regla pedida por el usuario: 90-95%+, ideal 100%) ───
 export const AUTO_CONFIRM_PROBABILITY = 0.92 // prob. mínima para auto-confirmar
@@ -1006,8 +1006,12 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
       const cached = await getCachedBuscadorMultiple(attempt.tipo, attempt.args)
       const res = cached ?? await queryDealernetBuscadorMultiple(attempt.tipo, attempt.args)
       const retErr = dealernetRetcodeMessage(res.retcode)
-      if (retErr) { lastError = `DealerNet (${attempt.tipo}): ${retErr}`; continue }
+      if (retErr) {
+        await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: attempt.tipo, args: attempt.args, retcode: res.retcode, success: false, fromCache: !!cached, source: 'captacion', error: retErr })
+        lastError = `DealerNet (${attempt.tipo}): ${retErr}`; continue
+      }
       if (!cached) await saveBuscadorMultipleCache(attempt.tipo, attempt.args, { ...res, raw: (res as any).raw ?? null })
+      await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: attempt.tipo, args: attempt.args, retcode: res.retcode, success: true, fromCache: !!cached, candidatosN: res.candidatos.length, source: 'captacion' })
       const withRut = res.candidatos.filter((x) => x.rut != null)
       allCandidates = allCandidates.concat(withRut)
       const scored = withRut
@@ -1061,6 +1065,7 @@ export async function finishDealernetByRut(
   if (cached) {
     phones = cached.phones as any
     emails = cached.emails as any
+    await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: cached.contact.retcode, success: true, fromCache: true, candidatosN: cached.phones.length, source: 'captacion' })
     if (c.sii_rol && c.sii_comuna_code && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
       await pool.query(
         `UPDATE dealernet_contacts_cl SET sii_rol = COALESCE(sii_rol, $2), sii_comuna_code = COALESCE(sii_comuna_code, $3) WHERE id = $1`,
@@ -1071,6 +1076,7 @@ export async function finishDealernetByRut(
     const lookup = await queryDealernet({ num: rutNum, dv: rutDv }, DEFAULT_DEALERNET_PRODUCTS)
     const retErr = dealernetRetcodeMessage(lookup.retcode)
     if (retErr) {
+      await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: lookup.retcode, success: false, fromCache: false, source: 'captacion', error: retErr })
       const { rows } = await pool.query(
         `UPDATE captaciones_cl SET dealernet_status = 'error', dealernet_error = $2,
            dealernet_consulted_at = now(), updated_at = now()
@@ -1079,6 +1085,7 @@ export async function finishDealernetByRut(
       )
       return { captacion: rows[0] }
     }
+    await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: lookup.retcode, success: true, fromCache: false, candidatosN: lookup.phones.length, source: 'captacion' })
 
     // Persistir en las tablas compartidas de DealerNet (cache reutilizable por
     // /chile/duenos, /dealer, la ficha del rol y otras captaciones)

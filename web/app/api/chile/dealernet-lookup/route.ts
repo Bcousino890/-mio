@@ -9,7 +9,7 @@ import {
   dealernetRetcodeMessage,
   type DealernetPhone,
 } from '@/lib/dealernet'
-import { getCachedContactByRut } from '@/lib/dealernet-cache'
+import { getCachedContactByRut, logDealernetQuery } from '@/lib/dealernet-cache'
 
 const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
 
@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
   const portalUrl = body?.portal_url ? String(body.portal_url).trim() : null
   const notes = body?.notes ? String(body.notes).trim() : null
   const force = body?.force === true
+  const source = body?.source === 'ficha_catastro' ? 'ficha_catastro' : 'dealer'
 
   // product_codes: array of '3407'|'3408'|'3410' — defaults to all three
   const rawCodes = Array.isArray(body?.product_codes) ? body.product_codes : null
@@ -82,6 +83,11 @@ export async function POST(request: NextRequest) {
           [cached.contact.id, siiRol, siiComunaCode]
         )
       }
+      await logDealernetQuery({
+        kind: 'contactos_rut', rutNum: rut.num, rutDv: rut.dv, productCodes,
+        retcode: cached.contact.retcode, success: true, fromCache: true,
+        candidatosN: cached.phones.length, source,
+      })
       return NextResponse.json({
         success: true,
         contact_id: cached.contact.id,
@@ -103,10 +109,9 @@ export async function POST(request: NextRequest) {
   try {
     lookup = await queryDealernet(rut, productCodes)
   } catch (error) {
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Error consultando DealerNet' },
-      { status: 502 }
-    )
+    const msg = error instanceof Error ? error.message : 'Error consultando DealerNet'
+    await logDealernetQuery({ kind: 'contactos_rut', rutNum: rut.num, rutDv: rut.dv, productCodes, success: false, fromCache: false, source, error: msg })
+    return NextResponse.json({ success: false, error: msg }, { status: 502 })
   }
 
   const client = await pool.connect()
@@ -222,12 +227,22 @@ export async function POST(request: NextRequest) {
     // real al cliente en vez de un "0 teléfonos" silencioso.
     const retcodeError = dealernetRetcodeMessage(lookup.retcode)
     if (retcodeError) {
+      await logDealernetQuery({
+        kind: 'contactos_rut', rutNum: rut.num, rutDv: rut.dv, productCodes,
+        retcode: lookup.retcode, success: false, fromCache: false, source, error: retcodeError,
+      })
       return NextResponse.json({
         success: false,
         error: `DealerNet: ${retcodeError}${lookup.retmsg ? ` (${lookup.retmsg})` : ''}`,
         retcode: lookup.retcode,
       }, { status: 502 })
     }
+
+    await logDealernetQuery({
+      kind: 'contactos_rut', rutNum: rut.num, rutDv: rut.dv, productCodes,
+      retcode: lookup.retcode, success: true, fromCache: false,
+      candidatosN: lookup.phones.length, source,
+    })
 
     return NextResponse.json({
       success: true,

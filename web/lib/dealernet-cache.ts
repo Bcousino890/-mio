@@ -13,6 +13,54 @@ import {
   type DealernetPhone,
 } from './dealernet'
 
+// ─── Bitácora de auditoría (append-only) ─────────────────────────────────────
+// Registra TODA consulta DealerNet — en vivo o de caché — para auditar el
+// gasto y conciliar contra la facturación del proveedor (ver migración
+// 0056_dealernet_query_log). Nunca debe romper el flujo del llamador: si el
+// INSERT falla, se ignora en silencio.
+export type DealernetQuerySource = 'ficha_catastro' | 'dealer' | 'captacion' | 'debug'
+
+export interface DealernetQueryLogEntry {
+  kind: 'buscador_multiple' | 'contactos_rut' | 'debug'
+  tipbusq?: string | null
+  args?: string | null
+  rutNum?: number | null
+  rutDv?: string | null
+  productCodes?: string[] | null
+  retcode?: number | null
+  success: boolean
+  fromCache?: boolean
+  candidatosN?: number | null
+  source?: DealernetQuerySource | null
+  error?: string | null
+}
+
+export async function logDealernetQuery(entry: DealernetQueryLogEntry): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO dealernet_query_log_cl
+         (kind, tipbusq, args, rut_num, rut_dv, product_codes, retcode, success, from_cache, candidatos_n, source, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        entry.kind,
+        entry.tipbusq ?? null,
+        entry.args ?? null,
+        entry.rutNum ?? null,
+        entry.rutDv ?? null,
+        entry.productCodes ?? null,
+        entry.retcode ?? null,
+        entry.success,
+        entry.fromCache ?? false,
+        entry.candidatosN ?? null,
+        entry.source ?? null,
+        entry.error ?? null,
+      ]
+    )
+  } catch {
+    // la bitácora es secundaria — nunca rompe el flujo del llamador
+  }
+}
+
 export interface CachedBuscadorMultiple {
   retcode: number | null
   retmsg: string | null

@@ -440,7 +440,7 @@ export default function CatastroPage() {
     fetch('/api/chile/dealernet-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts, force }),
+      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts, force, source: 'ficha_catastro' }),
     })
       .then(r => r.json())
       .then(d => {
@@ -479,7 +479,7 @@ export default function CatastroPage() {
     fetch('/api/chile/dealernet-buscar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tipbusq: 'rol', args: `${selectedRol.rol}, ${zone.comuna}` }),
+      body: JSON.stringify({ tipbusq: 'rol', args: `${selectedRol.rol}, ${zone.comuna}`, source: 'ficha_catastro' }),
     })
       .then(r => r.json())
       .then(d => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { parseRut, isValidRut } from '@/lib/dealernet'
+import { logDealernetQuery } from '@/lib/dealernet-cache'
 
 // Prioridad .env en disco > process.env — misma lógica (y motivo) que
 // getDealernetCreds en web/lib/dealernet.ts.
@@ -75,12 +76,22 @@ export async function GET(request: NextRequest) {
       body,
     })
     const xml = await res.text()
+    // Este endpoint golpea DealerNet en vivo (SOAP crudo) — deja registro en
+    // la bitácora igual que las rutas normales, para que ninguna consulta
+    // pagada quede sin rastro.
+    await logDealernetQuery({
+      kind: 'debug', rutNum: rut.num, rutDv: rut.dv, productCodes: products,
+      success: res.ok, fromCache: false, source: 'debug',
+      error: res.ok ? null : `HTTP ${res.status}`,
+    })
     // Return raw XML as plain text so it can be inspected
     return new Response(xml, {
       status: 200,
       headers: { 'Content-Type': 'text/xml; charset=utf-8' },
     })
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Error de red' }, { status: 502 })
+    const msg = err instanceof Error ? err.message : 'Error de red'
+    await logDealernetQuery({ kind: 'debug', rutNum: rut.num, rutDv: rut.dv, productCodes: products, success: false, fromCache: false, source: 'debug', error: msg })
+    return NextResponse.json({ error: msg }, { status: 502 })
   }
 }

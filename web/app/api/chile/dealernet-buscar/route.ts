@@ -5,7 +5,7 @@ import {
   dealernetRetcodeMessage,
   type BuscadorMultipleTipo,
 } from '@/lib/dealernet'
-import { getCachedBuscadorMultiple, saveBuscadorMultipleCache } from '@/lib/dealernet-cache'
+import { getCachedBuscadorMultiple, saveBuscadorMultipleCache, logDealernetQuery } from '@/lib/dealernet-cache'
 
 const VALID_TIPOS = new Set<string>(BUSCADOR_MULTIPLE_TIPOS)
 
@@ -33,11 +33,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'args requerido' }, { status: 400 })
   }
   const tipo = tipbusq as BuscadorMultipleTipo
+  const source = body?.source === 'ficha_catastro' ? 'ficha_catastro' : 'dealer'
 
   try {
     if (!force) {
       const cached = await getCachedBuscadorMultiple(tipo, args)
       if (cached) {
+        await logDealernetQuery({
+          kind: 'buscador_multiple', tipbusq: tipo, args, retcode: cached.retcode,
+          success: true, fromCache: true, candidatosN: cached.candidatos.length, source,
+        })
         return NextResponse.json({
           success: true,
           retcode: cached.retcode,
@@ -58,6 +63,10 @@ export async function POST(request: NextRequest) {
     // cuenta pueden arreglarse y la próxima consulta sí debe ir en vivo).
     const retcodeError = dealernetRetcodeMessage(result.retcode)
     if (retcodeError) {
+      await logDealernetQuery({
+        kind: 'buscador_multiple', tipbusq: tipo, args, retcode: result.retcode,
+        success: false, fromCache: false, source, error: retcodeError,
+      })
       return NextResponse.json(
         { success: false, error: `DealerNet: ${retcodeError}${result.retmsg ? ` (${result.retmsg})` : ''}`, retcode: result.retcode },
         { status: 502 }
@@ -65,6 +74,10 @@ export async function POST(request: NextRequest) {
     }
 
     await saveBuscadorMultipleCache(tipo, args, result)
+    await logDealernetQuery({
+      kind: 'buscador_multiple', tipbusq: tipo, args, retcode: result.retcode,
+      success: true, fromCache: false, candidatosN: result.candidatos.length, source,
+    })
 
     return NextResponse.json({
       success: true,
@@ -74,9 +87,8 @@ export async function POST(request: NextRequest) {
       from_cache: false,
     })
   } catch (error) {
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Error consultando DealerNet' },
-      { status: 502 }
-    )
+    const msg = error instanceof Error ? error.message : 'Error consultando DealerNet'
+    await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: tipo, args, success: false, fromCache: false, source, error: msg })
+    return NextResponse.json({ success: false, error: msg }, { status: 502 })
   }
 }
