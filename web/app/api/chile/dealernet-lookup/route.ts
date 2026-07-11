@@ -9,6 +9,7 @@ import {
   dealernetRetcodeMessage,
   type DealernetPhone,
 } from '@/lib/dealernet'
+import { getCachedContactByRut } from '@/lib/dealernet-cache'
 
 const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
 
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
   const siiComunaCode = body?.sii_comuna_code ? String(body.sii_comuna_code) : null
   const portalUrl = body?.portal_url ? String(body.portal_url).trim() : null
   const notes = body?.notes ? String(body.notes).trim() : null
+  const force = body?.force === true
 
   // product_codes: array of '3407'|'3408'|'3410' — defaults to all three
   const rawCodes = Array.isArray(body?.product_codes) ? body.product_codes : null
@@ -62,6 +64,39 @@ export async function POST(request: NextRequest) {
   }
   if (!isValidRut(rut)) {
     return NextResponse.json({ success: false, error: 'Dígito verificador no coincide' }, { status: 400 })
+  }
+
+  // Cada consulta a DealerNet tiene costo — si ya tenemos una respuesta
+  // exitosa guardada que cubre todos los productos pedidos, se reusa en vez
+  // de volver a golpear el web service. `force` (botón "Actualizar") salta
+  // este chequeo a propósito.
+  if (!force) {
+    const cached = await getCachedContactByRut(rut.num, rut.dv, productCodes)
+    if (cached) {
+      // sii_rol/sii_comuna_code de este contacto puede quedar corto si el
+      // mismo RUT ya se había guardado desde otra búsqueda — se completa acá
+      // para no perder la asociación rol↔propietario de esta ficha.
+      if (siiRol && siiComunaCode && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
+        await pool.query(
+          `UPDATE dealernet_contacts_cl SET sii_rol = COALESCE(sii_rol, $2), sii_comuna_code = COALESCE(sii_comuna_code, $3) WHERE id = $1`,
+          [cached.contact.id, siiRol, siiComunaCode]
+        )
+      }
+      return NextResponse.json({
+        success: true,
+        contact_id: cached.contact.id,
+        retcode: cached.contact.retcode,
+        retmsg: cached.contact.retmsg,
+        nombre_titular: cached.contact.nombre_titular,
+        phones: dedupePhones(cached.phones),
+        addresses: cached.addresses,
+        emails: cached.emails,
+        relacionados: cached.relacionados,
+        rut_num: rut.num,
+        rut_dv: rut.dv,
+        from_cache: true,
+      })
+    }
   }
 
   let lookup
@@ -86,7 +121,9 @@ export async function POST(request: NextRequest) {
          sii_rol = COALESCE(EXCLUDED.sii_rol, dealernet_contacts_cl.sii_rol),
          sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, dealernet_contacts_cl.sii_comuna_code),
          nombre_titular = COALESCE(EXCLUDED.nombre_titular, dealernet_contacts_cl.nombre_titular),
-         products_requested = EXCLUDED.products_requested,
+         products_requested = ARRAY(
+           SELECT DISTINCT unnest(dealernet_contacts_cl.products_requested || EXCLUDED.products_requested)
+         ),
          retcode = EXCLUDED.retcode,
          retmsg = EXCLUDED.retmsg,
          raw_response = EXCLUDED.raw_response,

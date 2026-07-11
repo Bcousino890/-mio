@@ -639,6 +639,16 @@ export function parseBuscadorMultipleResponse(xml: string): DealernetBuscadorMul
   }
 }
 
+// Para tipbusq="rol"/"direccion" el protocolo espera "valor, comuna" — si el
+// usuario pega texto con espacios dobles (ej. tras una coma) o espacios al
+// borde, el matching fuzzy de DealerNet para comuna puede no encontrar
+// coincidencia y devolver 0 candidatos sin que sea un error real de
+// DealerNet. Normalizamos espacios para no depender de que el usuario tipee
+// perfecto — y para tener una clave de caché estable en dealernet-buscar.
+export function normalizeBuscadorMultipleArgs(args: string): string {
+  return args.trim().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ')
+}
+
 export async function queryDealernetBuscadorMultiple(
   tipbusq: BuscadorMultipleTipo,
   args: string
@@ -647,13 +657,7 @@ export async function queryDealernetBuscadorMultiple(
   if (!user || !pass) {
     throw new Error('DEALERNET_USER / DEALERNET_PASSWORD no configurados en el entorno')
   }
-  // Para tipbusq="rol"/"direccion" el protocolo espera "valor, comuna" — si el
-  // usuario pega texto con espacios dobles (ej. tras una coma) o espacios al
-  // borde, el matching fuzzy de DealerNet para comuna puede no encontrar
-  // coincidencia y devolver 0 candidatos sin que sea un error real de
-  // DealerNet. Normalizamos espacios para no depender de que el usuario
-  // tipee perfecto.
-  const normalizedArgs = args.trim().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ')
+  const normalizedArgs = normalizeBuscadorMultipleArgs(args)
   const body = buildBuscadorMultipleXml(tipbusq, normalizedArgs, user, pass)
   const res = await fetch(DEALERNET_WSDL_URL, {
     method: 'POST',

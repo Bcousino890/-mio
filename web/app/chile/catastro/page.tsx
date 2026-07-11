@@ -431,7 +431,7 @@ export default function CatastroPage() {
   // Consulta DealerNet por RUT (producto según dealernetProducts, por defecto
   // solo Directorio Teléfonos) y guarda el resultado en BD para no repetir la
   // consulta cada vez que se abre la ficha.
-  const searchDealernet = useCallback((rutOverride?: string) => {
+  const searchDealernet = useCallback((rutOverride?: string, force = false) => {
     if (!selectedRol || !zone.siiCode) return
     const rut = (rutOverride ?? dealernetRutInput).trim()
     if (!rut || dealernetProducts.length === 0) return
@@ -440,7 +440,7 @@ export default function CatastroPage() {
     fetch('/api/chile/dealernet-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts }),
+      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts, force }),
     })
       .then(r => r.json())
       .then(d => {
@@ -498,8 +498,10 @@ export default function CatastroPage() {
   }, [selectedRol, zone.comuna, usarCandidatoDealernet])
 
   // Fetch contacto DealerNet ya guardado para este rol (cache — no vuelve a
-  // golpear el web service hasta que el usuario pida "Actualizar"). Si no hay
-  // nada cacheado, dispara el Buscador Múltiple por rol automáticamente.
+  // golpear el web service hasta que el usuario lo pida). A diferencia de TGR
+  // (scraping gratis de un sitio público), DealerNet cobra por consulta —
+  // Buscador Múltiple y Directorio Teléfonos NO se disparan solos al abrir la
+  // ficha, quedan detrás del botón "Buscar dueño (DealerNet)".
   useEffect(() => {
     setDealernetContact(null)
     setDealernetPhones([])
@@ -516,13 +518,11 @@ export default function CatastroPage() {
         if (d.success && d.contact) {
           setDealernetContact(d.contact)
           setDealernetPhones(d.phones ?? [])
-        } else {
-          buscarCandidatoPorRol()
         }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [selectedRol, zone.siiCode, buscarCandidatoPorRol])
+  }, [selectedRol, zone.siiCode])
 
   // Dispara la consulta automática al formulario de TGR (Certificado de Deuda)
   // para el rol seleccionado — reemplaza el flujo manual de abrir tesoreria.cl
@@ -1069,12 +1069,14 @@ export default function CatastroPage() {
                     </div>
 
                     {/* Propietario — el SII solo entrega el nombre (no RUT, no
-                        teléfono). Flujo automático (misma regla que /chile/dealer):
-                        Buscador Múltiple por rol (producto 3460) encuentra el RUT
-                        sin que el usuario lo escriba, y con ese RUT se pide de una
-                        vez Directorio Teléfonos (producto 3410, el más económico).
-                        El resultado se guarda en BD para no repetir la consulta
-                        cada vez que se abre la ficha. */}
+                        teléfono). Misma regla que /chile/dealer: Buscador Múltiple
+                        por rol (producto 3460) encuentra el RUT sin que el usuario lo
+                        escriba, y con ese RUT se pide de una vez Directorio Teléfonos
+                        (producto 3410, el más económico) — pero a diferencia de TGR
+                        (scraping gratis) esto consulta un servicio pago de DealerNet,
+                        así que queda detrás de un botón en vez de dispararse solo al
+                        abrir la ficha. El resultado se guarda en BD para no repetir la
+                        consulta la próxima vez. */}
                     <div>
                       <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Propietario</p>
                       <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 space-y-2.5">
@@ -1092,11 +1094,15 @@ export default function CatastroPage() {
                           </div>
                         )}
 
-                        {!dealernetContact && dealernetCandidatosLoading && (
-                          <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                            <RefreshCw size={11} className="animate-spin" />
-                            Buscando RUT por rol en DealerNet…
-                          </p>
+                        {!dealernetContact && (
+                          <button
+                            onClick={buscarCandidatoPorRol}
+                            disabled={dealernetCandidatosLoading}
+                            className="flex items-center gap-1.5 text-[11px] font-medium text-purple-400 hover:text-purple-300 disabled:opacity-40"
+                          >
+                            {dealernetCandidatosLoading ? <RefreshCw size={11} className="animate-spin" /> : <Search size={11} />}
+                            {dealernetCandidatosLoading ? 'Buscando RUT por rol…' : 'Buscar dueño por rol (DealerNet)'}
+                          </button>
                         )}
 
                         {dealernetCandidatosError && (
@@ -1185,10 +1191,10 @@ export default function CatastroPage() {
                             onChange={(e) => setDealernetRutInput(e.target.value)}
                             placeholder="RUT propietario, ej. 12.345.678-9"
                             className="flex-1 text-[11px] bg-slate-900/40 border border-slate-800/50 rounded-lg px-2 py-1.5 text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-slate-700"
-                            onKeyDown={(e) => { if (e.key === 'Enter') searchDealernet() }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') searchDealernet(undefined, !!dealernetContact) }}
                           />
                           <button
-                            onClick={() => searchDealernet()}
+                            onClick={() => searchDealernet(undefined, !!dealernetContact)}
                             disabled={dealernetLoading || !dealernetRutInput.trim() || dealernetProducts.length === 0}
                             className="flex items-center gap-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
                           >
