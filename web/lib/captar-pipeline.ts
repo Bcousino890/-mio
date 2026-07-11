@@ -33,6 +33,11 @@ import {
   DEFAULT_DEALERNET_PRODUCTS,
   type DealernetCandidato,
 } from '@/lib/dealernet'
+// Caché compartida con las API routes de DealerNet (/api/chile/dealernet-buscar
+// y /api/chile/dealernet-lookup) — sin esto, este pipeline volvía a golpear el
+// web service aunque el mismo rol/RUT ya se hubiera consultado desde la ficha
+// o desde /chile/dealer, duplicando el gasto.
+import { getCachedBuscadorMultiple, saveBuscadorMultipleCache, getCachedContactByRut } from '@/lib/dealernet-cache'
 
 // ─── Umbrales del match (regla pedida por el usuario: 90-95%+, ideal 100%) ───
 export const AUTO_CONFIRM_PROBABILITY = 0.92 // prob. mínima para auto-confirmar
@@ -998,9 +1003,11 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
 
   for (const attempt of attempts) {
     try {
-      const res = await queryDealernetBuscadorMultiple(attempt.tipo, attempt.args)
+      const cached = await getCachedBuscadorMultiple(attempt.tipo, attempt.args)
+      const res = cached ?? await queryDealernetBuscadorMultiple(attempt.tipo, attempt.args)
       const retErr = dealernetRetcodeMessage(res.retcode)
       if (retErr) { lastError = `DealerNet (${attempt.tipo}): ${retErr}`; continue }
+      if (!cached) await saveBuscadorMultipleCache(attempt.tipo, attempt.args, { ...res, raw: (res as any).raw ?? null })
       const withRut = res.candidatos.filter((x) => x.rut != null)
       allCandidates = allCandidates.concat(withRut)
       const scored = withRut
@@ -1044,53 +1051,77 @@ export async function finishDealernetByRut(
   rutDv: string,
   allCandidates: DealernetCandidato[] = [],
 ): Promise<DealernetStageResult> {
-  const lookup = await queryDealernet({ num: rutNum, dv: rutDv }, DEFAULT_DEALERNET_PRODUCTS)
-  const retErr = dealernetRetcodeMessage(lookup.retcode)
-  if (retErr) {
-    const { rows } = await pool.query(
-      `UPDATE captaciones_cl SET dealernet_status = 'error', dealernet_error = $2,
-         dealernet_consulted_at = now(), updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [c.id, `DealerNet: ${retErr}`],
-    )
-    return { captacion: rows[0] }
-  }
+  // Este mismo RUT puede ya estar guardado (ficha del rol en /chile/catastro,
+  // /chile/dealer, u otra captación) — reusar evita pagar la consulta de nuevo.
+  const cached = await getCachedContactByRut(rutNum, rutDv, DEFAULT_DEALERNET_PRODUCTS)
 
-  // Persistir en las tablas compartidas de DealerNet (cache reutilizable por
-  // /chile/duenos y /dealer)
-  try {
-    const contactRes = await pool.query(
-      `INSERT INTO dealernet_contacts_cl
-         (rut_num, rut_dv, sii_rol, sii_comuna_code, nombre_titular, products_requested, retcode, retmsg, raw_response, portal_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (rut_num, rut_dv) DO UPDATE SET
-         sii_rol = COALESCE(EXCLUDED.sii_rol, dealernet_contacts_cl.sii_rol),
-         sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, dealernet_contacts_cl.sii_comuna_code),
-         nombre_titular = COALESCE(EXCLUDED.nombre_titular, dealernet_contacts_cl.nombre_titular),
-         retcode = EXCLUDED.retcode, retmsg = EXCLUDED.retmsg,
-         raw_response = EXCLUDED.raw_response,
-         portal_url = COALESCE(EXCLUDED.portal_url, dealernet_contacts_cl.portal_url)
-       RETURNING id`,
-      [rutNum, rutDv, c.sii_rol, c.sii_comuna_code, lookup.nombreTitular, lookup.productsRequested,
-       lookup.retcode, lookup.retmsg, JSON.stringify(lookup.raw), c.source_url],
-    )
-    const contactId = contactRes.rows[0].id
-    for (const phone of lookup.phones) {
+  let phones: { phone_e164: string; clasificacion: string | null; categoria: string; ind_whatsapp: boolean | null; product_code: string; calidad: number | null }[]
+  let emails: { email: string; categoria: string; product_code: string }[]
+
+  if (cached) {
+    phones = cached.phones as any
+    emails = cached.emails as any
+    if (c.sii_rol && c.sii_comuna_code && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
       await pool.query(
-        `INSERT INTO dealernet_phones_cl
-           (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, relacion, ranking, calidad, product_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (contact_id, phone_e164, product_code) DO UPDATE SET
-           categoria = EXCLUDED.categoria, ranking = EXCLUDED.ranking, calidad = EXCLUDED.calidad`,
-        [contactId, phone.phone_e164, phone.phone_raw, phone.categoria, phone.clasificacion,
-         phone.ind_whatsapp, phone.idimagen, phone.relacion, phone.ranking, phone.calidad, phone.product_code],
+        `UPDATE dealernet_contacts_cl SET sii_rol = COALESCE(sii_rol, $2), sii_comuna_code = COALESCE(sii_comuna_code, $3) WHERE id = $1`,
+        [cached.contact.id, c.sii_rol, c.sii_comuna_code]
       )
     }
-  } catch {
-    // cache compartido es secundario — los teléfonos quedan igual en captaciones_cl
+  } else {
+    const lookup = await queryDealernet({ num: rutNum, dv: rutDv }, DEFAULT_DEALERNET_PRODUCTS)
+    const retErr = dealernetRetcodeMessage(lookup.retcode)
+    if (retErr) {
+      const { rows } = await pool.query(
+        `UPDATE captaciones_cl SET dealernet_status = 'error', dealernet_error = $2,
+           dealernet_consulted_at = now(), updated_at = now()
+         WHERE id = $1 RETURNING *`,
+        [c.id, `DealerNet: ${retErr}`],
+      )
+      return { captacion: rows[0] }
+    }
+
+    // Persistir en las tablas compartidas de DealerNet (cache reutilizable por
+    // /chile/duenos, /dealer, la ficha del rol y otras captaciones)
+    try {
+      const contactRes = await pool.query(
+        `INSERT INTO dealernet_contacts_cl
+           (rut_num, rut_dv, sii_rol, sii_comuna_code, nombre_titular, products_requested, retcode, retmsg, raw_response, portal_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (rut_num, rut_dv) DO UPDATE SET
+           sii_rol = COALESCE(EXCLUDED.sii_rol, dealernet_contacts_cl.sii_rol),
+           sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, dealernet_contacts_cl.sii_comuna_code),
+           nombre_titular = COALESCE(EXCLUDED.nombre_titular, dealernet_contacts_cl.nombre_titular),
+           products_requested = ARRAY(
+             SELECT DISTINCT unnest(dealernet_contacts_cl.products_requested || EXCLUDED.products_requested)
+           ),
+           retcode = EXCLUDED.retcode, retmsg = EXCLUDED.retmsg,
+           raw_response = EXCLUDED.raw_response,
+           portal_url = COALESCE(EXCLUDED.portal_url, dealernet_contacts_cl.portal_url)
+         RETURNING id`,
+        [rutNum, rutDv, c.sii_rol, c.sii_comuna_code, lookup.nombreTitular, lookup.productsRequested,
+         lookup.retcode, lookup.retmsg, JSON.stringify(lookup.raw), c.source_url],
+      )
+      const contactId = contactRes.rows[0].id
+      for (const phone of lookup.phones) {
+        await pool.query(
+          `INSERT INTO dealernet_phones_cl
+             (contact_id, phone_e164, phone_raw, categoria, clasificacion, ind_whatsapp, idimagen, relacion, ranking, calidad, product_code)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           ON CONFLICT (contact_id, phone_e164, product_code) DO UPDATE SET
+             categoria = EXCLUDED.categoria, ranking = EXCLUDED.ranking, calidad = EXCLUDED.calidad`,
+          [contactId, phone.phone_e164, phone.phone_raw, phone.categoria, phone.clasificacion,
+           phone.ind_whatsapp, phone.idimagen, phone.relacion, phone.ranking, phone.calidad, phone.product_code],
+        )
+      }
+    } catch {
+      // cache compartido es secundario — los teléfonos quedan igual en captaciones_cl
+    }
+
+    phones = lookup.phones
+    emails = lookup.emails
   }
 
-  const phonesJson = lookup.phones.map((p) => ({
+  const phonesJson = phones.map((p) => ({
     numero: p.phone_e164,
     tipo: p.clasificacion,
     categoria: p.categoria,
@@ -1098,7 +1129,7 @@ export async function finishDealernetByRut(
     fuente: p.product_code,
     calidad: p.calidad,
   }))
-  const emailsJson = lookup.emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
+  const emailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
 
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET

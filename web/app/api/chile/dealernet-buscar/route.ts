@@ -5,12 +5,15 @@ import {
   dealernetRetcodeMessage,
   type BuscadorMultipleTipo,
 } from '@/lib/dealernet'
+import { getCachedBuscadorMultiple, saveBuscadorMultipleCache } from '@/lib/dealernet-cache'
 
 const VALID_TIPOS = new Set<string>(BUSCADOR_MULTIPLE_TIPOS)
 
 // Buscador Múltiple (producto 3460): candidatos por nombre/empresa/teléfono/
-// dirección/rol/patente, sin RUT de antemano. No persiste en base — es un
-// paso previo para encontrar el RUT y luego usar /api/chile/dealernet-lookup.
+// dirección/rol/patente, sin RUT de antemano. Cada consulta a DealerNet tiene
+// costo, así que se cachea en dealernet_buscador_multiple_cl (ver
+// lib/dealernet-cache.ts y 0055_dealernet_buscador_multiple_cache) — la misma
+// caché la comparte el pipeline de captación (lib/captar-pipeline.ts).
 export async function POST(request: NextRequest) {
   let body: any
   try {
@@ -21,6 +24,7 @@ export async function POST(request: NextRequest) {
 
   const tipbusq = String(body?.tipbusq ?? '')
   const args = String(body?.args ?? '').trim()
+  const force = body?.force === true
 
   if (!VALID_TIPOS.has(tipbusq)) {
     return NextResponse.json({ success: false, error: 'tipbusq inválido' }, { status: 400 })
@@ -28,14 +32,30 @@ export async function POST(request: NextRequest) {
   if (!args) {
     return NextResponse.json({ success: false, error: 'args requerido' }, { status: 400 })
   }
+  const tipo = tipbusq as BuscadorMultipleTipo
 
   try {
-    const result = await queryDealernetBuscadorMultiple(tipbusq as BuscadorMultipleTipo, args)
+    if (!force) {
+      const cached = await getCachedBuscadorMultiple(tipo, args)
+      if (cached) {
+        return NextResponse.json({
+          success: true,
+          retcode: cached.retcode,
+          retmsg: cached.retmsg,
+          candidatos: cached.candidatos,
+          from_cache: true,
+        })
+      }
+    }
+
+    const result = await queryDealernetBuscadorMultiple(tipo, args)
 
     // DealerNet responde HTTP 200 aun cuando la consulta falló (credenciales,
     // cuenta no habilitada para el producto 3460, parámetro inválido, etc.) —
     // sin este chequeo, cualquier error se veía en la UI como "Sin candidatos
     // para esta búsqueda", indistinguible de una búsqueda real sin resultados.
+    // No se cachea un error: no es un resultado reutilizable (credenciales o
+    // cuenta pueden arreglarse y la próxima consulta sí debe ir en vivo).
     const retcodeError = dealernetRetcodeMessage(result.retcode)
     if (retcodeError) {
       return NextResponse.json(
@@ -44,11 +64,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    await saveBuscadorMultipleCache(tipo, args, result)
+
     return NextResponse.json({
       success: true,
       retcode: result.retcode,
       retmsg: result.retmsg,
       candidatos: result.candidatos,
+      from_cache: false,
     })
   } catch (error) {
     return NextResponse.json(
