@@ -7,7 +7,7 @@ import {
   Search, ChevronDown, ChevronLeft, ChevronRight,
   X, Database, Upload, MapPin, Building2, TrendingUp,
   BarChart3, RefreshCw, ExternalLink, Filter, Layers, ToggleRight, Clock,
-  Phone, MessageCircle, Landmark, Globe, Download, Bookmark, Trash2
+  Phone, MessageCircle, Landmark, Globe, Download, Bookmark, Trash2, Bell, Check
 } from 'lucide-react'
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
@@ -161,6 +161,9 @@ export default function CatastroPage() {
   // Zonas guardadas (watchlist local, localStorage — sin backend)
   const [savedZones, setSavedZones] = useState<{ id: string; name: string; zoneId: ZoneId; shape: DrawnShape; savedAt: string }[]>([])
   const [savedZonesOpen, setSavedZonesOpen] = useState(false)
+  // Watchlists de servidor (zonas seguidas con novedades de oferta)
+  const [watchlists, setWatchlists] = useState<any[]>([])
+  const [watchlistsOpen, setWatchlistsOpen] = useState(false)
   // Oferta: anuncios reales de listings_cl (pipeline Portal Inmobiliario)
   const [ofertaListings, setOfertaListings] = useState<any[]>([])
   const [ofertaLoading, setOfertaLoading] = useState(false)
@@ -177,6 +180,8 @@ export default function CatastroPage() {
   const [ventasTotalPages, setVentasTotalPages] = useState(1)
   // Historial de ventas CBR del rol seleccionado (ficha)
   const [rolVentas, setRolVentas] = useState<any[] | null>(null)
+  // Import CSV de transacciones (estado vacío de la pestaña Ventas)
+  const [ventasImport, setVentasImport] = useState<{ loading: boolean; msg: string | null }>({ loading: false, msg: null })
   // Valoración automática (AVM v1) por comparables de oferta
   const [avm, setAvm] = useState<any>(null)
 
@@ -642,6 +647,71 @@ export default function CatastroPage() {
     setDrawnShape(z.shape)
     setSavedZonesOpen(false)
   }, [zoneId])
+
+  // Watchlists de servidor: cargar y refrescar novedades
+  const fetchWatchlists = useCallback(() => {
+    fetch('/api/chile/watchlists')
+      .then(r => r.json())
+      .then(d => { if (d.success) setWatchlists(d.data ?? []) })
+      .catch(() => {})
+  }, [])
+  useEffect(() => { fetchWatchlists() }, [fetchWatchlists])
+
+  const followCurrentZone = useCallback(() => {
+    if (!drawnShape || !zone.siiCode) return
+    const name = window.prompt('Nombre de la zona a seguir', `${zone.label} · seguimiento`)
+    if (!name?.trim()) return
+    fetch('/api/chile/watchlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), sii_comuna_code: zone.siiCode, shape: drawnShape }),
+    })
+      .then(r => r.json())
+      .then(d => { if (d.success) { fetchWatchlists(); setWatchlistsOpen(true) } })
+      .catch(() => {})
+  }, [drawnShape, zone.siiCode, zone.label, fetchWatchlists])
+
+  const loadWatchlist = useCallback((w: any) => {
+    const wz = ZONES.find(z => z.siiCode === w.sii_comuna_code)
+    if (wz && wz.id !== zoneId) { setZoneId(wz.id); setSelectedRol(null) }
+    setDrawnShape(w.shape as DrawnShape)
+    setWatchlistsOpen(false)
+  }, [zoneId])
+
+  const markWatchlistSeen = useCallback((id: string) => {
+    fetch('/api/chile/watchlists', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).then(() => fetchWatchlists()).catch(() => {})
+  }, [fetchWatchlists])
+
+  const deleteWatchlist = useCallback((id: string) => {
+    fetch(`/api/chile/watchlists?id=${id}`, { method: 'DELETE' }).then(() => fetchWatchlists()).catch(() => {})
+  }, [fetchWatchlists])
+
+  const totalNovedades = useMemo(() => watchlists.reduce((s, w) => s + (w.novedades ?? 0), 0), [watchlists])
+
+  // Subir CSV de compraventas al importador (pestaña Ventas)
+  const uploadVentasCsv = useCallback((file: File) => {
+    setVentasImport({ loading: true, msg: null })
+    fetch('/api/admin/transacciones-upload', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: file })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setVentasImport({ loading: false, msg: `Importadas ${d.inserted} filas${d.skipped ? ` (${d.skipped} omitidas)` : ''}.` })
+          setVentasPage(1)
+          // recargar la lista de la pestaña
+          if (zone.siiCode) {
+            fetch(`/api/chile/sii-transacciones?sii_comuna_code=${zone.siiCode}&page=1&page_size=50`)
+              .then(r => r.json()).then(dd => { if (dd.success) { setVentasList(dd.data ?? []); setVentasTotal(dd.total ?? 0); setVentasTotalPages(dd.total_pages ?? 1) } }).catch(() => {})
+          }
+        } else {
+          setVentasImport({ loading: false, msg: `Error: ${d.error ?? 'no se pudo importar'}` })
+        }
+      })
+      .catch(() => setVentasImport({ loading: false, msg: 'Error de red al importar' }))
+  }, [zone.siiCode])
 
   // Export CSV de los roles de la zona dibujada (separador ; + BOM para Excel es-CL)
   const exportZoneCsv = useCallback(() => {
@@ -1691,7 +1761,20 @@ export default function CatastroPage() {
                   <Clock size={32} className="text-slate-700" />
                   <div className="max-w-xs">
                     <p className="text-sm font-medium text-slate-500 mb-1">Sin transacciones cargadas para {zone.label}</p>
-                    <p className="text-xs text-slate-700">Las compraventas provienen del Conservador de Bienes Raíces (dataset CSV por jurisdicción). La tabla <span className="font-mono">sii_transacciones_cl</span> ya existe — falta importar el dataset de esta comuna (ETL migración 0030).</p>
+                    <p className="text-xs text-slate-700 mb-3">Las compraventas provienen del Conservador de Bienes Raíces (no hay CSV público; se cargan desde un proveedor comercial o ETL propio). Importa un CSV para poblar <span className="font-mono">sii_transacciones_cl</span>.</p>
+                    <label className="inline-flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg transition-colors cursor-pointer">
+                      <Upload size={12} />
+                      {ventasImport.loading ? 'Importando…' : 'Importar CSV de compraventas'}
+                      <input
+                        type="file"
+                        accept=".csv,text/csv"
+                        className="hidden"
+                        disabled={ventasImport.loading}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) uploadVentasCsv(f); e.target.value = '' }}
+                      />
+                    </label>
+                    {ventasImport.msg && <p className="text-[11px] text-slate-500 mt-2">{ventasImport.msg}</p>}
+                    <p className="text-[10px] text-slate-700 mt-2">Columnas: sii_comuna_code, rol, fecha_escritura, monto_clp, monto_uf, superficie_m2, foja_numero_anio, cbr_nombre.</p>
                   </div>
                 </div>
               ) : (
@@ -1787,14 +1870,29 @@ export default function CatastroPage() {
             ))}
             {savedZones.length > 0 && (
               <button
-                onClick={() => setSavedZonesOpen(v => !v)}
+                onClick={() => { setSavedZonesOpen(v => !v); setWatchlistsOpen(false) }}
                 className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors ${
                   savedZonesOpen ? 'bg-cyan-700 text-white' : 'text-cyan-300 hover:bg-white/10'
                 }`}
-                title="Zonas guardadas"
+                title="Zonas guardadas (este navegador)"
               >
                 <Bookmark size={11} />
                 {savedZones.length}
+              </button>
+            )}
+            {watchlists.length > 0 && (
+              <button
+                onClick={() => { setWatchlistsOpen(v => !v); setSavedZonesOpen(false) }}
+                className={`relative flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors ${
+                  watchlistsOpen ? 'bg-amber-600 text-white' : 'text-amber-300 hover:bg-white/10'
+                }`}
+                title="Zonas seguidas (servidor)"
+              >
+                <Bell size={11} />
+                {watchlists.length}
+                {totalNovedades > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">{totalNovedades}</span>
+                )}
               </button>
             )}
           </div>
@@ -1826,6 +1924,49 @@ export default function CatastroPage() {
             </div>
           )}
 
+          {/* Dropdown de zonas seguidas (watchlists de servidor) */}
+          {watchlistsOpen && watchlists.length > 0 && (
+            <div className="absolute top-12 right-3 z-[1000] w-72 rounded-xl bg-black/80 backdrop-blur border border-white/10 overflow-hidden">
+              <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-white/70 border-b border-white/10">Zonas seguidas · novedades de oferta</p>
+              <div className="max-h-60 overflow-y-auto">
+                {watchlists.map(w => {
+                  const wz = ZONES.find(z => z.siiCode === w.sii_comuna_code)
+                  return (
+                    <div key={w.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 transition-colors">
+                      <button onClick={() => loadWatchlist(w)} className="flex-1 min-w-0 text-left">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-[11px] font-medium text-white truncate">{w.name}</p>
+                          {w.novedades > 0 && (
+                            <span className="flex-shrink-0 text-[9px] font-bold text-white bg-red-500 rounded-full px-1.5">+{w.novedades}</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                          {wz?.label ?? w.sii_comuna_code} · {w.current_listings} anuncios · {w.baseline_roles} roles
+                        </p>
+                      </button>
+                      {w.novedades > 0 && (
+                        <button
+                          onClick={() => markWatchlistSeen(w.id)}
+                          className="text-slate-400 hover:text-emerald-400 transition-colors flex-shrink-0"
+                          title="Marcar como visto (poner el contador de novedades a cero)"
+                        >
+                          <Check size={13} />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteWatchlist(w.id)}
+                        className="text-slate-500 hover:text-red-400 transition-colors flex-shrink-0"
+                        title="Dejar de seguir"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Panel de zona dibujada (farming) */}
           {drawnShape && (
             <div className="absolute bottom-8 right-3 z-[1000] w-72 rounded-xl bg-black/75 backdrop-blur border border-white/10 overflow-hidden">
@@ -1835,10 +1976,18 @@ export default function CatastroPage() {
                 <button
                   onClick={saveCurrentZone}
                   className="flex items-center gap-1 text-[10px] font-semibold text-cyan-300 hover:text-cyan-200 transition-colors"
-                  title="Guardar esta zona para volver a cargarla después"
+                  title="Guardar esta zona en este navegador"
                 >
                   <Bookmark size={11} />
                   Guardar
+                </button>
+                <button
+                  onClick={followCurrentZone}
+                  className="flex items-center gap-1 text-[10px] font-semibold text-amber-300 hover:text-amber-200 transition-colors"
+                  title="Seguir esta zona en el servidor (novedades de oferta para el equipo)"
+                >
+                  <Bell size={11} />
+                  Seguir
                 </button>
                 <button
                   onClick={() => setDrawnShape(null)}
