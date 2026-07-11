@@ -42,7 +42,34 @@ Si en algún momento se decide no asumir este riesgo, basta con dejar de
 correr el scraper y de llamar a `ingest-sii-mapasui.mjs`; el resto del
 sistema sigue funcionando igual con `sii_roles_cl`.
 
-## Cómo correrlo
+## Operación 24/7 — cola de comunas, velocidad y botón de relanzamiento
+
+El objetivo operativo es **scrapear sin pausas y sin caerse**. Tres piezas:
+
+1. **Cola de comunas (`comunas-queue.json`)** — `run-sii-mapasui.sh` recorre
+   las comunas en orden, una tras otra: al terminar Las Condes arranca sola con
+   Vitacura, y así con las que agregues a la cola. Cada comuna terminada deja
+   `output/.complete-<code>`; un relanzamiento salta las completas y retoma la
+   primera pendiente **desde sus checkpoints** (no reinicia). Al completar toda
+   la cola escribe `output/.sii-mapasui-complete`.
+
+2. **Proxies a full** — defaults `SII_RPS=8` y `SII_CONCURRENCY=8` (antes 2/2),
+   apoyados en el proxy residencial rotable (SmartProxy CL, IP por sesión). Si
+   el WAF empieza a devolver 403/429 sostenidos, **bajar** estos valores: ir
+   demasiado rápido provoca bloqueos largos que estancan el 24/7.
+
+3. **Botón de (re)lanzamiento** — editar/pushear
+   `scraper/sii-scraper/.launch-sii-mapasui` en `main` dispara
+   `scrape-sii-mapasui.yml`, que mata el scrape en curso y relanza en modo cola
+   (continúa donde quedó). No hace falta apretarlo para caídas normales: el
+   **watchdog** (`ingest-sii-mapasui-now.yml`, cada 30 min) ya relanza solo si
+   el proceso murió o se colgó ≥6 h. El botón es para forzar el relanzamiento de
+   inmediato o reanudar tras un incidente mayor.
+
+Para forzar **una sola comuna** (ignorando la cola), usar el `workflow_dispatch`
+de `scrape-sii-mapasui.yml` con el input `comuna_code` (vacío = cola).
+
+## Cómo correrlo (manual, una comuna)
 
 ```bash
 cd scraper/sii-scraper

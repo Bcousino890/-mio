@@ -90,10 +90,14 @@ jobs:
             fi
 
             if [ -n "$necesita_relanzar" ]; then
-              # Mismos parámetros que la corrida original si quedaron en disco.
+              # Velocidad de la corrida original si quedó en disco (RPS/concurrencia).
+              # NO se fija SII_COMUNA_CODE: run-sii-mapasui.sh cae en modo COLA y
+              # retoma la primera comuna pendiente de comunas-queue.json desde sus
+              # checkpoints (salta las ya marcadas .complete-<code>), de modo que
+              # el relanzamiento continúa hacia Vitacura sin intervención humana.
               if [ -f "$OUT/.sii-mapasui-params" ]; then
                 set -a; source "$OUT/.sii-mapasui-params"; set +a
-                echo "  (params: comuna ${SII_COMUNA_NOMBRE:-?} ${SII_COMUNA_CODE:-?})"
+                echo "  (params: ${SII_RPS:-?} rps × ${SII_CONCURRENCY:-?} · modo cola)"
               fi
               mkdir -p scraper/output
               chmod +x scraper/sii-scraper/run-sii-mapasui.sh

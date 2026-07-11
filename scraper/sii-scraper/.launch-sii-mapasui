@@ -1,28 +1,38 @@
-Archivo centinela: cada push a este archivo (en main) dispara
-.github/workflows/scrape-sii-mapasui.yml, que SSHea al VPS y lanza
-run-sii-mapasui.sh en background (scraper de predios del SII → ingesta en
-sii_mapasui_predios_cl).
+╔══════════════════════════════════════════════════════════════════════════╗
+║  BOTÓN DE (RE)LANZAMIENTO DEL SCRAPE SII                                    ║
+╚══════════════════════════════════════════════════════════════════════════╝
 
-⚠ El workflow MATA cualquier scrape SII en curso antes de relanzar (paso
-"Matar scrape SII anterior"), así que pushear este centinela reinicia la
-corrida — sin pérdida grave: ambas etapas reanudan desde los checkpoints de
-output/checkpoints/. No pushear por accidente.
+Cómo apretar el botón: edita este archivo (agrega una línea al historial de
+abajo) y haz push a main. Ese push dispara
+.github/workflows/scrape-sii-mapasui.yml, que SSHea al VPS, MATA cualquier
+scrape SII en curso y relanza run-sii-mapasui.sh en background.
 
-Para apuntar a otra comuna o cambiar la etapa de descubrimiento, usar el botón
-"Run workflow" (workflow_dispatch) con los inputs comuna_code / comuna_nombre /
-manzanas_stage, o editar los defaults del workflow antes de pushear el centinela.
+Qué hace el relanzamiento (modo COLA, por defecto):
+- Recorre scraper/sii-scraper/comunas-queue.json en orden (Las Condes →
+  Vitacura → …) SIN pausas: al terminar una comuna arranca sola con la
+  siguiente.
+- Retoma desde los checkpoints de output/checkpoints/ y salta las comunas ya
+  terminadas (marcador output/.complete-<code>), así que apretar el botón tras
+  una falla CONTINÚA donde quedó, no reinicia desde cero.
+- Usa los proxies a full (rps/concurrency altos por defecto en
+  run-sii-mapasui.sh).
+
+No hace falta apretar el botón para recuperarse de una caída normal: el
+watchdog (.github/workflows/ingest-sii-mapasui-now.yml, cada 30 min) ya relanza
+solo si el proceso murió o se colgó. Este botón es para forzar el relanzamiento
+de inmediato (sin esperar al cron) o para reanudar tras un incidente mayor.
+
+Forzar UNA sola comuna (ignora la cola): usar el botón "Run workflow"
+(workflow_dispatch) con el input comuna_code (+ comuna_nombre). Vacío = cola.
 
 Historial de lanzamientos:
 - 2026-07-04 — primer lanzamiento: Las Condes (15108), etapa manzanas-geo,
   ritmo anti-429 rps=2/concurrency=2. Ingesta a sii_mapasui_predios_cl.
-- 2026-07-07 — relanzamiento: Las Condes (15108), mismos parámetros. La
-  corrida anterior perdió su output/ y venv/ a mitad de camino: el rsync
-  --delete de los deploys del 5-7 de julio los borraba en cada deploy (no
-  estaban excluidos). Corregido en deploy.yml antes de relanzar; además el
-  ingest ya no revienta con ENOENT si no hay predios que ingestar.
-- 2026-07-08 — relanzamiento: Las Condes (15108), mismos parámetros. La
-  corrida del 7 de julio seguía viva pero ejecutaba el script anterior a la
-  ingesta incremental (#119), así que la BD no recibía lotes desde la ingesta
-  manual de las 02:35. El relanzamiento toma run-sii-mapasui.sh actual (ya
-  desplegado en el VPS) y reanuda desde los checkpoints de manzanas/predios,
-  con ingesta a sii_mapasui_predios_cl cada 10 min.
+- 2026-07-07 — relanzamiento: Las Condes (15108). El rsync --delete de los
+  deploys borraba output/ y venv/; corregido en deploy.yml antes de relanzar.
+- 2026-07-08 — relanzamiento: Las Condes (15108). La corrida previa ejecutaba
+  el script anterior a la ingesta incremental (#119); el relanzamiento toma el
+  script actual y reanuda desde los checkpoints.
+- 2026-07-11 — modo COLA + proxies a full: run-sii-mapasui.sh ahora recorre
+  comunas-queue.json (Las Condes → Vitacura) sin pausas, rps/concurrency=8 por
+  defecto. Apretar este botón relanza la cola retomando desde el checkpoint.
