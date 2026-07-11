@@ -36,3 +36,6 @@ Historial de lanzamientos:
 - 2026-07-11 — modo COLA + proxies a full: run-sii-mapasui.sh ahora recorre
   comunas-queue.json (Las Condes → Vitacura) sin pausas, rps/concurrency=8 por
   defecto. Apretar este botón relanza la cola retomando desde el checkpoint.
+- 2026-07-11 — relanzamiento determinista post-merge #132: el lanzamiento del
+  merge corrió mientras el deploy aún sincronizaba (pudo tomar el script viejo).
+  Este push relanza con el script nuevo ya en disco, en modo cola.
