@@ -13,15 +13,15 @@ on:
   workflow_dispatch:
     inputs:
       comuna_code:
-        description: "Código SII de la comuna (ej. 15108 Las Condes, 15160 Vitacura)"
+        description: "Forzar UNA comuna (código SII). VACÍO = recorrer la cola comunas-queue.json (Las Condes → Vitacura → …)"
         required: false
-        default: "15108"
+        default: ""
       comuna_nombre:
-        description: "Nombre de la comuna (para el slug de salida)"
+        description: "Nombre de la comuna (solo si forzás una; para el slug de salida)"
         required: false
-        default: "Las Condes"
+        default: ""
       manzanas_stage:
-        description: "Etapa de descubrimiento de manzanas"
+        description: "Etapa de descubrimiento (solo modo una-comuna)"
         required: false
         default: "manzanas-geo"
         type: choice
@@ -68,8 +68,12 @@ jobs:
             cd /opt/casafari
             mkdir -p scraper/output
             chmod +x scraper/sii-scraper/run-sii-mapasui.sh
-            export SII_COMUNA_CODE="${{ github.event.inputs.comuna_code || '15108' }}"
-            export SII_COMUNA_NOMBRE="${{ github.event.inputs.comuna_nombre || 'Las Condes' }}"
+            # SII_COMUNA_CODE vacío (push al centinela / dispatch sin input) =>
+            # modo COLA: run-sii-mapasui.sh recorre comunas-queue.json solo
+            # (Las Condes → Vitacura → …). Solo se fuerza una comuna si el
+            # dispatch manual la especificó.
+            export SII_COMUNA_CODE="${{ github.event.inputs.comuna_code }}"
+            export SII_COMUNA_NOMBRE="${{ github.event.inputs.comuna_nombre }}"
             export SII_MANZANAS_STAGE="${{ github.event.inputs.manzanas_stage || 'manzanas-geo' }}"
             nohup bash scraper/sii-scraper/run-sii-mapasui.sh \
               > "scraper/output/launch-sii-mapasui-\$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &

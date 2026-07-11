@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Cola de comunas que run-sii-mapasui.sh scrapea en orden, una tras otra,",
+    "SIN pausas: al terminar una comuna (todos sus predios ingestados) el",
+    "mismo proceso arranca la siguiente automáticamente. Esto es lo que hace",
+    "que 'al terminar Las Condes siga con Vitacura' sin intervención humana.",
+    "",
+    "Cada comuna se marca completa con output/.complete-<code>; una relanzada",
+    "(por el watchdog o por el botón .launch-sii-mapasui) salta las ya",
+    "completas y retoma la primera pendiente desde sus checkpoints. Cuando",
+    "TODAS están completas se escribe output/.sii-mapasui-complete y el",
+    "watchdog deja de relanzar.",
+    "",
+    "stage: 'manzanas-geo' (descubrimiento geográfico, robusto para comunas de",
+    "manzanas dispersas en IDs altos como Vitacura) o 'manzanas' (enumeración).",
+    "Para agregar más comunas, añade objetos aquí; el orden es el de scrapeo.",
+    "Los códigos SII se descubren con la etapa 'regiones' (ver README.md)."
+  ],
+  "comunas": [
+    { "code": "15108", "nombre": "Las Condes", "stage": "manzanas-geo" },
+    { "code": "15160", "nombre": "Vitacura", "stage": "manzanas-geo" }
+  ]
+}
