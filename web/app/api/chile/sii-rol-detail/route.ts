@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
-import { normalizeClRol } from '@/lib/sii-catastro-ingest'
+import { normalizeClRol } from '@/lib/rol-format'
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams

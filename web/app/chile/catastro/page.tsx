@@ -12,7 +12,7 @@ import {
 import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
 import { formatCLP, formatUF, getUFValue } from '@/lib/currency-formatter'
 import { DESTINO_LABELS, MATERIAL_LABELS, CALIDAD_LABELS } from '@/lib/sii-labels'
-import { normalizeClRol } from '@/lib/sii-catastro-ingest'
+import { normalizeClRol } from '@/lib/rol-format'
 import SurfaceDistributionBar from '@/components/SurfaceDistributionBar'
 
 // Mapa unificado (ex Visor Catastral /chile/street): satélite de Google con
@@ -131,13 +131,16 @@ export default function CatastroPage() {
   const [dealernetRutInput, setDealernetRutInput] = useState('')
   // Default: solo directorio teléfonos (más barato); usuario puede añadir más
   const [dealernetProducts, setDealernetProducts] = useState<string[]>(['3410'])
+  // Buscador Múltiple (DealerNet, producto 3460) por rol — candidatos a RUT
+  // sin que el usuario tenga que escribirlo a mano (misma regla que
+  // /chile/dealer: candidato → RUT → Directorio Teléfonos de una vez)
+  const [dealernetCandidatos, setDealernetCandidatos] = useState<any[] | null>(null)
+  const [dealernetCandidatosLoading, setDealernetCandidatosLoading] = useState(false)
+  const [dealernetCandidatosError, setDealernetCandidatosError] = useState<string | null>(null)
   // TGR — certificado de deuda + nombre del dueño, consulta automática on-demand
   const [tgrCert, setTgrCert] = useState<any>(null)
   const [tgrLoading, setTgrLoading] = useState(false)
   const [tgrError, setTgrError] = useState<string | null>(null)
-  const [tgrCandidatos, setTgrCandidatos] = useState<any[] | null>(null)
-  const [tgrCandidatosLoading, setTgrCandidatosLoading] = useState(false)
-  const [tgrCandidatosError, setTgrCandidatosError] = useState<string | null>(null)
   // Building units state
   const [buildingUnits, setBuildingUnits] = useState<any[]>([])
   const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
@@ -425,24 +428,101 @@ export default function CatastroPage() {
     }
   }, [ofertaListings])
 
+  // Consulta DealerNet por RUT (producto según dealernetProducts, por defecto
+  // solo Directorio Teléfonos) y guarda el resultado en BD para no repetir la
+  // consulta cada vez que se abre la ficha.
+  const searchDealernet = useCallback((rutOverride?: string) => {
+    if (!selectedRol || !zone.siiCode) return
+    const rut = (rutOverride ?? dealernetRutInput).trim()
+    if (!rut || dealernetProducts.length === 0) return
+    setDealernetLoading(true)
+    setDealernetError(null)
+    fetch('/api/chile/dealernet-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          setDealernetContact({ nombre_titular: d.nombre_titular, retcode: d.retcode, retmsg: d.retmsg })
+          setDealernetPhones(d.phones ?? [])
+        } else {
+          setDealernetError(d.error ?? 'Error al obtener datos del dueño')
+        }
+      })
+      .catch(() => setDealernetError('Error de red al obtener datos del dueño'))
+      .finally(() => setDealernetLoading(false))
+  }, [selectedRol, zone.siiCode, dealernetRutInput, dealernetProducts])
+
+  // Al elegir un candidato no basta con copiar el RUT al formulario: el flujo
+  // completo es candidato → RUT → solicitud de teléfonos de una vez (misma
+  // regla que /chile/dealer, componente DuenoLookup).
+  const usarCandidatoDealernet = useCallback((c: any) => {
+    if (c.rut == null || !c.dv) return
+    const rutStr = `${c.rut}-${c.dv}`
+    setDealernetRutInput(rutStr)
+    searchDealernet(rutStr)
+  }, [searchDealernet])
+
+  // Buscador Múltiple (DealerNet, producto 3460) por rol — mismo protocolo
+  // que /chile/dealer para tipbusq="rol": args="manzana-predio, Comuna".
+  // Encuentra el RUT del propietario sin que el usuario lo escriba a mano.
+  // Si hay un único candidato con RUT, se usa automático (candidato → RUT →
+  // Directorio Teléfonos, sin esperar clic); si hay varios, se listan para
+  // que el usuario elija.
+  const buscarCandidatoPorRol = useCallback(() => {
+    if (!selectedRol || !zone.comuna) return
+    setDealernetCandidatosLoading(true)
+    setDealernetCandidatosError(null)
+    setDealernetCandidatos(null)
+    fetch('/api/chile/dealernet-buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipbusq: 'rol', args: `${selectedRol.rol}, ${zone.comuna}` }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.success) {
+          setDealernetCandidatosError(d.error ?? 'Error al buscar candidatos')
+          return
+        }
+        const candidatos = d.candidatos ?? []
+        setDealernetCandidatos(candidatos)
+        if (candidatos.length === 1 && candidatos[0].rut != null && candidatos[0].dv) {
+          usarCandidatoDealernet(candidatos[0])
+        }
+      })
+      .catch(() => setDealernetCandidatosError('Error de red al buscar candidatos'))
+      .finally(() => setDealernetCandidatosLoading(false))
+  }, [selectedRol, zone.comuna, usarCandidatoDealernet])
+
   // Fetch contacto DealerNet ya guardado para este rol (cache — no vuelve a
-  // golpear el web service hasta que el usuario pida "Actualizar")
+  // golpear el web service hasta que el usuario pida "Actualizar"). Si no hay
+  // nada cacheado, dispara el Buscador Múltiple por rol automáticamente.
   useEffect(() => {
     setDealernetContact(null)
     setDealernetPhones([])
     setDealernetError(null)
     setDealernetRutInput('')
+    setDealernetCandidatos(null)
+    setDealernetCandidatosError(null)
     if (!selectedRol || !zone.siiCode) return
+    let cancelled = false
     fetch(`/api/chile/dealernet-lookup?sii_rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
       .then(r => r.json())
       .then(d => {
+        if (cancelled) return
         if (d.success && d.contact) {
           setDealernetContact(d.contact)
           setDealernetPhones(d.phones ?? [])
+        } else {
+          buscarCandidatoPorRol()
         }
       })
       .catch(() => {})
-  }, [selectedRol, zone.siiCode])
+    return () => { cancelled = true }
+  }, [selectedRol, zone.siiCode, buscarCandidatoPorRol])
 
   // Dispara la consulta automática al formulario de TGR (Certificado de Deuda)
   // para el rol seleccionado — reemplaza el flujo manual de abrir tesoreria.cl
@@ -478,8 +558,6 @@ export default function CatastroPage() {
   useEffect(() => {
     setTgrCert(null)
     setTgrError(null)
-    setTgrCandidatos(null)
-    setTgrCandidatosError(null)
     if (!selectedRol || !zone.siiCode) return
     let cancelled = false
     fetch(`/api/chile/tgr-lookup?rol=${encodeURIComponent(selectedRol.rol)}&sii_comuna_code=${zone.siiCode}`)
@@ -495,61 +573,6 @@ export default function CatastroPage() {
       .catch(() => {})
     return () => { cancelled = true }
   }, [selectedRol, zone.siiCode, consultarTgrAhora])
-
-  // Con el nombre que entregó TGR, busca candidatos a RUT en DealerNet
-  // (Buscador Múltiple, tipbusq=nombre) para completar automáticamente el
-  // campo de RUT y poder pedir teléfono/contactabilidad sin escribir nada.
-  const buscarContactoPorNombreTgr = useCallback(() => {
-    const nombre = tgrCert?.nombre?.trim()
-    if (!nombre) return
-    setTgrCandidatosLoading(true)
-    setTgrCandidatosError(null)
-    setTgrCandidatos(null)
-    fetch('/api/chile/dealernet-buscar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tipbusq: 'nombre', args: nombre }),
-    })
-      .then(r => r.json())
-      .then(d => {
-        if (!d.success) {
-          setTgrCandidatosError(d.error ?? 'Error al buscar candidatos')
-          return
-        }
-        setTgrCandidatos(d.candidatos ?? [])
-      })
-      .catch(() => setTgrCandidatosError('Error de red al buscar candidatos'))
-      .finally(() => setTgrCandidatosLoading(false))
-  }, [tgrCert])
-
-  const usarCandidatoTgr = useCallback((c: any) => {
-    if (c.rut == null || !c.dv) return
-    setDealernetRutInput(`${c.rut}-${c.dv}`)
-  }, [])
-
-  const searchDealernet = useCallback((rutOverride?: string) => {
-    if (!selectedRol || !zone.siiCode) return
-    const rut = (rutOverride ?? dealernetRutInput).trim()
-    if (!rut || dealernetProducts.length === 0) return
-    setDealernetLoading(true)
-    setDealernetError(null)
-    fetch('/api/chile/dealernet-lookup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rut, sii_rol: selectedRol.rol, sii_comuna_code: zone.siiCode, product_codes: dealernetProducts }),
-    })
-      .then(r => r.json())
-      .then(d => {
-        if (d.success) {
-          setDealernetContact({ nombre_titular: d.nombre_titular, retcode: d.retcode, retmsg: d.retmsg })
-          setDealernetPhones(d.phones ?? [])
-        } else {
-          setDealernetError(d.error ?? 'Error al obtener datos del dueño')
-        }
-      })
-      .catch(() => setDealernetError('Error de red al obtener datos del dueño'))
-      .finally(() => setDealernetLoading(false))
-  }, [selectedRol, zone.siiCode, dealernetRutInput, dealernetProducts])
 
   // Fetch building units when user clicks "Ver departamentos"
   const loadBuildingUnits = useCallback((rolPadre: string) => {
@@ -1046,11 +1069,12 @@ export default function CatastroPage() {
                     </div>
 
                     {/* Propietario — el SII solo entrega el nombre (no RUT, no
-                        teléfono). Para contactabilidad se consulta DealerNet por RUT
-                        (ingresado a mano, ya que no hay búsqueda inversa por dirección
-                        en su protocolo) y el resultado se guarda en BD para no repetir
-                        la consulta cada vez que se abre la ficha. El Certificado de TGR
-                        sigue de fallback manual (su formulario tiene reCAPTCHA). */}
+                        teléfono). Flujo automático (misma regla que /chile/dealer):
+                        Buscador Múltiple por rol (producto 3460) encuentra el RUT
+                        sin que el usuario lo escriba, y con ese RUT se pide de una
+                        vez Directorio Teléfonos (producto 3410, el más económico).
+                        El resultado se guarda en BD para no repetir la consulta
+                        cada vez que se abre la ficha. */}
                     <div>
                       <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Propietario</p>
                       <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] px-3 py-2.5 space-y-2.5">
@@ -1066,6 +1090,49 @@ export default function CatastroPage() {
                             <p className="text-[10px] text-slate-600">Titular</p>
                             <p className="text-[11px] text-slate-300 font-medium">{dealernetContact.nombre_titular}</p>
                           </div>
+                        )}
+
+                        {!dealernetContact && dealernetCandidatosLoading && (
+                          <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                            <RefreshCw size={11} className="animate-spin" />
+                            Buscando RUT por rol en DealerNet…
+                          </p>
+                        )}
+
+                        {dealernetCandidatosError && (
+                          <p className="text-[11px] text-red-400">{dealernetCandidatosError}</p>
+                        )}
+
+                        {!dealernetContact && dealernetCandidatos && (
+                          dealernetCandidatos.length === 0 ? (
+                            <p className="text-[11px] text-slate-600">Sin candidatos por rol en DealerNet — ingresa el RUT a mano abajo.</p>
+                          ) : (
+                            <div className="space-y-1">
+                              <p className="text-[10px] text-slate-600">Candidatos (Buscador Múltiple, rol)</p>
+                              {dealernetCandidatos.map((c: any, i: number) => (
+                                <button
+                                  key={i}
+                                  onClick={() => usarCandidatoDealernet(c)}
+                                  disabled={c.rut == null || !c.dv || dealernetLoading}
+                                  className="w-full flex items-center gap-2 text-left rounded-lg border border-slate-800/50 bg-slate-900/30 hover:border-emerald-700/60 hover:bg-emerald-950/20 px-2 py-1.5 transition-colors disabled:opacity-40"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[11px] text-slate-200 font-medium truncate">
+                                      {c.razonSocial || `${c.nombres ?? ''} ${c.apellidos ?? ''}`.trim() || 'Sin nombre'}
+                                    </p>
+                                    <p className="text-[10px] text-slate-500">
+                                      {c.rut != null ? `RUT ${c.rut.toLocaleString('es-CL')}-${c.dv}` : 'Sin RUT'}
+                                    </p>
+                                  </div>
+                                  {c.probabilidad && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 flex-shrink-0">
+                                      {c.probabilidad}{c.similitud != null ? ` ${c.similitud}%` : ''}
+                                    </span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )
                         )}
 
                         {dealernetPhones.length > 0 && (
@@ -1185,52 +1252,6 @@ export default function CatastroPage() {
                                   ? `Con deuda${tgrCert.total_deuda_no_vencida ? ` · ${fmtCLP(Number(tgrCert.total_deuda_no_vencida))}` : ''}`
                                   : tgrCert.estado === 'sin_deuda' ? 'Sin deuda registrada' : `Estado: ${tgrCert.estado}`}
                               </p>
-
-                              {tgrCert.nombre && (
-                                <button
-                                  onClick={buscarContactoPorNombreTgr}
-                                  disabled={tgrCandidatosLoading}
-                                  className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 disabled:opacity-40"
-                                >
-                                  {tgrCandidatosLoading ? <RefreshCw size={11} className="animate-spin" /> : <Search size={11} />}
-                                  Buscar RUT / contacto con este nombre
-                                </button>
-                              )}
-
-                              {tgrCandidatosError && (
-                                <p className="text-[11px] text-red-400">{tgrCandidatosError}</p>
-                              )}
-
-                              {tgrCandidatos && (
-                                tgrCandidatos.length === 0 ? (
-                                  <p className="text-[10px] text-slate-600">Sin candidatos para este nombre en DealerNet</p>
-                                ) : (
-                                  <div className="space-y-1">
-                                    {tgrCandidatos.map((c, i) => (
-                                      <button
-                                        key={i}
-                                        onClick={() => usarCandidatoTgr(c)}
-                                        disabled={c.rut == null || !c.dv}
-                                        className="w-full flex items-center gap-2 text-left rounded-lg border border-slate-800/50 bg-slate-900/30 hover:border-emerald-700/60 hover:bg-emerald-950/20 px-2 py-1.5 transition-colors disabled:opacity-40"
-                                      >
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-[11px] text-slate-200 font-medium truncate">
-                                            {c.razonSocial || `${c.nombres ?? ''} ${c.apellidos ?? ''}`.trim() || 'Sin nombre'}
-                                          </p>
-                                          <p className="text-[10px] text-slate-500">
-                                            {c.rut != null ? `RUT ${c.rut.toLocaleString('es-CL')}-${c.dv}` : 'Sin RUT'}
-                                          </p>
-                                        </div>
-                                        {c.probabilidad && (
-                                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 flex-shrink-0">
-                                            {c.probabilidad}{c.similitud != null ? ` ${c.similitud}%` : ''}
-                                          </span>
-                                        )}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )
-                              )}
                             </div>
                           )}
                         </div>
