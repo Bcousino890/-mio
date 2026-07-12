@@ -36,6 +36,9 @@ jobs:
             OUT=scraper/sii-scraper/output
             echo "⚠ Deteniendo scrape SII mapasui..."
             pkill -9 -f "run-sii-mapasui.sh" || true
+            # Los workers corren como "./venv/bin/python run.py <etapa> ..." (ruta
+            # relativa): "sii-scraper/run.py" no matchea su cmdline.
+            pkill -9 -f "run\.py (regiones|manzanas|predios)" || true
             pkill -9 -f "sii-scraper/run.py" || true
             rm -f /tmp/casafari-scrape-sii-mapasui.lock
             mkdir -p "$OUT"
@@ -44,7 +47,7 @@ jobs:
             echo "  (el watchdog no relanzará hasta que se limpie el flag con el botón de launch)"
             echo ""
             echo "── Procesos del scraper restantes (deberían ser ninguno) ──"
-            ps aux | grep -E 'run-sii-mapasui|sii-scraper/run\.py' | grep -v grep || echo "(ninguno)"
+            ps aux | grep -E 'run-sii-mapasui|run\.py (regiones|manzanas|predios)' | grep -v grep || echo "(ninguno)"
           EOF
 
       - name: Resumen

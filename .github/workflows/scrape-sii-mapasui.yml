@@ -55,6 +55,9 @@ jobs:
             cd /opt/casafari
             echo "⚠ Matando cualquier scrape SII anterior..."
             pkill -9 -f "run-sii-mapasui.sh" || true
+            # Los workers corren como "./venv/bin/python run.py <etapa> ..." (ruta
+            # relativa): "sii-scraper/run.py" no matchea su cmdline.
+            pkill -9 -f "run\.py (regiones|manzanas|predios)" || true
             pkill -9 -f "sii-scraper/run.py" || true
             # También cualquier diagnóstico suelto (diag_*.py) que siga
             # compitiendo por el proxy/WAF y provocando errores de conexión.

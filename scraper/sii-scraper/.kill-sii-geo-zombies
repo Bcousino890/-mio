@@ -1,0 +1,10 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/kill-sii-geo-zombies.yml, que mata SOLO los workers
+"run.py manzanas-geo" huérfanos en el VPS sin tocar la enumeración en curso.
+
+Historial:
+- 2026-07-12 — primera pasada: el reset de 01:37 dejó vivos dos manzanas-geo
+  (PIDs 3001870 y 3009335, de 01:14 y 01:21; uno con ~974 MB) porque su pkill
+  buscaba "sii-scraper/run.py" y el cmdline real es "./venv/bin/python run.py
+  manzanas-geo". Compiten con la enumeración por el proxy/WAF del SII y
+  reintroducen el riesgo de OOM.

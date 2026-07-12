@@ -1,0 +1,48 @@
+name: Mata zombis manzanas-geo del scrape SII
+
+# Quirúrgico: mata SOLO los workers "run.py manzanas-geo" huérfanos que el
+# reset del 2026-07-12 01:37 no alcanzó (su pkill buscaba "sii-scraper/run.py"
+# pero el cmdline real es relativo: "./venv/bin/python run.py manzanas-geo").
+# NO toca el launcher run-sii-mapasui.sh ni la enumeración "run.py manzanas"
+# en curso ("manzanas-geo" no matchea "manzanas --config"), ni el lockfile.
+#
+# Sentinel-push como los demás (la API no permite workflow_dispatch acá).
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/sii-scraper/.kill-sii-geo-zombies'
+
+jobs:
+  kill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Matar workers manzanas-geo huérfanos
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            echo "── Zombis manzanas-geo ANTES ─────────────────────────"
+            ps aux | grep -E 'run\.py manzanas-geo' | grep -v grep || echo "(ninguno)"
+
+            echo ""
+            echo "⚠ Matando run.py manzanas-geo..."
+            pkill -9 -f "run\.py manzanas-geo" || true
+            sleep 2
+
+            echo ""
+            echo "── Procesos del scraper DESPUÉS (debe quedar solo el launcher + run.py manzanas) ──"
+            ps aux | grep -E 'run-sii-mapasui|run\.py (regiones|manzanas|predios)' | grep -v grep || echo "(ninguno)"
+
+            echo ""
+            echo "── Memoria del VPS ───────────────────────────────────"
+            free -m
+          EOF

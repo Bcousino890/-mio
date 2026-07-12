@@ -38,6 +38,11 @@ jobs:
             cd /opt/casafari/scraper/sii-scraper
             echo "⚠ Matando cualquier scrape en curso antes del reset..."
             pkill -9 -f "run-sii-mapasui.sh" || true
+            # Los workers de python corren con ruta relativa ("./venv/bin/python
+            # run.py manzanas-geo ..."), así que "sii-scraper/run.py" no aparece
+            # en su línea de comando; hay que matchear por etapa (mismo caso que
+            # chromedriver en scrape-tgr.yml).
+            pkill -9 -f "run\.py (regiones|manzanas|predios)" || true
             pkill -9 -f "sii-scraper/run.py" || true
             rm -f /tmp/casafari-scrape-sii-mapasui.lock
             sleep 2
