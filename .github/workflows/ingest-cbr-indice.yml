@@ -1,0 +1,69 @@
+name: Ingesta Índice de Propiedad CBR (→ cbr_indice_cl)
+
+# Corre scraper/cbr-indice-cl.mjs EN EL VPS. Consulta el Índice de Propiedad
+# público del CBR por nombre de titular → foja/número/año (SIN monto; el precio
+# no es público). Best-effort: confirmá antes el contrato del portal y ajustá
+# parseIndice en el .mjs (ver su cabecera). Lanzá con dry_run=true primero.
+#
+# Mismo patrón de DATABASE_URL que ingest-minvu-suelo.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      search_url:
+        description: "Endpoint de búsqueda del Índice de Propiedad (confirmado)"
+        required: true
+      comuna:
+        description: "Código SII de la comuna. Ej. 13101"
+        required: true
+      cbr:
+        description: "Nombre del Conservador. Ej. CBR Santiago"
+        required: false
+        default: ""
+      anio:
+        description: "Año a filtrar (opcional)"
+        required: false
+        default: ""
+      names:
+        description: "Nombres de titular (uno por línea)"
+        required: true
+      dry_run:
+        description: "true = consultar sin escribir en la BD"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ingesta Índice CBR en el VPS
+        env:
+          NAMES: ${{ github.event.inputs.names }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "NAMES=$(printf '%q' "$NAMES") bash -s" << EOF
+            set -e
+            cd /opt/casafari/scraper
+            if [ -f ../.env ]; then set -a; source ../.env; set +a; fi
+            if [ -z "\${POSTGRES_PASSWORD:-}" ]; then echo "✗ Falta POSTGRES_PASSWORD (.env)"; exit 1; fi
+            export DATABASE_URL="postgres://casafari:\${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
+            if [ ! -d node_modules/pg ]; then echo "▶ Instalando pg..."; npm install --omit=dev --no-audit --no-fund; fi
+            NAMES_FILE=\$(mktemp)
+            printf '%s\n' "\$NAMES" > "\$NAMES_FILE"
+            ARGS=( --search-url "${{ github.event.inputs.search_url }}" \
+                   --comuna "${{ github.event.inputs.comuna }}" \
+                   --names-file "\$NAMES_FILE" )
+            [ -n "${{ github.event.inputs.cbr }}" ]  && ARGS+=( --cbr "${{ github.event.inputs.cbr }}" )
+            [ -n "${{ github.event.inputs.anio }}" ] && ARGS+=( --anio "${{ github.event.inputs.anio }}" )
+            [ "${{ github.event.inputs.dry_run }}" = "true" ] && ARGS+=( --dry-run )
+            node cbr-indice-cl.mjs "\${ARGS[@]}"
+            rm -f "\$NAMES_FILE"
+          EOF

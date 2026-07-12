@@ -1,0 +1,6 @@
+# Centinela: editar y pushear a main dispara el workflow "Verificar fuentes de
+# mercado (A0)" (verify-mercado-fuentes.yml), que corre a0-verify-fuentes.mjs en
+# el VPS y vuelca las capas/campos de MINVU en el log del job. También se puede
+# lanzar desde Actions → Run workflow (sin tocar este archivo).
+#
+# bump: 0

@@ -5,16 +5,23 @@ Guía de ejecución paso a paso para las fases operativas del pipeline de mercad
 entorno con salida a `ide.minvu.cl` / `sii.cl` / portales CBR** (el entorno de
 build de Claude los bloquea por política de red; estas fases son de ejecución).
 
-Requisitos: `DATABASE_URL` en el entorno, Node ≥18, y las migraciones `0057-0059`
-aplicadas.
+## Cómo se ejecuta (GitHub → VPS, SIN terminal)
 
-```bash
-export DATABASE_URL="postgres://..."      # BD de casafari-mio
-# Aplicar migraciones nuevas (idempotentes):
-psql "$DATABASE_URL" -f db/migrations/0057_mercado_agregado_cl.sql
-psql "$DATABASE_URL" -f db/migrations/0058_sii_avaluo_historico_cl.sql
-psql "$DATABASE_URL" -f db/migrations/0059_cbr_indice_cl.sql
-```
+El VPS ejecuta todo vía GitHub Actions (igual que el scraper de mapasui). No hace falta SSH manual:
+
+- **Migraciones `0057-0059`**: se aplican **solas** al mergear a `main` (`deploy.yml` →
+  `infra/post-deploy.sh`). Nada que correr a mano.
+- **Fase 2 (A0)**: Actions → **"Verificar fuentes de mercado (A0)"** → Run workflow. El log
+  imprime las capas/campos de MINVU. (O editar `scraper/.verify-mercado-fuentes` y pushear.)
+- **Fase 3 (MINVU)**: Actions → **"Ingesta valor de suelo MINVU"** → Run workflow con los flags
+  que dio A0 (`dry_run=true` primero).
+- **Fase 6 (CBR)**: Actions → **"Ingesta Índice de Propiedad CBR"** → Run workflow.
+- **Cargas CSV (SII / histórico)**: `POST` a los endpoints de la app desplegada (abajo) desde
+  cualquier lado — no requieren workflow ni terminal.
+
+Los comandos de abajo son lo que esos workflows corren por dentro (referencia / debug).
+
+Requisitos (los cumple el VPS ya): `DATABASE_URL`, Node ≥18, migraciones aplicadas por el deploy.
 
 ---
 

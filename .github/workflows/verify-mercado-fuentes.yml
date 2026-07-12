@@ -1,0 +1,58 @@
+name: Verificar fuentes de mercado (A0 · MINVU WFS)
+
+# Paso A0 (Fase 2) SIN terminal: corre scraper/a0-verify-fuentes.mjs EN EL VPS
+# (que sí tiene salida a ide.minvu.cl, a diferencia del sandbox de build) y
+# vuelca en el log del job las capas de valor de suelo de MINVU y sus campos,
+# más el comando ingest-minvu-suelo ya rellenado.
+#
+# Mismo patrón que scrape-sii-mapasui.yml: SSH al VPS, correr ahí. Es de solo
+# lectura (no escribe en la BD). Se lanza desde Actions → Run workflow (o push
+# al centinela scraper/.verify-mercado-fuentes, porque la API de GitHub de este
+# entorno no permite disparar workflow_dispatch).
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "Capa a describir (DescribeFeatureType). VACÍO = listar capas (GetCapabilities)"
+        required: false
+        default: ""
+      wfs_url:
+        description: "URL base del WFS (default: MINVU IDE)"
+        required: false
+        default: "https://ide.minvu.cl/geoserver/wfs"
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.verify-mercado-fuentes'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Correr A0 en el VPS (GetCapabilities / DescribeFeatureType)
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari/scraper
+            WFS="${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}"
+            LAYER="${{ github.event.inputs.layer }}"
+            if [ -n "\$LAYER" ]; then
+              node a0-verify-fuentes.mjs --wfs-url "\$WFS" --describe "\$LAYER"
+            else
+              node a0-verify-fuentes.mjs --wfs-url "\$WFS"
+            fi
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "A0 impreso arriba. Copia el nombre de la capa de valor de suelo y sus campos,"
+          echo "y lánzalos con el workflow 'Ingesta valor de suelo MINVU'."
