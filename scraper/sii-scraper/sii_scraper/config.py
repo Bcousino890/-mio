@@ -23,6 +23,14 @@ class Config:
     manzana_min: int = 0
     geo_grid_step_m: int = 100
     geo_radius_km: float | None = None
+    # Sondeo de predios por vacíos (reemplaza el cap fijo range(predio_max)):
+    # cortar tras `predio_probe_depth` vacíos consecutivos tras ver un válido, o
+    # `predio_initial_scan` vacíos iniciales si la manzana no arranca en 0.
+    # `predio_max` pasa a ser un TECHO de seguridad. `predio_max_inciertos`:
+    # cuántos "inciertos" (429) seguidos antes de abandonar la manzana.
+    predio_probe_depth: int = 60
+    predio_initial_scan: int = 60
+    predio_max_inciertos: int = 25
 
 
 def load_config(path: str) -> Config:
@@ -70,4 +78,7 @@ def load_config(path: str) -> Config:
         output_dir=str(raw.get("output_dir", "output")),
         geo_grid_step_m=int(geo.get("grid_step_m", 100)),
         geo_radius_km=float(geo_radius_km) if geo_radius_km is not None else None,
+        predio_probe_depth=int(ranges.get("predio_probe_depth", 60)),
+        predio_initial_scan=int(ranges.get("predio_initial_scan", 60)),
+        predio_max_inciertos=int(limits.get("predio_max_inciertos", 25)),
     )

@@ -33,8 +33,9 @@
 #   SII_MANZANAS_STAGE etapa en modo una-comuna: "manzanas-geo" (default) o
 #                      "manzanas" (en modo cola, la etapa la define cada
 #                      entrada de comunas-queue.json)
-#   SII_RPS            requests/segundo (default 8 — proxies a full)
-#   SII_CONCURRENCY    peticiones simultáneas (default 8 — proxies a full)
+#   SII_RPS            requests/segundo (default 2 — ritmo tolerado por el WAF)
+#   SII_CONCURRENCY    peticiones simultáneas (default 4)
+#   SII_GRID_STEP_M    paso de la grilla de descubrimiento de manzanas (default 40 m)
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
@@ -73,18 +74,23 @@ export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/cas
 # secrets del repo). Si están, el scraper usa proxy sticky-por-sesión (rota IP
 # por sesión); si no, conexión directa (ver README.md y sii_scraper/client/session.py).
 if [ -n "${SMARTPROXY_CL_HOST:-}" ]; then
-  echo "▶ Proxy SmartProxy CL detectado en .env — el scraper rotará IPs por sesión (proxies a full)."
+  echo "▶ Proxy SmartProxy CL detectado en .env — el scraper rotará IPs por sesión."
 else
   echo "▶ Sin SMARTPROXY_CL_* en .env — el scraper irá por conexión directa (ritmo bajo)."
 fi
 
-# ── Parámetros de velocidad (proxies a full) ────────────────────────────────
-# Con proxy residencial rotable y ancho de banda de sobra, se sube el ritmo por
-# defecto (antes 2/2). Sigue siendo configurable: si el WAF empieza a devolver
-# 403/429 sostenidos conviene BAJARLO — ir demasiado rápido provoca bloqueos
-# largos que estancan el 24/7 en vez de acelerarlo.
-SII_RPS="${SII_RPS:-8}"
-SII_CONCURRENCY="${SII_CONCURRENCY:-8}"
+# ── Parámetros de velocidad ─────────────────────────────────────────────────
+# Ritmo tolerado por el WAF del SII. El diagnóstico mostró que a 8 rps el WAF
+# devuelve 429 en masa (se estrangula y encima corrompe los datos), mientras que
+# la corrida que sí funcionó iba a 2 rps. Con proxy rotable NO conviene subir de
+# ~2-3: más rápido = más 429 = más lento. Configurable por si el WAF afloja.
+SII_RPS="${SII_RPS:-2}"
+SII_CONCURRENCY="${SII_CONCURRENCY:-4}"
+# Paso de la grilla de descubrimiento de manzanas (m). A 100 m se saltaba ~80%
+# de las manzanas de Las Condes (1.099 vs ~5.000 reales → 80.611 predios vs
+# ~390k). Un paso más fino descubre las cuadras chicas. Más fino = más puntos =
+# más lento, así que es un balance (ver diag-manzana-grid).
+SII_GRID_STEP_M="${SII_GRID_STEP_M:-40}"
 
 cd scraper/sii-scraper
 mkdir -p output
@@ -148,6 +154,7 @@ fi
 cat > "$PARAMS_FILE" <<PARAMS
 SII_RPS=${SII_RPS}
 SII_CONCURRENCY=${SII_CONCURRENCY}
+SII_GRID_STEP_M=${SII_GRID_STEP_M}
 PARAMS
 rm -f "$ALL_COMPLETE_MARKER"
 
@@ -224,15 +231,17 @@ procesar_comuna() {
   # config.json por comuna (está en .gitignore; se genera acá). `geo` cubre el
   # caso manzanas-geo. manzana_max alto para comunas con manzanas en IDs altos
   # (p.ej. Vitacura, 103–3625) cuando se usa la etapa de enumeración.
+  # predio_max es ahora un TECHO de seguridad (el tamaño real lo decide el
+  # sondeo por vacíos: predio_probe_depth / predio_initial_scan).
   cat > config.json <<JSON
 {
   "comunas": [
     { "comuna_id": ${code}, "nombre_comuna": "${nombre}" }
   ],
   "regiones": [],
-  "ranges": { "manzana_max": 4000, "manzana_probe_depth": 30, "predio_max": 150 },
-  "limits": { "max_concurrency": ${SII_CONCURRENCY}, "requests_per_second": ${SII_RPS}, "max_retries": 5, "backoff_base": 2 },
-  "geo": { "grid_step_m": 100 },
+  "ranges": { "manzana_max": 4000, "manzana_probe_depth": 30, "predio_max": 3000, "predio_probe_depth": 60, "predio_initial_scan": 60 },
+  "limits": { "max_concurrency": ${SII_CONCURRENCY}, "requests_per_second": ${SII_RPS}, "max_retries": 5, "backoff_base": 2, "predio_max_inciertos": 25 },
+  "geo": { "grid_step_m": ${SII_GRID_STEP_M} },
   "output_dir": "output"
 }
 JSON

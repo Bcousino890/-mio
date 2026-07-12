@@ -83,7 +83,10 @@ async def run_manzanas_geo_stage(client, config) -> None:
         out_path = os.path.join(config.output_dir, "manzanas", f"{slug}.jsonl")
         ck_path = os.path.join(config.output_dir, "checkpoints",
                                f"manzanas_geo_{slug}.json")
-        ckpt = Checkpoint(ck_path)
+        # Guardado por lotes: con grid_step fino la grilla tiene cientos de
+        # miles de puntos; reescribir el checkpoint completo por cada punto sería
+        # O(n²). Se persiste cada 500 y con flush() al final.
+        ckpt = Checkpoint(ck_path, save_every=500)
         # Dedup entre corridas: sembramos las manzanas ya escritas.
         vistas = {row["manzana_id"] for row in read_jsonl(out_path)}
         logger.info("comuna %s: grilla de %d puntos (%d manzanas ya conocidas)",
@@ -96,4 +99,8 @@ async def run_manzanas_geo_stage(client, config) -> None:
                 for i, (plat, plon) in enumerate(puntos)
                 if not ckpt.is_processed(str(i))
             ]
-            await asyncio.gather(*tasks)
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                # Persistir el remanente del checkpoint (guardado por lotes).
+                ckpt.flush()
