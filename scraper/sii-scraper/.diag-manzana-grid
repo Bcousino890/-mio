@@ -1,0 +1,10 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/diag-manzana-grid.yml, que mide si la grilla de 100 m se
+salta manzanas (compara 100/60/40 m en una sub-zona de Las Condes). Ritmo
+gentil (2 rps) para no gatillar 429. De solo lectura: no BD, no checkpoints, no
+scrape.
+
+Historial:
+- 2026-07-11 — primera medición: confirmar la hipótesis de que la subcaptura de
+  Las Condes (1.099 manzanas, 80.611 predios) viene de una grilla demasiado
+  gruesa, no del tope predio_max=150. Calibra el nuevo grid_step.

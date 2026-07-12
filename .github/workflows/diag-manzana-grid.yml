@@ -1,0 +1,65 @@
+name: Diag grilla de manzanas SII (subcaptura)
+
+# DIAGNÓSTICO de solo lectura: mide si la grilla de descubrimiento a 100 m se
+# salta manzanas, comparando cuántas manzanas encuentra a 100/60/40 m en una
+# misma sub-zona de la comuna. Ritmo GENTIL (2 rps) para no gatillar el 429 del
+# WAF (a 8 rps el diag anterior se estranguló). No escribe en BD ni toca
+# checkpoints ni el scrape (respeta la pausa).
+#
+# Copia diag_manzana_grid.py al VPS por scp (no depende del deploy) y lo corre
+# con el venv y el .env (proxy) del VPS.
+on:
+  workflow_dispatch:
+    inputs:
+      comuna:
+        description: "Código SII de la comuna"
+        required: false
+        default: "15108"
+      radius_m:
+        description: "Radio (m) de la sub-zona de muestreo"
+        required: false
+        default: "1200"
+      steps:
+        description: "Pasos de grilla (m), coma-separados"
+        required: false
+        default: "100,60,40"
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/sii-scraper/.diag-manzana-grid'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Copiar el script de diagnóstico al VPS
+        run: |
+          scp -i ~/.ssh/deploy_key -P "${{ secrets.VPS_PORT || 22 }}" \
+            scraper/sii-scraper/diag_manzana_grid.py \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/casafari/scraper/sii-scraper/diag_manzana_grid.py"
+
+      - name: Correr el diagnóstico en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari/scraper/sii-scraper
+            if [ ! -d venv ]; then echo "✗ No hay venv en el VPS"; exit 1; fi
+            if [ -f .env ]; then set -a; source .env; set +a; fi
+            ./venv/bin/python diag_manzana_grid.py \
+              --comuna "${{ github.event.inputs.comuna || '15108' }}" \
+              --radius-m "${{ github.event.inputs.radius_m || '1200' }}" \
+              --steps "${{ github.event.inputs.steps || '100,60,40' }}" \
+              --rps 2 --concurrency 3
+          EOF
