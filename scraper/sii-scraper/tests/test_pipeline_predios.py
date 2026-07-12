@@ -111,6 +111,20 @@ async def test_run_predios_stage_initial_scan_empty_manzana(tmp_path):
     assert ckpt.is_processed("7") is True
 
 
+async def test_run_predios_stage_dedup_manzanas_duplicadas(tmp_path):
+    # El JSONL de manzanas puede traer la misma manzana dos veces (manzanas y
+    # manzanas-geo escriben al mismo archivo): se scrapea UNA sola vez.
+    _seed_manzanas(tmp_path, [7, 7])
+    client = FakeClient(hits={(7, 0): {"rol": "7-0"}})
+    cfg = _config(tmp_path, predio_max=1000, probe_depth=5)
+    await run_predios_stage(client, cfg)
+
+    # 1 hit + 5 vacíos = 6 consultas; sin dedupe serían 6 más del duplicado.
+    assert client.calls == 6
+    rows = read_jsonl(str(tmp_path / "predios" / "vitacura.jsonl"))
+    assert [r["rol_predio"] for r in rows] == ["7-0"]
+
+
 async def test_run_predios_stage_incierto_no_marca_completa(tmp_path):
     # Si un predio agota reintentos (429), la manzana NO se marca completa, para
     # reintentarla en otra corrida; los predios que sí se leyeron se escriben.

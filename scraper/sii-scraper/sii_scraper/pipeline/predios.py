@@ -102,9 +102,15 @@ async def run_predios_stage(client, config) -> None:
                                  f"predios_done_{slug}.json")
         done_ckpt = Checkpoint(done_path)
 
+        # El JSONL de manzanas puede traer duplicados: manzanas y manzanas-geo
+        # escriben al mismo archivo, y una corrida interrumpida re-apendea.
         pendientes = []
+        vistas: set = set()
         for m in manzanas:
             mid = m["manzana_id"]
+            if mid in vistas:
+                continue
+            vistas.add(mid)
             if not done_ckpt.is_processed(str(mid)):
                 pendientes.append(mid)
 
