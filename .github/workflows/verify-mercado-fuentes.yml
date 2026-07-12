@@ -16,30 +16,34 @@ name: Verificar fuentes de mercado (A0 · MINVU Hub/ArcGIS)
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Modo de búsqueda"
+        required: true
+        default: "search"
+        type: choice
+        options:
+          - search
+          - auto_find_valor
+          - esri_describe
+          - wfs
       search:
-        description: "Término de búsqueda de datasets en el Hub (modo por defecto). Ej: 'valor de suelo'"
+        description: "(modo=search) Término de búsqueda de datasets. Ej: 'valor de suelo'"
         required: false
         default: "valor de suelo"
       esri_describe:
-        description: "URL de un FeatureServer/MapServer (de --search) para listar sus campos"
+        description: "(modo=esri_describe) URL del FeatureServer/MapServer para listar campos"
         required: false
         default: ""
       hub_url:
         description: "URL base del portal Hub (default: MINVU IDE)"
         required: false
         default: "https://ide.minvu.cl"
-      use_wfs_fallback:
-        description: "true = usar el modo GeoServer WFS clásico en vez de Hub/Esri"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
       layer:
-        description: "(solo con use_wfs_fallback=true) Capa a describir. VACÍO = listar capas"
+        description: "(modo=wfs) Capa a describir. VACÍO = listar capas"
         required: false
         default: ""
       wfs_url:
-        description: "(solo con use_wfs_fallback=true) URL base del WFS"
+        description: "(modo=wfs) URL base del WFS"
         required: false
         default: "https://ide.minvu.cl/geoserver/wfs"
   push:
@@ -59,32 +63,56 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Correr A0 en el VPS (Hub search / Esri describe / WFS fallback)
+      - name: Correr A0 en el VPS (búsqueda / auto-find / describe / WFS)
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
             set -e
             cd /opt/casafari/scraper
-            if [ "${{ github.event.inputs.use_wfs_fallback || 'false' }}" = "true" ]; then
-              WFS="${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}"
-              LAYER="${{ github.event.inputs.layer }}"
-              if [ -n "\$LAYER" ]; then
-                node a0-verify-fuentes.mjs --wfs --wfs-url "\$WFS" --describe "\$LAYER"
-              else
-                node a0-verify-fuentes.mjs --wfs --wfs-url "\$WFS"
-              fi
-            elif [ -n "${{ github.event.inputs.esri_describe }}" ]; then
-              node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
-                --esri-describe "${{ github.event.inputs.esri_describe }}"
-            else
-              node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
-                --search "${{ github.event.inputs.search || 'valor de suelo' }}"
-            fi
+            MODE="${{ github.event.inputs.mode || 'search' }}"
+            case "\$MODE" in
+              auto_find_valor)
+                node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
+                  --auto-find-valor
+                ;;
+              esri_describe)
+                node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
+                  --esri-describe "${{ github.event.inputs.esri_describe }}"
+                ;;
+              wfs)
+                WFS="${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}"
+                LAYER="${{ github.event.inputs.layer }}"
+                if [ -n "\$LAYER" ]; then
+                  node a0-verify-fuentes.mjs --wfs-url "\$WFS" --describe "\$LAYER"
+                else
+                  node a0-verify-fuentes.mjs --wfs --wfs-url "\$WFS"
+                fi
+                ;;
+              search|*)
+                node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
+                  --search "${{ github.event.inputs.search || 'valor de suelo' }}"
+                ;;
+            esac
           EOF
 
       - name: Resumen
         run: |
-          echo "A0 impreso arriba."
-          echo "1) --search te da la URL del servicio (FeatureServer/MapServer) del dataset correcto."
-          echo "2) Relanzá con esri_describe=<esa URL> para ver sus campos y el comando sugerido."
-          echo "3) Lanzá 'Ingesta valor de suelo MINVU' con esos flags."
+          echo "✓ A0 completado. Próximos pasos según el modo:"
+          echo ""
+          echo "Si usaste mode=search:"
+          echo "  1) Anotá la URL del servicio (FeatureServer/MapServer) del dataset correcto"
+          echo "  2) Relanzá con mode=esri_describe + esa URL para ver sus campos"
+          echo "  3) Lanzá 'Ingesta valor de suelo MINVU' con esos flags"
+          echo ""
+          echo "Si usaste mode=auto_find_valor:"
+          echo "  • A0 inspecciona todos los datasets y sugiere el comando ingest-minvu-suelo.mjs"
+          echo "  • Si encuentra coincidencias, copiá el comando y lanzá 'Ingesta valor de suelo MINVU'"
+          echo "  • Si no encuentra nada, probá otros portales (geoportal.cl, catastral.cl)"
+          echo ""
+          echo "Si usaste mode=esri_describe:"
+          echo "  • Viste los campos del dataset y el comando sugerido"
+          echo "  • Lanzá 'Ingesta valor de suelo MINVU' con esos flags"
+          echo ""
+          echo "Si usaste mode=wfs:"
+          echo "  • WFS clásico (GeoServer) de otro portal"
+          echo "  • Completá describiendo la capa y copiando el comando sugerido"

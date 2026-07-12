@@ -19,11 +19,14 @@
 //      si el dataset es un servicio consultable.
 //   2. --esri-describe <url_del_servicio>: `<url>?f=json` → lista los campos de
 //      la capa, para fijar --field-valor / --field-zona / --field-comuna.
-//   3. --wfs / --describe <capa>: fallback GeoServer WFS clásico (otros portales).
+//   3. --auto-find-valor: inspecciona TODOS los datasets del catálogo para encontrar
+//      cuál tiene campos de valor de suelo (cuando la búsqueda por término falla).
+//   4. --wfs / --describe <capa>: fallback GeoServer WFS clásico (otros portales).
 //
 // USO:
 //   node scraper/a0-verify-fuentes.mjs                          # busca "valor de suelo"
 //   node scraper/a0-verify-fuentes.mjs --search "observatorio mercado de suelo"
+//   node scraper/a0-verify-fuentes.mjs --auto-find-valor        # inspecciona todos los datasets
 //   node scraper/a0-verify-fuentes.mjs --esri-describe "https://.../FeatureServer/0"
 //   node scraper/a0-verify-fuentes.mjs --wfs --wfs-url https://otro/geoserver/wfs
 //
@@ -37,6 +40,7 @@ const { values } = parseArgs({
     'hub-url': { type: 'string' },
     search: { type: 'string' },
     'esri-describe': { type: 'string' },
+    'auto-find-valor': { type: 'boolean' },
     'wfs-url': { type: 'string' },
     describe: { type: 'string' },
     wfs: { type: 'boolean' },
@@ -378,9 +382,90 @@ async function describe(layer) {
   console.log(`    --periodo 2024 --dry-run`)
 }
 
+/**
+ * Modo automático: inspecciona todos los datasets del catálogo,
+ * extrae sus FeatureServer URLs, y testea cada uno para encontrar
+ * cuál tiene campos de valor de suelo (UF/m², precio, etc.).
+ * Útil cuando la búsqueda por término falla pero el dataset existe.
+ */
+async function autoFindValor() {
+  console.log(`→ Modo automático: buscando dataset con campos de valor de suelo...\n`)
+
+  const collectionIds = await listCollections()
+  const candidates = []
+
+  for (const collectionId of collectionIds.length ? collectionIds : ['dataset', 'document']) {
+    const url = `${HUB}/api/search/v1/collections/${collectionId}/items?limit=100`
+    console.log(`\n→ Inspeccionando colección "${collectionId}"...`)
+    const res = await get(url)
+    const json = tryParseJson(res.text)
+    if (!res.ok || !json) {
+      console.log(`  ✗ HTTP ${res.status}, skipping`)
+      continue
+    }
+
+    const items = extractItems(json)
+    for (const item of items) {
+      if (!item.url || !item.url.includes('FeatureServer')) continue
+      console.log(`\n  Testeando: ${item.name}`)
+      console.log(`    URL: ${item.url}`)
+
+      const sep = item.url.includes('?') ? '&' : '?'
+      const descUrl = `${item.url}${sep}f=json`
+      const descRes = await get(descUrl)
+      const descJson = tryParseJson(descRes.text)
+
+      if (!descRes.ok || !descJson || descJson.error) {
+        console.log(`    ✗ No se pudo describir (HTTP ${descRes.status})`)
+        continue
+      }
+
+      const fields = Array.isArray(descJson.fields) ? descJson.fields.map(f => f.name) : []
+      const valorField = fields.find(f => /uf.*m2|valor|precio|monto|value/i.test(f))
+      const zonaField = fields.find(f => /zona|objectid|^id$|layer_id/i.test(f))
+      const comunaField = fields.find(f => /comuna|cut|cod_com|code/i.test(f))
+
+      if (valorField) {
+        console.log(`    ✓ ENCONTRADO: ${valorField} (valor), zona: ${zonaField || '?'}, comuna: ${comunaField || '?'}`)
+        console.log(`      Campos: ${fields.slice(0, 5).join(', ')}${fields.length > 5 ? '...' : ''}`)
+        candidates.push({
+          name: item.name,
+          url: item.url,
+          valorField,
+          zonaField: zonaField || null,
+          comunaField: comunaField || null,
+          allFields: fields,
+        })
+      } else {
+        console.log(`    • Sin campos de valor; campos: ${fields.slice(0, 3).join(', ')}...`)
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    console.log('\n✗ No se encontró ningún dataset con campos de valor de suelo.')
+    console.log('  Próximas acciones: revisar otros portales (geoportal.cl, catastral.cl) o verificar con MINVU.')
+    return
+  }
+
+  console.log(`\n✓ Encontrados ${candidates.length} dataset(s) con campos de valor:\n`)
+  for (const c of candidates) {
+    console.log(`Opción: ${c.name}`)
+    console.log(`  URL: ${c.url}`)
+    console.log(`  Comando sugerido:`)
+    console.log(`    node scraper/ingest-minvu-suelo.mjs \\`)
+    console.log(`      --esri-url "${c.url}" \\`)
+    console.log(`      --field-valor ${c.valorField} \\`)
+    if (c.zonaField) console.log(`      --field-zona ${c.zonaField} \\`)
+    console.log(`      ${c.comunaField ? `--field-comuna ${c.comunaField}` : '--comuna 15108'} \\`)
+    console.log(`      --periodo 2024 --dry-run\n`)
+  }
+}
+
 async function main() {
   try {
-    if (values['esri-describe']) await esriDescribe(values['esri-describe'])
+    if (values['auto-find-valor']) await autoFindValor()
+    else if (values['esri-describe']) await esriDescribe(values['esri-describe'])
     else if (values.wfs && values.describe) await describe(values.describe)
     else if (values.wfs) await capabilities()
     else await search(values.search || DEFAULT_TERM)
