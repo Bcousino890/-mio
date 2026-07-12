@@ -11,3 +11,6 @@ Historial de resets:
 - 2026-07-11 — reset por subcaptura: el scrape viejo (grilla 100 m, cap 150)
   capturó ~21% de Las Condes. Se resetea para re-descubrir manzanas con grilla
   fina y sondeo de predios por vacíos.
+- 2026-07-12 — reset para pasar Las Condes a enumeración: el barrido geo a 40 m
+  era lento (empezaba en terreno vacío). Se cambia a enumerar IDs de manzana
+  (102-3500 densos). Este reset limpia el estado geo y mata el scrape en curso.
