@@ -85,61 +85,130 @@ function tryParseJson(text) {
   try { return JSON.parse(text) } catch { return null }
 }
 
+// Distintas sintaxis de paginación a probar antes de rendirse con un término.
+const PAGINATION_STRATEGIES = [
+  { label: 'sin parámetro de paginación', qs: (q) => `q=${encodeURIComponent(q)}` },
+  { label: 'limit', qs: (q) => `q=${encodeURIComponent(q)}&limit=10` },
+  { label: 'page[size] (JSON:API, bracket codificado)', qs: (q) => `q=${encodeURIComponent(q)}&${encodeURIComponent('page[size]')}=10` },
+  { label: 'page + per_page', qs: (q) => `q=${encodeURIComponent(q)}&page=1&per_page=10` },
+]
+
+// Si el término principal no encuentra nada, se prueban estos automáticamente
+// (mismo run, sin round-trip humano) antes de rendirse.
+const FALLBACK_TERMS = ['valor de suelo', 'suelo', 'observatorio', 'mercado de suelo', 'avaluo']
+
 /**
- * Búsqueda de datasets en el portal ArcGIS Hub (API pública, sin auth).
- *
- * La sintaxis de paginación varía entre implementaciones (JSON:API `page[size]`
- * vs OGC API `limit`/`offset` vs sin paginar). En vez de que el humano tenga que
- * ir probando una por una round-trip por round-trip, se prueban varias
- * estrategias EN EL MISMO RUN y se reporta cuál funcionó.
+ * Normaliza la respuesta del catálogo a una lista de items, sea cual sea el
+ * formato real: JSON:API (`{data:[{id, attributes:{...}}]}`, típico de
+ * hub.arcgis.com) u OGC API - Records/Features (`{features:[{id, properties,
+ * links}]}`, típico de geoportales gubernamentales — que es lo que este
+ * portal usa de verdad, según el primer run real).
  */
-async function search(term) {
-  const attempts = [
-    { label: 'sin parámetro de paginación', qs: `q=${encodeURIComponent(term)}` },
-    { label: 'limit', qs: `q=${encodeURIComponent(term)}&limit=10` },
-    { label: 'page[size] (JSON:API, bracket codificado)', qs: `q=${encodeURIComponent(term)}&${encodeURIComponent('page[size]')}=10` },
-    { label: 'page + per_page', qs: `q=${encodeURIComponent(term)}&page=1&per_page=10` },
-  ]
-
-  for (const attempt of attempts) {
-    const url = `${HUB}/api/search/v1/collections/dataset/items?${attempt.qs}`
-    console.log(`→ Hub search (${attempt.label}): ${url}`)
-    const res = await get(url)
-    const json = tryParseJson(res.text)
-
-    if (!res.ok || !json) {
-      console.log(`  ✗ HTTP ${res.status}${json ? ` — ${JSON.stringify(json)}` : ' (no es JSON)'}`)
-      continue
-    }
-    if (json.error || json.statusCode >= 400) {
-      console.log(`  ✗ ${JSON.stringify(json)}`)
-      continue
-    }
-
-    // Éxito: esta estrategia de paginación funcionó.
-    console.log(`  ✓ OK\n`)
-    const items = Array.isArray(json.data) ? json.data : []
-    console.log(`Datasets encontrados para "${term}": ${items.length}`)
-    if (items.length === 0) {
-      console.log('  (ninguno — probá otro término con --search "otro término")')
-      console.log(`\n[diagnóstico] JSON crudo (primeros 1500 caracteres):\n${JSON.stringify(json).slice(0, 1500)}`)
-      return
-    }
-    for (const it of items) {
+function extractItems(json) {
+  if (Array.isArray(json.data)) {
+    return json.data.map((it) => {
       const a = it.attributes ?? {}
-      console.log(`\n• ${a.name ?? it.id}`)
-      console.log(`  id: ${it.id} · tipo: ${a.type ?? '?'}`)
-      console.log(`  url servicio: ${a.url ?? '(sin url — puede ser un archivo descargable, no un servicio consultable)'}`)
-      if (a.slug) console.log(`  página: ${HUB}/datasets/${a.slug}`)
-    }
-    console.log(`\nSiguiente paso: para el dataset correcto (valor de suelo), describí sus campos con:`)
-    console.log(`  node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio de arriba>"`)
+      return { id: it.id, name: a.name ?? it.id, type: a.type ?? '?', url: a.url ?? null, slug: a.slug ?? null }
+    })
+  }
+  if (Array.isArray(json.features)) {
+    return json.features.map((f) => {
+      const p = f.properties ?? {}
+      const links = Array.isArray(f.links) ? f.links : (Array.isArray(p.links) ? p.links : [])
+      const serviceLink = links.find((l) => /service|api|wfs|rest|arcgis/i.test(`${l.rel ?? ''} ${l.type ?? ''} ${l.href ?? ''}`))
+      return {
+        id: f.id ?? p.id ?? null,
+        name: p.title ?? p.name ?? f.id ?? '(sin título)',
+        type: p.type ?? p.recordType ?? '?',
+        url: p.url ?? serviceLink?.href ?? null,
+        slug: p.slug ?? null,
+      }
+    })
+  }
+  return []
+}
+
+function printItems(items) {
+  for (const it of items) {
+    console.log(`\n• ${it.name}`)
+    console.log(`  id: ${it.id} · tipo: ${it.type}`)
+    console.log(`  url servicio: ${it.url ?? '(sin url — puede ser un archivo descargable, no un servicio consultable)'}`)
+    if (it.slug) console.log(`  página: ${HUB}/datasets/${it.slug}`)
+  }
+  console.log(`\nSiguiente paso: para el dataset correcto (valor de suelo), describí sus campos con:`)
+  console.log(`  node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio de arriba>"`)
+}
+
+/** Una consulta al catálogo con una sintaxis de paginación dada. null si no funcionó. */
+async function queryOnce(qs, label) {
+  const url = `${HUB}/api/search/v1/collections/dataset/items?${qs}`
+  console.log(`→ Hub search (${label}): ${url}`)
+  const res = await get(url)
+  const json = tryParseJson(res.text)
+  if (!res.ok || !json || json.error || (typeof json.statusCode === 'number' && json.statusCode >= 400)) {
+    console.log(`  ✗ HTTP ${res.status}${json ? ` — ${JSON.stringify(json)}` : ' (no es JSON)'}`)
+    return null
+  }
+  console.log('  ✓ OK')
+  return json
+}
+
+/** Lista las colecciones disponibles del catálogo — diagnóstico final si ningún término encontró nada. */
+async function listCollections() {
+  const url = `${HUB}/api/search/v1/collections`
+  console.log(`\n→ Listando colecciones disponibles: ${url}`)
+  const res = await get(url)
+  const json = tryParseJson(res.text)
+  if (!res.ok || !json) {
+    console.log(`  ✗ HTTP ${res.status}`)
+    diagnosticar(res)
     return
   }
+  console.log(`  ${JSON.stringify(json).slice(0, 1500)}`)
+}
 
-  console.log('\n✗ Ninguna estrategia de paginación funcionó contra este endpoint.')
-  console.log('  Revisá los errores de arriba — puede que la API real use otro nombre de parámetro,')
-  console.log('  o que /api/search/v1/collections/dataset/items no sea el endpoint correcto en este portal.')
+/**
+ * Búsqueda de datasets en el catálogo del portal (API pública, sin auth).
+ *
+ * Primero determina qué sintaxis de paginación acepta el servidor (probando
+ * varias en el mismo run), y la reutiliza para probar automáticamente varios
+ * términos de búsqueda si el primero no encuentra nada — para no depender de
+ * que el humano haga el round-trip término por término.
+ */
+async function search(term) {
+  const terms = [term, ...FALLBACK_TERMS.filter((t) => t.toLowerCase() !== term.toLowerCase())]
+  let workingStrategy = null
+
+  for (const t of terms) {
+    let json = null
+    if (workingStrategy) {
+      json = await queryOnce(workingStrategy.qs(t), `${workingStrategy.label} · término="${t}"`)
+    } else {
+      for (const strat of PAGINATION_STRATEGIES) {
+        json = await queryOnce(strat.qs(t), `${strat.label} · término="${t}"`)
+        if (json) { workingStrategy = strat; break }
+      }
+    }
+
+    if (!json) {
+      console.log(`\n✗ Ninguna estrategia de paginación funcionó para "${t}".`)
+      continue
+    }
+
+    const items = extractItems(json)
+    const matched = typeof json.numberMatched === 'number' ? ` (numberMatched: ${json.numberMatched})` : ''
+    console.log(`Datasets para "${t}": ${items.length}${matched}`)
+    if (items.length > 0) {
+      printItems(items)
+      return
+    }
+    console.log('  (sin resultados — probando el siguiente término...)')
+  }
+
+  console.log('\n✗ Ningún término encontró datasets.')
+  console.log('  Probá manualmente con --search "<otro término>" (quizás el título real es distinto),')
+  console.log('  o revisá qué colecciones expone este catálogo:')
+  await listCollections()
 }
 
 /** Describe los campos de una capa Esri REST (FeatureServer/MapServer). */
