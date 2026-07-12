@@ -86,11 +86,13 @@ function tryParseJson(text) {
 }
 
 // Distintas sintaxis de paginación a probar antes de rendirse con un término.
+// `extra` = solo el/los parámetro(s) de paginación (sin `q`), reutilizable
+// para listar una colección completa sin filtro de búsqueda.
 const PAGINATION_STRATEGIES = [
-  { label: 'sin parámetro de paginación', qs: (q) => `q=${encodeURIComponent(q)}` },
-  { label: 'limit', qs: (q) => `q=${encodeURIComponent(q)}&limit=10` },
-  { label: 'page[size] (JSON:API, bracket codificado)', qs: (q) => `q=${encodeURIComponent(q)}&${encodeURIComponent('page[size]')}=10` },
-  { label: 'page + per_page', qs: (q) => `q=${encodeURIComponent(q)}&page=1&per_page=10` },
+  { label: 'sin parámetro de paginación', extra: '', qs: (q) => `q=${encodeURIComponent(q)}` },
+  { label: 'limit', extra: 'limit=10', qs: (q) => `q=${encodeURIComponent(q)}&limit=10` },
+  { label: 'page[size] (JSON:API, bracket codificado)', extra: `${encodeURIComponent('page[size]')}=10`, qs: (q) => `q=${encodeURIComponent(q)}&${encodeURIComponent('page[size]')}=10` },
+  { label: 'page + per_page', extra: 'page=1&per_page=10', qs: (q) => `q=${encodeURIComponent(q)}&page=1&per_page=10` },
 ]
 
 // Si el término principal no encuentra nada, se prueban estos automáticamente
@@ -153,7 +155,7 @@ async function queryOnce(qs, label) {
   return json
 }
 
-/** Lista las colecciones disponibles del catálogo — diagnóstico final si ningún término encontró nada. */
+/** Lista las colecciones disponibles del catálogo — diagnóstico si ningún término encontró nada. */
 async function listCollections() {
   const url = `${HUB}/api/search/v1/collections`
   console.log(`\n→ Listando colecciones disponibles: ${url}`)
@@ -162,9 +164,60 @@ async function listCollections() {
   if (!res.ok || !json) {
     console.log(`  ✗ HTTP ${res.status}`)
     diagnosticar(res)
+    return []
+  }
+  const cols = Array.isArray(json.collections) ? json.collections : []
+  for (const c of cols) console.log(`  • ${c.id} — "${c.title}" (${c.description ?? ''})`)
+  return cols.map((c) => c.id)
+}
+
+/**
+ * Lista TODOS los items de una colección (sin filtro `q`) — diagnóstico final:
+ * si la búsqueda por término no encontró nada, mostrar qué títulos existen de
+ * verdad evita seguir adivinando keywords a ciegas.
+ */
+async function listAllItems(collectionId, workingStrategy) {
+  const qs = workingStrategy?.extra || ''
+  const url = `${HUB}/api/search/v1/collections/${collectionId}/items${qs ? `?${qs}` : ''}`
+  console.log(`\n→ Listando items de "${collectionId}" (sin filtro): ${url}`)
+  const res = await get(url)
+  const json = tryParseJson(res.text)
+  if (!res.ok || !json) {
+    console.log(`  ✗ HTTP ${res.status}`)
     return
   }
-  console.log(`  ${JSON.stringify(json).slice(0, 1500)}`)
+  const items = extractItems(json)
+  const matched = typeof json.numberMatched === 'number' ? ` (numberMatched: ${json.numberMatched})` : ''
+  console.log(`  Total: ${items.length}${matched}`)
+  for (const it of items.slice(0, 25)) {
+    console.log(`  • ${it.name} (id: ${it.id}, tipo: ${it.type})${it.url ? ` → ${it.url}` : ''}`)
+  }
+}
+
+/**
+ * Muchos geoportales gubernamentales chilenos ("IDE" = Infraestructura de
+ * Datos Espaciales) auto-hospedan ArcGIS Server aparte del catálogo Hub. Este
+ * directorio REST clásico (`/arcgis/rest/services`) puede exponer las capas
+ * directamente por carpeta/servicio, sin pasar por la búsqueda del Hub.
+ */
+async function checkArcgisServicesDirectory() {
+  const url = `${HUB}/arcgis/rest/services?f=json`
+  console.log(`\n→ Probando directorio ArcGIS Server clásico: ${url}`)
+  const res = await get(url)
+  const json = tryParseJson(res.text)
+  if (!res.ok || !json) {
+    console.log(`  ✗ HTTP ${res.status} — no hay ArcGIS Server propio en esta ruta.`)
+    return
+  }
+  if (json.error) {
+    console.log(`  ✗ ${JSON.stringify(json.error)}`)
+    return
+  }
+  const folders = Array.isArray(json.folders) ? json.folders : []
+  const services = Array.isArray(json.services) ? json.services : []
+  console.log(`  ✓ Existe. Carpetas: ${folders.join(', ') || '(ninguna)'}`)
+  console.log(`  Servicios en raíz: ${services.map((s) => `${s.name} (${s.type})`).join(', ') || '(ninguno)'}`)
+  console.log(`  Explorar una carpeta: ${HUB}/arcgis/rest/services/<carpeta>?f=json`)
 }
 
 /**
@@ -205,10 +258,12 @@ async function search(term) {
     console.log('  (sin resultados — probando el siguiente término...)')
   }
 
-  console.log('\n✗ Ningún término encontró datasets.')
-  console.log('  Probá manualmente con --search "<otro término>" (quizás el título real es distinto),')
-  console.log('  o revisá qué colecciones expone este catálogo:')
-  await listCollections()
+  console.log('\n✗ Ningún término encontró datasets. Diagnóstico final (sin adivinar más keywords):')
+  const collectionIds = await listCollections()
+  for (const id of collectionIds.length ? collectionIds : ['dataset', 'document']) {
+    await listAllItems(id, workingStrategy)
+  }
+  await checkArcgisServicesDirectory()
 }
 
 /** Describe los campos de una capa Esri REST (FeatureServer/MapServer). */
