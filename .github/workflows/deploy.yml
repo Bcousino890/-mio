@@ -81,7 +81,10 @@ jobs:
       # swap garantizado por deploy.sh. deploy.sh recibe SKIP_BUILD=1 y usa la
       # imagen precargada.
       - name: Build de la imagen en el runner
-        run: docker build -t casafari-app:latest ./web
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_GOOGLE_MAPS_API_KEY="${{ secrets.GOOGLE_MAPS_API_KEY }}" \
+            -t casafari-app:latest ./web
 
       - name: Enviar imagen al VPS (docker save → docker load)
         run: |

@@ -7,6 +7,11 @@ RUN npm ci
 # ── Stage 2: build ───────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 WORKDIR /app
+# NEXT_PUBLIC_* se incrusta en el bundle del navegador en build time, no en
+# runtime — por eso hace falta como build-arg (pasado desde el workflow de
+# deploy) además de en el .env del VPS, que solo cubre variables de servidor.
+ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
