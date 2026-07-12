@@ -25,3 +25,7 @@ Historial de consultas:
   nuevo, en la etapa manzanas-geo de Las Condes a 40 m, y que output/manzanas/
   las_condes.jsonl ya trae MÁS manzanas que las 1.099 de la grilla vieja de
   100 m (señal de que el fix de cobertura funciona).
+
+- 2026-07-12 (val) — validación post-fix OOM: confirmar proceso vivo con el
+  pool acotado, memoria estable (no cerca de OOM), y manzanas de Las Condes
+  subiendo a 40 m (>1.099 = fix de cobertura andando). Sin diag zombi.
