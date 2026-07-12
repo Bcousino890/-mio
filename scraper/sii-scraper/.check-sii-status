@@ -36,3 +36,4 @@ Historial de consultas:
   grilla geográfica—, cuántas manzanas lleva output/manzanas/las_condes.jsonl
   (objetivo ~3.400 vs las ~1.099 de la grilla de 100 m) y si ya arrancó la
   etapa de predios / la ingesta incremental a la BD.
+- 2026-07-12 (enum2) — validar enumeración andando: manzanas subiendo rápido.
