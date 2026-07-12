@@ -81,9 +81,14 @@ SELECT count(DISTINCT rol) FROM sii_avaluo_historico_cl WHERE sii_comuna_code='1
 
 ## FASE 4 — UI (ya en código; solo requiere datos de Fase 3)
 
-Nada que ejecutar: el sparkline de avalúo (`informe-predio`) y las bandas de
-valoración (informe + visor `/chile/catastro`) ya están y se pueblan solos cuando
-hay datos. Verificar visualmente abriendo un rol con histórico y suelo cargados.
+Nada que ejecutar: el sparkline de avalúo (`informe-predio` **y ahora también el
+visor `/chile/catastro`**, tarjeta "Tendencia de avalúo") y las bandas de
+valoración (informe + visor) ya están y se pueblan solos cuando hay datos.
+Verificar visualmente abriendo un rol con histórico y suelo cargados.
+
+Pendiente opcional (4.3): coropleta de valor de suelo MINVU en el mapa
+(polígonos de `mercado_agregado_cl`), reusando el patrón de coropleta de
+avalúo/m² de `parcels-bbox?enrich=1`.
 
 ---
 
