@@ -14,6 +14,36 @@ import { googleEarthUrl, googleMapsUrl } from '@/lib/map-links'
  * avalúos, construcciones, dueño (SII/TGR/DealerNet ya consultados),
  * compraventas CBR y contexto del entorno (300 m a la redonda).
  */
+/**
+ * Sparkline SVG minimalista para la serie de avalúo (sin dependencias). Dibuja
+ * la evolución del avalúo total por período; degrada a null si hay <2 puntos.
+ */
+function AvaluoSparkline({ serie }: { serie: { periodo: string; avaluo_total: number | null }[] }) {
+  const pts = serie.filter(p => p.avaluo_total != null) as { periodo: string; avaluo_total: number }[]
+  if (pts.length < 2) return null
+  const W = 220, H = 44, PAD = 3
+  const vals = pts.map(p => p.avaluo_total)
+  const min = Math.min(...vals), max = Math.max(...vals)
+  const span = max - min || 1
+  const x = (i: number) => PAD + (i * (W - 2 * PAD)) / (pts.length - 1)
+  const y = (v: number) => H - PAD - ((v - min) * (H - 2 * PAD)) / span
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.avaluo_total).toFixed(1)}`).join(' ')
+  const first = pts[0], last = pts[pts.length - 1]
+  const pct = first.avaluo_total > 0 ? Math.round(((last.avaluo_total - first.avaluo_total) / first.avaluo_total) * 100) : 0
+  return (
+    <div className="flex items-center gap-3">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="flex-shrink-0">
+        <path d={d} fill="none" stroke="#2563eb" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={x(pts.length - 1)} cy={y(last.avaluo_total)} r={2.5} fill="#2563eb" />
+      </svg>
+      <div className="text-[11px] text-slate-600">
+        <span className={pct >= 0 ? 'text-emerald-700 font-semibold' : 'text-red-700 font-semibold'}>{pct >= 0 ? '+' : ''}{pct}%</span>
+        {' '}<span className="text-slate-400">{first.periodo}→{last.periodo}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function InformePredioPage() {
   const [comuna, setComuna] = useState<string | null>(null)
   const [rol, setRol] = useState<string | null>(null)
@@ -29,6 +59,8 @@ export default function InformePredioPage() {
   const [entorno, setEntorno] = useState<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [avm, setAvm] = useState<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [histAvaluo, setHistAvaluo] = useState<any[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -64,6 +96,10 @@ export default function InformePredioPage() {
     fetch(`/api/chile/avm?sii_comuna_code=${comuna}&rol=${encodeURIComponent(rol)}`)
       .then(res => res.json())
       .then(d => { if (d.success) setAvm(d) })
+      .catch(() => {})
+    fetch(`/api/chile/avaluo-historico?sii_comuna_code=${comuna}&rol=${encodeURIComponent(rol)}`)
+      .then(res => res.json())
+      .then(d => { if (d.success) setHistAvaluo(d.serie ?? []) })
       .catch(() => {})
   }, [comuna, rol])
 
@@ -192,6 +228,12 @@ export default function InformePredioPage() {
               </div>
             ))}
           </div>
+          {histAvaluo && histAvaluo.length >= 2 && (
+            <div className="mt-3 rounded-lg border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-500 mb-1.5">Evolución del avalúo total (SII)</p>
+              <AvaluoSparkline serie={histAvaluo} />
+            </div>
+          )}
         </section>
 
         {/* Ficha catastral */}

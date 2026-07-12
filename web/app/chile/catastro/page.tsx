@@ -1385,6 +1385,29 @@ export default function CatastroPage() {
                       </div>
                     )}
 
+                    {/* Mercado realizado — valor de suelo MINVU (AVM v2) */}
+                    {avm?.suelo_minvu && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">
+                          Suelo MINVU {avm.suelo_minvu.scope === 'zona' ? '(zona)' : '(comuna)'}
+                        </p>
+                        <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/20 p-3">
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-lg font-bold text-emerald-300">{avm.suelo_minvu.valor_uf_m2} UF/m²</span>
+                            {avm.suelo_minvu.valor_clp_m2 != null && (
+                              <span className="text-[10px] text-slate-500">{fmtCLP(avm.suelo_minvu.valor_clp_m2)}/m²</span>
+                            )}
+                          </div>
+                          {avm.suelo_minvu.valor_suelo_estimado != null && (
+                            <p className="text-[11px] text-slate-500 mt-0.5">Valor de suelo del predio {fmtCLP(avm.suelo_minvu.valor_suelo_estimado)}</p>
+                          )}
+                          <p className="text-[10px] text-slate-600 mt-1.5 italic">
+                            Observatorio del Mercado de Suelo (MINVU){avm.suelo_minvu.periodo ? ` · ${avm.suelo_minvu.periodo}` : ''} — valor de terreno, no de construcción.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Distribución de superficies */}
                     {(rolDetail.rol?.superficie_terreno_m2 || rolDetail.construcciones?.length > 0) && (
                       <div>
