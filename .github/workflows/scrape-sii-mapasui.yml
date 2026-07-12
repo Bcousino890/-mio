@@ -56,6 +56,10 @@ jobs:
             echo "⚠ Matando cualquier scrape SII anterior..."
             pkill -9 -f "run-sii-mapasui.sh" || true
             pkill -9 -f "sii-scraper/run.py" || true
+            # También cualquier diagnóstico suelto (diag_*.py) que siga
+            # compitiendo por el proxy/WAF y provocando errores de conexión.
+            pkill -9 -f "diag_predio_depth.py" || true
+            pkill -9 -f "diag_manzana_grid.py" || true
             rm -f /tmp/casafari-scrape-sii-mapasui.lock
             sleep 2
           EOF

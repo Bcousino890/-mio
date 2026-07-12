@@ -93,14 +93,33 @@ async def run_manzanas_geo_stage(client, config) -> None:
                     comuna.comuna_id, len(puntos), len(vistas))
 
         with JsonlWriter(out_path) as writer:
-            tasks = [
-                _probe_point(client, comuna.comuna_id, predios_servicio,
-                             plat, plon, writer, ckpt, vistas, str(i))
-                for i, (plat, plon) in enumerate(puntos)
-                if not ckpt.is_processed(str(i))
-            ]
+            # Pool de workers en vez de crear TODAS las corrutinas de golpe: con
+            # grid_step fino la grilla tiene cientos de miles de puntos (p.ej.
+            # 40 m en Las Condes ≈ 229 mil), y materializar una corrutina por
+            # punto se comía ~1 GB de RAM y podía OOM-ear el VPS. Con la cola +
+            # N workers la memoria queda acotada (solo N corrutorinas vivas).
+            cola: asyncio.Queue = asyncio.Queue()
+            for i, (plat, plon) in enumerate(puntos):
+                if not ckpt.is_processed(str(i)):
+                    cola.put_nowait((str(i), plat, plon))
+
+            async def worker():
+                while True:
+                    try:
+                        key, plat, plon = cola.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
+                    try:
+                        await _probe_point(client, comuna.comuna_id,
+                                           predios_servicio, plat, plon,
+                                           writer, ckpt, vistas, key)
+                    finally:
+                        cola.task_done()
+
+            n_workers = max(1, config.max_concurrency)
+            workers = [asyncio.create_task(worker()) for _ in range(n_workers)]
             try:
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*workers)
             finally:
                 # Persistir el remanente del checkpoint (guardado por lotes).
                 ckpt.flush()
