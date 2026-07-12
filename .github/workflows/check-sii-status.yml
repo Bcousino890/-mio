@@ -16,6 +16,10 @@ on:
 jobs:
   status:
     runs-on: ubuntu-latest
+    # contents: write para publicar la salida en la rama sii-status (así el
+    # estado se puede leer con git fetch, sin la API de Actions).
+    permissions:
+      contents: write
     steps:
       - name: Configurar SSH
         run: |
@@ -26,8 +30,9 @@ jobs:
 
       - name: Leer estado del scrape SII en el VPS
         run: |
+          set -o pipefail
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF' | tee /tmp/sii-status.txt
             cd /opt/casafari
 
             echo "── Lockfile ──────────────────────────────────────────"
@@ -80,3 +85,21 @@ jobs:
             free -m
             df -h / | tail -1
           EOF
+
+      # La rama sii-status guarda SOLO el último estado (force-push de un único
+      # commit): legible con `git fetch origin sii-status && git show
+      # origin/sii-status:sii-status-latest.txt` cuando la API no está a mano.
+      - name: Publicar estado en la rama sii-status
+        if: always()
+        run: |
+          mkdir pub && cd pub
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          { echo "Generado: $(date -Is) · run ${{ github.run_id }}"; echo ""; \
+            cat /tmp/sii-status.txt 2>/dev/null || echo "(sin salida del VPS)"; } > sii-status-latest.txt
+          git add sii-status-latest.txt
+          git commit -qm "Estado SII $(date -Is)"
+          git push -qf \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" \
+            HEAD:refs/heads/sii-status

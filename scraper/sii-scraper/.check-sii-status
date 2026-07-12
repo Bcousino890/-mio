@@ -43,3 +43,6 @@ Historial de consultas:
   el WAF?), si la enumeración terminó y arrancó la etapa de predios (conteo en
   sii_mapasui_predios_cl sobre el baseline de 80.611), y que siga sin zombis
   manzanas-geo y con memoria estable.
+- 2026-07-12 (enum3-bis) — mismo chequeo re-disparado tras añadir el paso que
+  publica la salida en la rama sii-status (la API de Actions no siempre está
+  disponible desde las sesiones; con la rama, el estado se lee con git fetch).
