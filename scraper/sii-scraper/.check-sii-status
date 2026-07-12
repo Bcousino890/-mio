@@ -29,3 +29,10 @@ Historial de consultas:
 - 2026-07-12 (val) — validación post-fix OOM: confirmar proceso vivo con el
   pool acotado, memoria estable (no cerca de OOM), y manzanas de Las Condes
   subiendo a 40 m (>1.099 = fix de cobertura andando). Sin diag zombi.
+
+- 2026-07-12 (enum) — validación post-reset a enumeración de manzanas (reset
+  01:37, watchdog relanzó 01:47): confirmar que el proceso vivo corre la etapa
+  'manzanas' (enumeración IDs 1-4000, probe_depth=20) para Las Condes —no la
+  grilla geográfica—, cuántas manzanas lleva output/manzanas/las_condes.jsonl
+  (objetivo ~3.400 vs las ~1.099 de la grilla de 100 m) y si ya arrancó la
+  etapa de predios / la ingesta incremental a la BD.
