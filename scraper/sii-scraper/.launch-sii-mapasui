@@ -51,3 +51,6 @@ Historial de lanzamientos:
   de workers acotado (la grilla de 40 m tiene ~229k puntos y crear una corrutina
   por punto casi OOM-eaba el VPS). Este push relanza con memoria acotada y mata
   el diagnóstico zombi que competía por el proxy.
+- 2026-07-12 (enum) — relanzamiento con Las Condes en ENUMERACIÓN de manzanas
+  (IDs 1-4000, densos 102-3500) en vez de grilla geo: ~3 h vs ~32 h y más
+  completo. Vitacura sigue en geo. Este push limpia la pausa y arranca la cola.
