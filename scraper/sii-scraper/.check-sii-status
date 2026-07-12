@@ -37,3 +37,9 @@ Historial de consultas:
   (objetivo ~3.400 vs las ~1.099 de la grilla de 100 m) y si ya arrancó la
   etapa de predios / la ingesta incremental a la BD.
 - 2026-07-12 (enum2) — validar enumeración andando: manzanas subiendo rápido.
+- 2026-07-12 (enum3, ~09:00 UTC) — chequeo de ritmo: a las 05:51 el JSONL de
+  manzanas llevaba 1.548 líneas con 429 casi continuo (renovación de sesión
+  cada ~10 s). Medir cuántas manzanas hay ahora (¿avance real o estancado por
+  el WAF?), si la enumeración terminó y arrancó la etapa de predios (conteo en
+  sii_mapasui_predios_cl sobre el baseline de 80.611), y que siga sin zombis
+  manzanas-geo y con memoria estable.
