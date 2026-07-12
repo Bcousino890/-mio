@@ -85,38 +85,61 @@ function tryParseJson(text) {
   try { return JSON.parse(text) } catch { return null }
 }
 
-/** Búsqueda de datasets en el portal ArcGIS Hub (API pública, sin auth). */
+/**
+ * Búsqueda de datasets en el portal ArcGIS Hub (API pública, sin auth).
+ *
+ * La sintaxis de paginación varía entre implementaciones (JSON:API `page[size]`
+ * vs OGC API `limit`/`offset` vs sin paginar). En vez de que el humano tenga que
+ * ir probando una por una round-trip por round-trip, se prueban varias
+ * estrategias EN EL MISMO RUN y se reporta cuál funcionó.
+ */
 async function search(term) {
-  const url = `${HUB}/api/search/v1/collections/dataset/items?q=${encodeURIComponent(term)}&page[size]=10`
-  console.log(`→ Hub search: ${url}\n`)
-  const res = await get(url)
-  if (!res.ok) {
-    console.log(`✗ HTTP ${res.status}`)
-    diagnosticar(res)
+  const attempts = [
+    { label: 'sin parámetro de paginación', qs: `q=${encodeURIComponent(term)}` },
+    { label: 'limit', qs: `q=${encodeURIComponent(term)}&limit=10` },
+    { label: 'page[size] (JSON:API, bracket codificado)', qs: `q=${encodeURIComponent(term)}&${encodeURIComponent('page[size]')}=10` },
+    { label: 'page + per_page', qs: `q=${encodeURIComponent(term)}&page=1&per_page=10` },
+  ]
+
+  for (const attempt of attempts) {
+    const url = `${HUB}/api/search/v1/collections/dataset/items?${attempt.qs}`
+    console.log(`→ Hub search (${attempt.label}): ${url}`)
+    const res = await get(url)
+    const json = tryParseJson(res.text)
+
+    if (!res.ok || !json) {
+      console.log(`  ✗ HTTP ${res.status}${json ? ` — ${JSON.stringify(json)}` : ' (no es JSON)'}`)
+      continue
+    }
+    if (json.error || json.statusCode >= 400) {
+      console.log(`  ✗ ${JSON.stringify(json)}`)
+      continue
+    }
+
+    // Éxito: esta estrategia de paginación funcionó.
+    console.log(`  ✓ OK\n`)
+    const items = Array.isArray(json.data) ? json.data : []
+    console.log(`Datasets encontrados para "${term}": ${items.length}`)
+    if (items.length === 0) {
+      console.log('  (ninguno — probá otro término con --search "otro término")')
+      console.log(`\n[diagnóstico] JSON crudo (primeros 1500 caracteres):\n${JSON.stringify(json).slice(0, 1500)}`)
+      return
+    }
+    for (const it of items) {
+      const a = it.attributes ?? {}
+      console.log(`\n• ${a.name ?? it.id}`)
+      console.log(`  id: ${it.id} · tipo: ${a.type ?? '?'}`)
+      console.log(`  url servicio: ${a.url ?? '(sin url — puede ser un archivo descargable, no un servicio consultable)'}`)
+      if (a.slug) console.log(`  página: ${HUB}/datasets/${a.slug}`)
+    }
+    console.log(`\nSiguiente paso: para el dataset correcto (valor de suelo), describí sus campos con:`)
+    console.log(`  node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio de arriba>"`)
     return
   }
-  const json = tryParseJson(res.text)
-  if (!json) {
-    console.log('✗ La respuesta no es JSON válido.')
-    diagnosticar(res)
-    return
-  }
-  const items = Array.isArray(json.data) ? json.data : []
-  console.log(`Datasets encontrados para "${term}": ${items.length}`)
-  if (items.length === 0) {
-    console.log('  (ninguno — probá otro término con --search "otro término")')
-    console.log(`\n[diagnóstico] JSON crudo (primeros 1500 caracteres):\n${JSON.stringify(json).slice(0, 1500)}`)
-    return
-  }
-  for (const it of items) {
-    const a = it.attributes ?? {}
-    console.log(`\n• ${a.name ?? it.id}`)
-    console.log(`  id: ${it.id} · tipo: ${a.type ?? '?'}`)
-    console.log(`  url servicio: ${a.url ?? '(sin url — puede ser un archivo descargable, no un servicio consultable)'}`)
-    if (a.slug) console.log(`  página: ${HUB}/datasets/${a.slug}`)
-  }
-  console.log(`\nSiguiente paso: para el dataset correcto (valor de suelo), describí sus campos con:`)
-  console.log(`  node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio de arriba>"`)
+
+  console.log('\n✗ Ninguna estrategia de paginación funcionó contra este endpoint.')
+  console.log('  Revisá los errores de arriba — puede que la API real use otro nombre de parámetro,')
+  console.log('  o que /api/search/v1/collections/dataset/items no sea el endpoint correcto en este portal.')
 }
 
 /** Describe los campos de una capa Esri REST (FeatureServer/MapServer). */
