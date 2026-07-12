@@ -1,0 +1,13 @@
+Archivo centinela: cada push a este archivo (en main) dispara
+.github/workflows/reset-sii-mapasui.yml, que BORRA en el VPS el estado de
+descubrimiento/extracción del scrape (checkpoints, manzanas, predios,
+found_predios y marcadores .complete-*) para re-scrapear desde cero.
+
+DESTRUCTIVO pero acotado: NO borra la tabla sii_mapasui_predios_cl (se re-ingesta
+idempotente), ni venv/.env, ni el flag de pausa. Usar tras cambiar la
+grilla/pipeline; luego reanudar con .launch-sii-mapasui.
+
+Historial de resets:
+- 2026-07-11 — reset por subcaptura: el scrape viejo (grilla 100 m, cap 150)
+  capturó ~21% de Las Condes. Se resetea para re-descubrir manzanas con grilla
+  fina y sondeo de predios por vacíos.
