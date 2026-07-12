@@ -5,16 +5,27 @@
 // abierta (VPS o local del usuario; el entorno de build de Claude bloquea ese
 // host con 403).
 //
+// DESCUBRIMIENTO (primer run real, 2026-07-12): ide.minvu.cl NO es un GeoServer
+// WFS clásico — es un portal Esri ArcGIS Hub ("Geoportal Open Data Minvu"). El
+// intento original de GetCapabilities devolvió HTML, no XML. Por eso el modo
+// por defecto ahora es la búsqueda de datasets de ArcGIS Hub (--search), y el
+// describe de campos usa la REST API nativa de Esri (--esri-describe) en vez
+// de DescribeFeatureType. Se conservan --wfs / --describe como fallback
+// explícito por si otra fuente (ej. geoportal.cl) sí es GeoServer clásico.
+//
 // Qué hace:
-//   1. GetCapabilities del WFS de MINVU → lista las capas cuyo nombre sugiere
-//      "valor de suelo / mercado" (candidatas para --layer del scraper).
-//   2. DescribeFeatureType de la capa elegida → lista sus campos, para fijar
-//      --field-valor / --field-zona / --field-comuna del scraper.
+//   1. --search <término>: busca datasets en el Hub (ArcGIS Hub Search API v3)
+//      → título, id, tipo, y la URL del servicio REST (FeatureServer/MapServer)
+//      si el dataset es un servicio consultable.
+//   2. --esri-describe <url_del_servicio>: `<url>?f=json` → lista los campos de
+//      la capa, para fijar --field-valor / --field-zona / --field-comuna.
+//   3. --wfs / --describe <capa>: fallback GeoServer WFS clásico (otros portales).
 //
 // USO:
-//   node scraper/a0-verify-fuentes.mjs
-//   node scraper/a0-verify-fuentes.mjs --describe <nombre_capa>
-//   node scraper/a0-verify-fuentes.mjs --wfs-url https://otra/geoserver/wfs
+//   node scraper/a0-verify-fuentes.mjs                          # busca "valor de suelo"
+//   node scraper/a0-verify-fuentes.mjs --search "observatorio mercado de suelo"
+//   node scraper/a0-verify-fuentes.mjs --esri-describe "https://.../FeatureServer/0"
+//   node scraper/a0-verify-fuentes.mjs --wfs --wfs-url https://otro/geoserver/wfs
 //
 // Salida: imprime los comandos ingest-minvu-suelo.mjs sugeridos con los flags ya
 // rellenados. NO escribe en la BD.
@@ -23,22 +34,28 @@ import { parseArgs } from 'node:util'
 
 const { values } = parseArgs({
   options: {
+    'hub-url': { type: 'string' },
+    search: { type: 'string' },
+    'esri-describe': { type: 'string' },
     'wfs-url': { type: 'string' },
     describe: { type: 'string' },
+    wfs: { type: 'boolean' },
   },
 })
 
+const HUB = values['hub-url'] || process.env.MINVU_HUB_URL || 'https://ide.minvu.cl'
 const WFS = values['wfs-url'] || process.env.MINVU_WFS_URL || 'https://ide.minvu.cl/geoserver/wfs'
 const UA = 'CasafariMIO/1.0 (+verificacion A0 open data MINVU)'
+const DEFAULT_TERM = 'valor de suelo'
 
 async function get(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(60000) })
+  const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json,application/xml,text/xml,*/*' }, signal: AbortSignal.timeout(60000) })
   const text = await res.text()
   const contentType = res.headers.get('content-type') || '(sin content-type)'
   return { ok: res.ok, status: res.status, contentType, text }
 }
 
-// Extracción mínima por regex (evita dependencia de un parser XML).
+// Extracción mínima por regex (evita dependencia de un parser XML, solo para el fallback WFS).
 function matchAll(xml, re) {
   const out = []
   let m
@@ -48,14 +65,13 @@ function matchAll(xml, re) {
 
 /**
  * Diagnóstico cuando algo no salió como se esperaba: status, content-type,
- * tamaño, si parece HTML (URL/endpoint equivocado) o un ExceptionReport WFS
- * (servicio/versión no soportada, capa inexistente, etc.), y un fragmento
- * crudo para inspeccionar a ojo sin tener que repetir la llamada.
+ * tamaño, si parece HTML (URL/endpoint equivocado) o un ExceptionReport WFS,
+ * y un fragmento crudo para inspeccionar sin repetir la llamada.
  */
 function diagnosticar(res) {
   console.log(`\n[diagnóstico] HTTP ${res.status} · content-type: ${res.contentType} · ${res.text.length} bytes`)
   if (/<html[\s>]/i.test(res.text.slice(0, 500))) {
-    console.log('[diagnóstico] La respuesta parece HTML, no XML — probable URL/ruta equivocada (¿redirect, login, 404 disfrazado?).')
+    console.log('[diagnóstico] La respuesta parece HTML, no JSON/XML — probable URL/ruta equivocada (¿redirect, login, 404 disfrazado?).')
   }
   const excMatch = res.text.match(/<(?:ows:)?ExceptionText>([^<]+)<\/(?:ows:)?ExceptionText>/i)
     || res.text.match(/<ServiceException[^>]*>([^<]+)<\/ServiceException>/i)
@@ -65,6 +81,91 @@ function diagnosticar(res) {
   console.log(`[diagnóstico] Primeros 1500 caracteres de la respuesta:\n${res.text.slice(0, 1500)}`)
 }
 
+function tryParseJson(text) {
+  try { return JSON.parse(text) } catch { return null }
+}
+
+/** Búsqueda de datasets en el portal ArcGIS Hub (API pública, sin auth). */
+async function search(term) {
+  const url = `${HUB}/api/search/v1/collections/dataset/items?q=${encodeURIComponent(term)}&page[size]=10`
+  console.log(`→ Hub search: ${url}\n`)
+  const res = await get(url)
+  if (!res.ok) {
+    console.log(`✗ HTTP ${res.status}`)
+    diagnosticar(res)
+    return
+  }
+  const json = tryParseJson(res.text)
+  if (!json) {
+    console.log('✗ La respuesta no es JSON válido.')
+    diagnosticar(res)
+    return
+  }
+  const items = Array.isArray(json.data) ? json.data : []
+  console.log(`Datasets encontrados para "${term}": ${items.length}`)
+  if (items.length === 0) {
+    console.log('  (ninguno — probá otro término con --search "otro término")')
+    console.log(`\n[diagnóstico] JSON crudo (primeros 1500 caracteres):\n${JSON.stringify(json).slice(0, 1500)}`)
+    return
+  }
+  for (const it of items) {
+    const a = it.attributes ?? {}
+    console.log(`\n• ${a.name ?? it.id}`)
+    console.log(`  id: ${it.id} · tipo: ${a.type ?? '?'}`)
+    console.log(`  url servicio: ${a.url ?? '(sin url — puede ser un archivo descargable, no un servicio consultable)'}`)
+    if (a.slug) console.log(`  página: ${HUB}/datasets/${a.slug}`)
+  }
+  console.log(`\nSiguiente paso: para el dataset correcto (valor de suelo), describí sus campos con:`)
+  console.log(`  node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio de arriba>"`)
+}
+
+/** Describe los campos de una capa Esri REST (FeatureServer/MapServer). */
+async function esriDescribe(layerUrl) {
+  const sep = layerUrl.includes('?') ? '&' : '?'
+  const url = `${layerUrl}${sep}f=json`
+  console.log(`→ Describe capa ArcGIS REST: ${url}\n`)
+  const res = await get(url)
+  if (!res.ok) {
+    console.log(`✗ HTTP ${res.status}`)
+    diagnosticar(res)
+    return
+  }
+  const json = tryParseJson(res.text)
+  if (!json) {
+    console.log('✗ La respuesta no es JSON válido.')
+    diagnosticar(res)
+    return
+  }
+  if (json.error) {
+    console.log(`✗ Error del servicio: ${json.error.message ?? JSON.stringify(json.error)}`)
+    return
+  }
+  const fieldDefs = Array.isArray(json.fields) ? json.fields : []
+  console.log(`Campos:`)
+  if (fieldDefs.length === 0) {
+    console.log('  (ninguno encontrado)')
+    diagnosticar(res)
+    return
+  }
+  for (const f of fieldDefs) {
+    console.log(`  - ${f.name} (${f.type}${f.alias && f.alias !== f.name ? `, alias: "${f.alias}"` : ''})`)
+  }
+
+  const fields = fieldDefs.map(f => f.name)
+  const valorGuess = fields.find(f => /uf.*m2|valor|precio|monto/i.test(f))
+  const zonaGuess = fields.find(f => /zona|objectid|^id$/i.test(f))
+  const comunaGuess = fields.find(f => /comuna|cut|cod_com/i.test(f))
+
+  console.log(`\nComando sugerido (ajustá los campos si el guess no es exacto):`)
+  console.log(`  node scraper/ingest-minvu-suelo.mjs \\`)
+  console.log(`    --esri-url "${layerUrl}" \\`)
+  console.log(`    --field-valor ${valorGuess ?? '<campo_UF_m2>'} \\`)
+  if (zonaGuess) console.log(`    --field-zona ${zonaGuess} \\`)
+  console.log(`    ${comunaGuess ? `--field-comuna ${comunaGuess}` : '--comuna 15108'} \\`)
+  console.log(`    --periodo 2024 --dry-run`)
+}
+
+/** Fallback: GeoServer WFS clásico (ej. otros portales, no MINVU). */
 async function capabilities() {
   const url = `${WFS}?service=WFS&version=2.0.0&request=GetCapabilities`
   console.log(`→ GetCapabilities: ${url}\n`)
@@ -74,7 +175,6 @@ async function capabilities() {
     diagnosticar(res)
     return
   }
-  // Nombres de FeatureType (WFS 2.0.0). Tolerante a namespaces (Name / wfs:Name).
   const names = matchAll(res.text, /<(?:\w+:)?Name>([^<]+)<\/(?:\w+:)?Name>/g)
   const uniq = [...new Set(names)]
   const candidatas = uniq.filter(n => /suelo|valor|mercado|observatorio|transacc/i.test(n))
@@ -84,9 +184,7 @@ async function capabilities() {
   if (uniq.length === 0) {
     console.log('\n⚠ GetCapabilities respondió 200 pero no se encontró ningún <Name> de capa.')
     diagnosticar(res)
-    console.log('\nPosibles causas: la ruta base del WFS no es esta (probar con --wfs-url otra),')
-    console.log('el servicio requiere otro path (ej. /geoserver/<workspace>/wfs), o devolvió un')
-    console.log('ExceptionReport (ver arriba). Revisa el fragmento crudo para decidir el siguiente intento.')
+    console.log('\nEste portal probablemente no es GeoServer clásico. Probá el modo --search (Hub/Esri).')
     return
   }
 
@@ -98,10 +196,7 @@ async function capabilities() {
   }
   console.log(`\nTodas las capas:`)
   for (const n of uniq) console.log(`  - ${n}`)
-
-  console.log(`\nSiguiente paso:`)
-  console.log(`  node scraper/a0-verify-fuentes.mjs --describe <capa>`)
-  console.log(`  (usa una de las candidatas para ver sus campos)`)
+  console.log(`\nSiguiente paso: node scraper/a0-verify-fuentes.mjs --describe <capa>`)
 }
 
 async function describe(layer) {
@@ -138,8 +233,10 @@ async function describe(layer) {
 
 async function main() {
   try {
-    if (values.describe) await describe(values.describe)
-    else await capabilities()
+    if (values['esri-describe']) await esriDescribe(values['esri-describe'])
+    else if (values.wfs && values.describe) await describe(values.describe)
+    else if (values.wfs) await capabilities()
+    else await search(values.search || DEFAULT_TERM)
   } catch (err) {
     console.error(`\n✗ ${err.message}`)
     console.error('  Si es un 403/timeout: este host está bloqueado en el entorno de build; corre el script en el VPS o en local.')

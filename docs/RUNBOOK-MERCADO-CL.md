@@ -27,19 +27,26 @@ Requisitos (los cumple el VPS ya): `DATABASE_URL`, Node ≥18, migraciones aplic
 
 ## FASE 2 — Verificar fuentes + piloto
 
-**A0 · Descubrir la capa MINVU real y sus campos:**
+**Descubrimiento (2026-07-12):** `ide.minvu.cl` es un portal **Esri ArcGIS Hub** ("Geoportal Open
+Data Minvu"), no un GeoServer WFS clásico — el primer intento de `GetCapabilities` devolvió HTML.
+Por eso A0 tiene dos pasos: buscar el dataset en el Hub, y describir sus campos vía REST de Esri.
+
+**A0 · Buscar el dataset y describir sus campos:**
 ```bash
-node scraper/a0-verify-fuentes.mjs                    # lista capas candidatas (suelo/valor/mercado)
-node scraper/a0-verify-fuentes.mjs --describe <capa>  # campos + comando de ingesta ya rellenado
+node scraper/a0-verify-fuentes.mjs                              # busca "valor de suelo" en el Hub
+node scraper/a0-verify-fuentes.mjs --search "observatorio mercado de suelo"  # otro término si no aparece
+node scraper/a0-verify-fuentes.mjs --esri-describe "<url del FeatureServer/MapServer de arriba>"
 ```
-El `--describe` imprime el comando `ingest-minvu-suelo.mjs` con los flags
-`--layer` / `--field-valor` / `--field-zona` / `--field-comuna` inferidos. Copiar ese comando.
+El `--esri-describe` imprime el comando `ingest-minvu-suelo.mjs` con los flags
+`--esri-url` / `--field-valor` / `--field-zona` / `--field-comuna` inferidos. Copiar ese comando.
+
+(Si el portal fuera GeoServer clásico: `--wfs --wfs-url <url> [--describe <capa>]`.)
 
 **Piloto (1 comuna, primero en seco):**
 ```bash
 node scraper/ingest-minvu-suelo.mjs \
-  --wfs-url https://ide.minvu.cl/geoserver/wfs \
-  --layer <capa> --field-valor <campo_uf_m2> [--field-zona <zona>] \
+  --esri-url "<FeatureServer/MapServer de A0>" \
+  --field-valor <campo_uf_m2> [--field-zona <zona>] \
   --comuna 15108 --periodo 2024 --dry-run          # valida sin escribir
 # quitar --dry-run para persistir en mercado_agregado_cl
 ```
