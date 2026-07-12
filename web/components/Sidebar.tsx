@@ -9,6 +9,7 @@ import {
   Users,
   BarChart3,
   MapPin,
+  Box,
   Settings,
   ChevronRight,
   Sun,
@@ -76,6 +77,13 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'Zonas & Scraping',
       icon: MapPin,
       description: 'Cobertura por zona',
+    },
+    {
+      href: '/mapa-3d',
+      label: 'Mapa 3D',
+      icon: Box,
+      description: 'Satélite · rotación e inclinación',
+      badge: 'NEW',
     },
   ],
   cl: [

@@ -14,6 +14,7 @@
     "@types/leaflet": "^1.9.21",
     "@types/leaflet-draw": "^1.0.13",
     "@types/leaflet.markercluster": "^1.5.6",
+    "@vis.gl/react-google-maps": "^1.9.0",
     "busboy": "^1.6.0",
     "fast-xml-parser": "^5.9.3",
     "jszip": "^3.10.1",
