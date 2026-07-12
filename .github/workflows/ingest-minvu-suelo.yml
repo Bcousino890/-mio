@@ -1,0 +1,86 @@
+name: Ingesta valor de suelo MINVU (→ mercado_agregado_cl)
+
+# Corre scraper/ingest-minvu-suelo.mjs EN EL VPS (salida a ide.minvu.cl + BD de
+# producción), poblando mercado_agregado_cl (fuente='minvu_suelo'). Es la señal
+# pública de "mercado realizado" que calibra el AVM v2.
+#
+# Mismo patrón de DATABASE_URL que ingest-sii-mapasui-now.yml: source ../.env →
+# POSTGRES_PASSWORD → postgres://casafari:...@127.0.0.1:5433/casafari.
+#
+# Primero corré el workflow "Verificar fuentes de mercado (A0)" para saber los
+# valores reales de layer/field_*. Lanzá con dry_run=true para validar sin escribir.
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "Capa WFS de valor de suelo (de A0)"
+        required: true
+      field_valor:
+        description: "Campo con el valor UF/m² (de A0)"
+        required: true
+      field_zona:
+        description: "Campo con el id de zona (opcional)"
+        required: false
+        default: ""
+      field_comuna:
+        description: "Campo con el código de comuna (si la capa lo trae)"
+        required: false
+        default: ""
+      comuna:
+        description: "Código SII fijo (si la capa NO trae comuna). Ej. 15108"
+        required: false
+        default: ""
+      periodo:
+        description: "Período del indicador. Ej. 2024"
+        required: true
+        default: "2024"
+      wfs_url:
+        description: "URL base del WFS"
+        required: false
+        default: "https://ide.minvu.cl/geoserver/wfs"
+      dry_run:
+        description: "true = validar sin escribir en la BD"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ingesta MINVU en el VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
+            set -e
+            cd /opt/casafari/scraper
+            if [ -f ../.env ]; then set -a; source ../.env; set +a; fi
+            if [ -z "\${POSTGRES_PASSWORD:-}" ]; then echo "✗ Falta POSTGRES_PASSWORD (.env)"; exit 1; fi
+            export DATABASE_URL="postgres://casafari:\${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
+            if [ ! -d node_modules/pg ]; then
+              echo "▶ Instalando pg..."; npm install --omit=dev --no-audit --no-fund
+            fi
+            ARGS=( --wfs-url "${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}" \
+                   --layer "${{ github.event.inputs.layer }}" \
+                   --field-valor "${{ github.event.inputs.field_valor }}" \
+                   --periodo "${{ github.event.inputs.periodo }}" )
+            [ -n "${{ github.event.inputs.field_zona }}" ]   && ARGS+=( --field-zona "${{ github.event.inputs.field_zona }}" )
+            [ -n "${{ github.event.inputs.field_comuna }}" ] && ARGS+=( --field-comuna "${{ github.event.inputs.field_comuna }}" )
+            [ -n "${{ github.event.inputs.comuna }}" ]       && ARGS+=( --comuna "${{ github.event.inputs.comuna }}" )
+            [ "${{ github.event.inputs.dry_run }}" = "true" ] && ARGS+=( --dry-run )
+            echo "▶ node ingest-minvu-suelo.mjs \${ARGS[@]}"
+            node ingest-minvu-suelo.mjs "\${ARGS[@]}"
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "Ingesta MINVU terminada. Si fue dry-run, relanzá con dry_run=false para persistir."
+          echo "Verificá: SELECT count(*) FROM mercado_agregado_cl WHERE fuente='minvu_suelo';"
