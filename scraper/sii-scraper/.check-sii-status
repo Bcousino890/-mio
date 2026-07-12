@@ -20,3 +20,8 @@ Historial de consultas:
   output/.complete-15108 y si arrancó el descubrimiento de manzanas de Vitacura
   (15160). Confirmar que va a avanzar a Vitacura, no que quedó re-corriendo
   Las Condes.
+- 2026-07-12 — validación del RE-SCRAPE limpio (grilla 40 m + sondeo por vacíos,
+  lanzado 01:14 tras reset): confirmar que el proceso está vivo con el pipeline
+  nuevo, en la etapa manzanas-geo de Las Condes a 40 m, y que output/manzanas/
+  las_condes.jsonl ya trae MÁS manzanas que las 1.099 de la grilla vieja de
+  100 m (señal de que el fix de cobertura funciona).
