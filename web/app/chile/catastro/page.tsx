@@ -87,6 +87,37 @@ function fmtCLP(n: number | null) {
   return formatCLP(n)
 }
 
+/**
+ * Sparkline SVG minimalista de la serie de avalúo (sin dependencias), en tema
+ * oscuro para el panel del visor. Espejo del de informe-predio; degrada a null
+ * con <2 puntos. NO es precio de venta — es avalúo fiscal.
+ */
+function AvaluoSparkline({ serie }: { serie: { periodo: string; avaluo_total: number | null }[] }) {
+  const pts = serie.filter(p => p.avaluo_total != null) as { periodo: string; avaluo_total: number }[]
+  if (pts.length < 2) return null
+  const W = 220, H = 44, PAD = 3
+  const vals = pts.map(p => p.avaluo_total)
+  const min = Math.min(...vals), max = Math.max(...vals)
+  const span = max - min || 1
+  const x = (i: number) => PAD + (i * (W - 2 * PAD)) / (pts.length - 1)
+  const y = (v: number) => H - PAD - ((v - min) * (H - 2 * PAD)) / span
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.avaluo_total).toFixed(1)}`).join(' ')
+  const first = pts[0], last = pts[pts.length - 1]
+  const pct = first.avaluo_total > 0 ? Math.round(((last.avaluo_total - first.avaluo_total) / first.avaluo_total) * 100) : 0
+  return (
+    <div className="flex items-center gap-3">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="flex-shrink-0">
+        <path d={d} fill="none" stroke="#60a5fa" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={x(pts.length - 1)} cy={y(last.avaluo_total)} r={2.5} fill="#60a5fa" />
+      </svg>
+      <div className="text-[11px] text-slate-500">
+        <span className={pct >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>{pct >= 0 ? '+' : ''}{pct}%</span>
+        {' '}<span className="text-slate-600">{first.periodo}→{last.periodo}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function CatastroPage() {
   const [zoneId, setZoneId] = useState<ZoneId>('vitacura')
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -184,6 +215,9 @@ export default function CatastroPage() {
   const [ventasImport, setVentasImport] = useState<{ loading: boolean; msg: string | null }>({ loading: false, msg: null })
   // Valoración automática (AVM v1) por comparables de oferta
   const [avm, setAvm] = useState<any>(null)
+
+  // Serie histórica de avalúo fiscal del rol (sparkline de tendencia)
+  const [histAvaluo, setHistAvaluo] = useState<{ periodo: string; avaluo_total: number | null }[] | null>(null)
 
   // Pin/polígono del rol seleccionado en el mapa (parcel-geojson → coords SII)
   const [mapPin, setMapPin] = useState<{ lat: number; lng: number; label?: string; geojson?: object | null } | null>(null)
@@ -407,6 +441,18 @@ export default function CatastroPage() {
     fetch(`/api/chile/avm?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => { if (d.success) setAvm(d) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [selectedRol, zone.siiCode])
+
+  // Serie histórica de avalúo del rol seleccionado (sparkline en la ficha)
+  useEffect(() => {
+    setHistAvaluo(null)
+    if (!selectedRol || !zone.siiCode) return
+    const controller = new AbortController()
+    fetch(`/api/chile/avaluo-historico?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(selectedRol.rol)}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) setHistAvaluo(d.serie ?? []) })
       .catch(() => {})
     return () => controller.abort()
   }, [selectedRol, zone.siiCode])
@@ -1404,6 +1450,17 @@ export default function CatastroPage() {
                           <p className="text-[10px] text-slate-600 mt-1.5 italic">
                             Observatorio del Mercado de Suelo (MINVU){avm.suelo_minvu.periodo ? ` · ${avm.suelo_minvu.periodo}` : ''} — valor de terreno, no de construcción.
                           </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tendencia de avalúo fiscal (histórico) — sparkline */}
+                    {histAvaluo && histAvaluo.filter(p => p.avaluo_total != null).length >= 2 && (
+                      <div>
+                        <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-2">Tendencia de avalúo</p>
+                        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)]/50 p-3">
+                          <AvaluoSparkline serie={histAvaluo} />
+                          <p className="text-[10px] text-slate-600 mt-1.5 italic">Avalúo fiscal SII por período — no es precio de venta.</p>
                         </div>
                       </div>
                     )}
