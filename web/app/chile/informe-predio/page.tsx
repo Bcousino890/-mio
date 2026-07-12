@@ -132,23 +132,46 @@ export default function InformePredioPage() {
           <p className="text-[11px] text-slate-400 mt-1">Generado el {new Date().toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })} · Fuente: SII (archivo oficial de roles), TGR, CBR</p>
         </header>
 
-        {/* Valoración estimada (AVM v1) — comparables de oferta */}
-        {avm && avm.enough && avm.estimated_value != null && (
+        {/* Valoración estimada (AVM v2) — dos señales públicas: oferta + suelo MINVU */}
+        {avm && ((avm.enough && avm.estimated_value != null) || avm.suelo_minvu) && (
           <section className="mb-6">
             <h2 className="text-[13px] font-bold uppercase tracking-wide text-slate-700 mb-2">Valoración estimada de mercado</h2>
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-              <div className="flex items-baseline gap-3">
-                <span className="text-2xl font-bold text-blue-800">{formatCLP(avm.estimated_value)}</span>
-                <span className="text-sm text-blue-600">{formatUF(avm.estimated_value, 0)}</span>
-              </div>
-              {avm.estimated_min != null && avm.estimated_max != null && (
-                <p className="text-[12px] text-slate-600 mt-1">Rango estimado: {formatCLP(avm.estimated_min)} – {formatCLP(avm.estimated_max)}</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {avm.enough && avm.estimated_value != null && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-500 mb-1">Oferta (anuncios)</p>
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-2xl font-bold text-blue-800">{formatCLP(avm.estimated_value)}</span>
+                    <span className="text-sm text-blue-600">{formatUF(avm.estimated_value, 0)}</span>
+                  </div>
+                  {avm.estimated_min != null && avm.estimated_max != null && (
+                    <p className="text-[12px] text-slate-600 mt-1">Rango: {formatCLP(avm.estimated_min)} – {formatCLP(avm.estimated_max)}</p>
+                  )}
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    {avm.n_comparables} anuncios de venta {avm.scope === 'radio' ? 'en 1 km' : 'de la comuna'}
+                    {avm.median_sqm ? ` · mediana ${formatCLP(Math.round(avm.median_sqm))}/m²` : ''} × {avm.base_surface_m2} m² {avm.base_surface_type}.
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-1 italic">Precio de publicación, no de cierre; con sesgo al alza conocido.</p>
+                </div>
               )}
-              <p className="text-[11px] text-slate-500 mt-2">
-                Basado en {avm.n_comparables} anuncios de venta {avm.scope === 'radio' ? 'en 1 km a la redonda' : 'de la comuna'}
-                {avm.median_sqm ? ` · mediana ${formatCLP(Math.round(avm.median_sqm))}/m²` : ''} × {avm.base_surface_m2} m² {avm.base_surface_type}.
-              </p>
-              <p className="text-[10px] text-slate-400 mt-1 italic">Valor de oferta (precio de publicación, no de cierre); referencial y con sesgo al alza conocido. No constituye tasación comercial.</p>
+              {avm.suelo_minvu && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 mb-1">Suelo MINVU {avm.suelo_minvu.scope === 'zona' ? '(zona)' : '(comuna)'}</p>
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-2xl font-bold text-emerald-800">{avm.suelo_minvu.valor_uf_m2} UF/m²</span>
+                    {avm.suelo_minvu.valor_clp_m2 != null && (
+                      <span className="text-sm text-emerald-700">{formatCLP(avm.suelo_minvu.valor_clp_m2)}/m²</span>
+                    )}
+                  </div>
+                  {avm.suelo_minvu.valor_suelo_estimado != null && (
+                    <p className="text-[12px] text-slate-600 mt-1">Valor de suelo del predio: {formatCLP(avm.suelo_minvu.valor_suelo_estimado)}</p>
+                  )}
+                  <p className="text-[11px] text-slate-500 mt-2">
+                    Observatorio del Mercado de Suelo (MINVU){avm.suelo_minvu.periodo ? ` · ${avm.suelo_minvu.periodo}` : ''}, derivado de transacciones del SII.
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-1 italic">Valor de suelo (terreno), no de la construcción. Mercado realizado a nivel de zona.</p>
+                </div>
+              )}
             </div>
           </section>
         )}

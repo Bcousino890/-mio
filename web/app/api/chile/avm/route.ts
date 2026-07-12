@@ -1,24 +1,96 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { getUfRateCl } from '@/lib/uf-rate-cl'
 
 /**
  * GET /api/chile/avm?sii_comuna_code=15108&rol=795-198
  *
- * AVM v1 (valoración automática) por comparables de OFERTA.
+ * AVM v2 (valoración automática) — dos señales públicas, sin proveedor comercial.
  *
- * No hay precios de cierre públicos en Chile (el CBR no publica un dataset de
- * ventas — ver docs/SII-ENRICHMENT-ROADMAP.md), así que este AVM estima el
- * valor a partir de los anuncios de venta activos de la zona (`listings_cl`):
- * mediana $/m² construido de los comparables × la superficie construida del
- * predio. Es un "valor de oferta", con sesgo al alza conocido (~5-12% sobre el
- * cierre) que se declara en la UI — nunca se presenta como tasación.
+ * No hay precios de cierre por-predio públicos en Chile (ver
+ * docs/CBR-TRANSACCIONES-REPOS-2026.md). Este AVM combina las dos señales que sí
+ * son públicas, presentándolas por separado (nunca como tasación):
  *
- * Estrategia de comparables: primero un radio de 1 km alrededor del predio
- * (si tiene coordenadas); si no reúne el mínimo, se cae a toda la comuna.
+ *   1. OFERTA (`basis: 'oferta'`): mediana $/m² CONSTRUIDO de los anuncios de
+ *      venta activos de la zona (`listings_cl`) × superficie construida del
+ *      predio. Sesgo al alza conocido (~5-12% sobre el cierre), declarado en UI.
+ *   2. SUELO MINVU (`suelo_minvu`): valor de suelo UF/m² por zona del
+ *      Observatorio del Mercado de Suelo de MINVU (mercado_agregado_cl, 0057),
+ *      derivado de transacciones del SII → "mercado realizado" a nivel de suelo.
+ *
+ * Se presentan como DOS bandas distintas a propósito: la oferta es $/m²
+ * CONSTRUIDO y el suelo MINVU es UF/m² de TERRENO — miden cosas diferentes, así
+ * que NO se multiplican en un único número "calibrado" que sería engañoso.
+ *
+ * Estrategia de comparables de oferta: primero un radio de 1 km alrededor del
+ * predio (si tiene coordenadas); si no reúne el mínimo, se cae a toda la comuna.
  */
 
 const MIN_COMPS = 5
 const RADIUS_M = 1000
+
+interface SueloMinvu {
+  scope: 'zona' | 'comuna'
+  periodo: string | null
+  valor_uf_m2: number
+  valor_clp_m2: number | null
+  valor_suelo_estimado: number | null   // valor_clp_m2 × superficie de terreno
+}
+
+/**
+ * Valor de suelo MINVU (UF/m²) para el predio: primero la zona que lo contiene
+ * (ST_Contains sobre la geometría MINVU), si no, el promedio de la comuna. Se
+ * lee de la vista `mercado_zona_actual_cl` (último período por zona).
+ */
+async function sueloMinvu(
+  siiComunaCode: string,
+  lat: number | null,
+  lng: number | null,
+  terreno: number | null,
+  ufRate: number | null
+): Promise<SueloMinvu | null> {
+  let row: { valor_uf_m2: number; periodo: string | null } | null = null
+  let scope: 'zona' | 'comuna' = 'comuna'
+
+  if (lat != null && lng != null) {
+    const { rows } = await pool.query(
+      `SELECT valor_uf_m2, periodo
+         FROM mercado_zona_actual_cl
+        WHERE fuente = 'minvu_suelo'
+          AND geom IS NOT NULL
+          AND valor_uf_m2 IS NOT NULL
+          AND ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+        ORDER BY periodo DESC
+        LIMIT 1`,
+      [lng, lat]
+    )
+    if (rows[0]) { row = rows[0]; scope = 'zona' }
+  }
+
+  if (!row) {
+    const { rows } = await pool.query(
+      `SELECT round(avg(valor_uf_m2)::numeric, 2) AS valor_uf_m2, max(periodo) AS periodo
+         FROM mercado_zona_actual_cl
+        WHERE fuente = 'minvu_suelo'
+          AND sii_comuna_code = $1
+          AND valor_uf_m2 IS NOT NULL`,
+      [siiComunaCode]
+    )
+    if (rows[0]?.valor_uf_m2 != null) { row = rows[0]; scope = 'comuna' }
+  }
+
+  if (!row || row.valor_uf_m2 == null) return null
+  const valorUfM2 = Number(row.valor_uf_m2)
+  const valorClpM2 = ufRate != null ? Math.round(valorUfM2 * ufRate) : null
+  const valorSuelo = valorClpM2 != null && terreno && terreno > 0 ? Math.round(valorClpM2 * terreno) : null
+  return {
+    scope,
+    periodo: row.periodo ?? null,
+    valor_uf_m2: valorUfM2,
+    valor_clp_m2: valorClpM2,
+    valor_suelo_estimado: valorSuelo,
+  }
+}
 
 interface CompStats {
   n: number
@@ -110,6 +182,12 @@ export async function GET(request: NextRequest) {
     const estimatedMin = enough && baseSurface && stats.p25_sqm != null ? Math.round(stats.p25_sqm * baseSurface) : null
     const estimatedMax = enough && baseSurface && stats.p75_sqm != null ? Math.round(stats.p75_sqm * baseSurface) : null
 
+    // Banda "mercado realizado": valor de suelo MINVU (UF/m²) para la zona del
+    // predio. Requiere la UF del día (mindicador.cl) para expresarlo en CLP; si
+    // no responde, se devuelve la banda en UF sin conversión (degradación grácil).
+    const uf = await getUfRateCl()
+    const suelo = await sueloMinvu(siiComunaCode, lat, lng, terreno, uf?.rate ?? null)
+
     return NextResponse.json({
       success: true,
       rol,
@@ -127,6 +205,11 @@ export async function GET(request: NextRequest) {
       estimated_value: estimated,
       estimated_min: estimatedMin,
       estimated_max: estimatedMax,
+      // Segunda señal pública (mercado realizado, nivel suelo). null si aún no
+      // se ha ingestado mercado_agregado_cl para la comuna (ver 0057 + scraper).
+      uf_clp: uf?.rate ?? null,
+      uf_fecha: uf?.date ?? null,
+      suelo_minvu: suelo,          // { scope, periodo, valor_uf_m2, valor_clp_m2, valor_suelo_estimado }
     })
   } catch (error) {
     return NextResponse.json(

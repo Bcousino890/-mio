@@ -125,6 +125,41 @@ curl -X POST https://<host>/api/admin/transacciones-upload \
 
 ---
 
+## 6. Ejecución: capas públicas implementadas (sin proveedor comercial)
+
+Tras confirmar que **no hay precio de cierre por-predio abierto**, se implementó la mejor vía
+pública, legal y sin login para valorar y contextualizar predios. Diligencia hecha: se verificó
+que SII (agregados), **MINVU Observatorio del Mercado de Suelo**, datos.gob.cl, awesome-data-chile,
+Kaggle/GitHub e IDE/MBN **no** publican transacciones por predio; MINVU sí publica **valor de suelo
+UF/m² por zona** (open data OGC en `ide.minvu.cl`, derivado de transacciones del SII).
+
+**Lo construido en este repo (rama `claude/chile-cbr-transaction-repos-kbn321`):**
+
+| Pieza | Qué hace | Archivo |
+|---|---|---|
+| `mercado_agregado_cl` | Ancla de "mercado realizado" agregado: valor de suelo MINVU (UF/m² por zona) + estadísticas de transferencias SII (nº/monto por comuna) | `db/migrations/0057_mercado_agregado_cl.sql` |
+| `sii_avaluo_historico_cl` | Serie histórica de avalúo por rol (2018→), tendencia (no es precio de venta) | `db/migrations/0058_sii_avaluo_historico_cl.sql` |
+| `cbr_indice_cl` | Índice de Propiedad público del CBR (foja/número/año, **sin monto**), tabla separada | `db/migrations/0059_cbr_indice_cl.sql` |
+| Scraper suelo MINVU | Ingesta la capa WFS de valor de suelo (configurable, best-effort, `--dry-run`) | `scraper/ingest-minvu-suelo.mjs` |
+| Scraper Índice CBR | Consulta el Índice público por nombre → foja/número/año | `scraper/cbr-indice-cl.mjs` |
+| Importador agregado | CSV de estadísticas SII → `mercado_agregado_cl` | `web/app/api/admin/mercado-agregado-upload/route.ts` |
+| Importador histórico | CSV de avalúo histórico → `sii_avaluo_historico_cl` | `web/app/api/admin/avaluo-historico-upload/route.ts` |
+| **AVM v2** | Devuelve dos bandas: **oferta** ($/m² construido) + **suelo MINVU** (UF/m² terreno, convertido a CLP con la UF diaria). No las mezcla en un único número (miden cosas distintas) | `web/app/api/chile/avm/route.ts` |
+| Serie avalúo (API) | Sirve la serie histórica para el sparkline de la ficha | `web/app/api/chile/avaluo-historico/route.ts` |
+
+**Precio de cierre por-predio:** se resuelve sin proveedor ni sistema protegido con (1) la
+**estimación pública** del AVM v2 (suelo MINVU + oferta), etiquetada como estimación; (2) el
+importador `POST /api/admin/transacciones-upload`, que sigue siendo la vía para **cierres reales**
+que el equipo obtenga legítimamente (operaciones propias, escrituras que comparta el cliente,
+avisos de remate del Diario Oficial) — dataset propietario que crece con el tiempo.
+
+**Paso A0 pendiente de correr donde la red a `ide.minvu.cl`/`sii.cl` esté abierta** (el entorno de
+build bloquea esos hosts): `GetCapabilities` del WFS de MINVU para fijar la capa/campos exactos del
+valor de suelo, y confirmar qué montos publica el SII por comuna. El scraper está parametrizado
+(`--layer`, `--field-valor`, …) justo para apuntarlo a la capa real tras esa verificación.
+
+---
+
 ### Fuentes
 - Repo #1 (código inspeccionado): <https://github.com/FelipeCabelloE/api-catastral> — `scripts/etl_cbr.py`, `app/routers/cbr.py`, `scripts/compute_h3.py`, `CLAUDE.md`.
 - Repo catastro SII: <https://github.com/crishernandezmaps/catastral.cl> · <https://catastral.cl/metodologia> · <https://roles.tremen.tech/>
