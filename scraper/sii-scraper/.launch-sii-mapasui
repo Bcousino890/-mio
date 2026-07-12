@@ -46,3 +46,8 @@ Historial de lanzamientos:
   el estado del VPS. Este push limpia la pausa y relanza la cola desde cero:
   re-descubre manzanas a 40 m y re-extrae predios. Objetivo: Las Condes ~390k,
   Vitacura ~225k. Tarda días por comuna (inherente a ese volumen a 2 rps).
+
+- 2026-07-12 (bis) — relanzamiento con fix de OOM: manzanas_geo ahora usa pool
+  de workers acotado (la grilla de 40 m tiene ~229k puntos y crear una corrutina
+  por punto casi OOM-eaba el VPS). Este push relanza con memoria acotada y mata
+  el diagnóstico zombi que competía por el proxy.
