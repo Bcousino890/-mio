@@ -1,9 +1,13 @@
-name: Verificar fuentes de mercado (A0 · MINVU WFS)
+name: Verificar fuentes de mercado (A0 · MINVU Hub/ArcGIS)
 
 # Paso A0 (Fase 2) SIN terminal: corre scraper/a0-verify-fuentes.mjs EN EL VPS
-# (que sí tiene salida a ide.minvu.cl, a diferencia del sandbox de build) y
-# vuelca en el log del job las capas de valor de suelo de MINVU y sus campos,
-# más el comando ingest-minvu-suelo ya rellenado.
+# (que sí tiene salida a ide.minvu.cl, a diferencia del sandbox de build).
+#
+# DESCUBRIMIENTO (2026-07-12): ide.minvu.cl es un portal Esri ArcGIS Hub, no un
+# GeoServer WFS clásico. Por eso el modo por defecto es --search (busca datasets
+# en el Hub) y --esri-describe (lista campos de un FeatureServer/MapServer).
+# --wfs/--describe quedan como fallback explícito por si hace falta apuntar a
+# otro portal que sí sea GeoServer clásico.
 #
 # Mismo patrón que scrape-sii-mapasui.yml: SSH al VPS, correr ahí. Es de solo
 # lectura (no escribe en la BD). Se lanza desde Actions → Run workflow (o push
@@ -12,12 +16,30 @@ name: Verificar fuentes de mercado (A0 · MINVU WFS)
 on:
   workflow_dispatch:
     inputs:
+      search:
+        description: "Término de búsqueda de datasets en el Hub (modo por defecto). Ej: 'valor de suelo'"
+        required: false
+        default: "valor de suelo"
+      esri_describe:
+        description: "URL de un FeatureServer/MapServer (de --search) para listar sus campos"
+        required: false
+        default: ""
+      hub_url:
+        description: "URL base del portal Hub (default: MINVU IDE)"
+        required: false
+        default: "https://ide.minvu.cl"
+      use_wfs_fallback:
+        description: "true = usar el modo GeoServer WFS clásico en vez de Hub/Esri"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
       layer:
-        description: "Capa a describir (DescribeFeatureType). VACÍO = listar capas (GetCapabilities)"
+        description: "(solo con use_wfs_fallback=true) Capa a describir. VACÍO = listar capas"
         required: false
         default: ""
       wfs_url:
-        description: "URL base del WFS (default: MINVU IDE)"
+        description: "(solo con use_wfs_fallback=true) URL base del WFS"
         required: false
         default: "https://ide.minvu.cl/geoserver/wfs"
   push:
@@ -37,22 +59,32 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Correr A0 en el VPS (GetCapabilities / DescribeFeatureType)
+      - name: Correr A0 en el VPS (Hub search / Esri describe / WFS fallback)
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << EOF
             set -e
             cd /opt/casafari/scraper
-            WFS="${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}"
-            LAYER="${{ github.event.inputs.layer }}"
-            if [ -n "\$LAYER" ]; then
-              node a0-verify-fuentes.mjs --wfs-url "\$WFS" --describe "\$LAYER"
+            if [ "${{ github.event.inputs.use_wfs_fallback || 'false' }}" = "true" ]; then
+              WFS="${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}"
+              LAYER="${{ github.event.inputs.layer }}"
+              if [ -n "\$LAYER" ]; then
+                node a0-verify-fuentes.mjs --wfs --wfs-url "\$WFS" --describe "\$LAYER"
+              else
+                node a0-verify-fuentes.mjs --wfs --wfs-url "\$WFS"
+              fi
+            elif [ -n "${{ github.event.inputs.esri_describe }}" ]; then
+              node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
+                --esri-describe "${{ github.event.inputs.esri_describe }}"
             else
-              node a0-verify-fuentes.mjs --wfs-url "\$WFS"
+              node a0-verify-fuentes.mjs --hub-url "${{ github.event.inputs.hub_url || 'https://ide.minvu.cl' }}" \
+                --search "${{ github.event.inputs.search || 'valor de suelo' }}"
             fi
           EOF
 
       - name: Resumen
         run: |
-          echo "A0 impreso arriba. Copia el nombre de la capa de valor de suelo y sus campos,"
-          echo "y lánzalos con el workflow 'Ingesta valor de suelo MINVU'."
+          echo "A0 impreso arriba."
+          echo "1) --search te da la URL del servicio (FeatureServer/MapServer) del dataset correcto."
+          echo "2) Relanzá con esri_describe=<esa URL> para ver sus campos y el comando sugerido."
+          echo "3) Lanzá 'Ingesta valor de suelo MINVU' con esos flags."

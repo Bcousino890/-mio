@@ -4,19 +4,24 @@ name: Ingesta valor de suelo MINVU (→ mercado_agregado_cl)
 # producción), poblando mercado_agregado_cl (fuente='minvu_suelo'). Es la señal
 # pública de "mercado realizado" que calibra el AVM v2.
 #
+# ide.minvu.cl es un portal Esri ArcGIS Hub (ver A0), así que la vía real es
+# esri_url (FeatureServer/MapServer). wfs_url/layer quedan como fallback para
+# otros portales que sí sean GeoServer clásico.
+#
 # Mismo patrón de DATABASE_URL que ingest-sii-mapasui-now.yml: source ../.env →
 # POSTGRES_PASSWORD → postgres://casafari:...@127.0.0.1:5433/casafari.
 #
-# Primero corré el workflow "Verificar fuentes de mercado (A0)" para saber los
-# valores reales de layer/field_*. Lanzá con dry_run=true para validar sin escribir.
+# Primero corré "Verificar fuentes de mercado (A0)" → --search y --esri-describe
+# para saber esri_url y field_valor/field_*. Lanzá con dry_run=true primero.
 on:
   workflow_dispatch:
     inputs:
-      layer:
-        description: "Capa WFS de valor de suelo (de A0)"
-        required: true
+      esri_url:
+        description: "URL del FeatureServer/MapServer (de A0 --search), vía real MINVU"
+        required: false
+        default: ""
       field_valor:
-        description: "Campo con el valor UF/m² (de A0)"
+        description: "Campo con el valor UF/m² (de A0 --esri-describe)"
         required: true
       field_zona:
         description: "Campo con el id de zona (opcional)"
@@ -34,10 +39,14 @@ on:
         description: "Período del indicador. Ej. 2024"
         required: true
         default: "2024"
-      wfs_url:
-        description: "URL base del WFS"
+      layer:
+        description: "(solo fallback WFS, si esri_url está vacío) Capa GeoServer"
         required: false
-        default: "https://ide.minvu.cl/geoserver/wfs"
+        default: ""
+      wfs_url:
+        description: "(solo fallback WFS, si esri_url está vacío) URL base del WFS"
+        required: false
+        default: ""
       dry_run:
         description: "true = validar sin escribir en la BD"
         required: false
@@ -68,10 +77,13 @@ jobs:
             if [ ! -d node_modules/pg ]; then
               echo "▶ Instalando pg..."; npm install --omit=dev --no-audit --no-fund
             fi
-            ARGS=( --wfs-url "${{ github.event.inputs.wfs_url || 'https://ide.minvu.cl/geoserver/wfs' }}" \
-                   --layer "${{ github.event.inputs.layer }}" \
-                   --field-valor "${{ github.event.inputs.field_valor }}" \
+            ARGS=( --field-valor "${{ github.event.inputs.field_valor }}" \
                    --periodo "${{ github.event.inputs.periodo }}" )
+            if [ -n "${{ github.event.inputs.esri_url }}" ]; then
+              ARGS+=( --esri-url "${{ github.event.inputs.esri_url }}" )
+            else
+              ARGS+=( --wfs-url "${{ github.event.inputs.wfs_url }}" --layer "${{ github.event.inputs.layer }}" )
+            fi
             [ -n "${{ github.event.inputs.field_zona }}" ]   && ARGS+=( --field-zona "${{ github.event.inputs.field_zona }}" )
             [ -n "${{ github.event.inputs.field_comuna }}" ] && ARGS+=( --field-comuna "${{ github.event.inputs.field_comuna }}" )
             [ -n "${{ github.event.inputs.comuna }}" ]       && ARGS+=( --comuna "${{ github.event.inputs.comuna }}" )
