@@ -1,0 +1,59 @@
+name: Diag BD Las Condes (rango de manzanas y bbox real)
+
+# DIAGNÓSTICO de solo lectura sobre la BD (no toca el scrape): a partir de los
+# 80.611 predios de Las Condes que quedaron en sii_mapasui_predios_cl, saca el
+# rango de IDs de manzana (¿enumerar es viable?) y los límites de lat/lng (para
+# acotar el bbox del descubrimiento geográfico y no barrer terreno vacío).
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.diag-db-lascondes'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Consultar la BD
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            echo "── Rango de manzanas (IDs) en Las Condes (15108) ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT
+                count(*)                                              AS predios,
+                count(DISTINCT split_part(rol,'-',1))                 AS manzanas_distintas,
+                min(split_part(rol,'-',1)::int)                       AS manzana_min,
+                max(split_part(rol,'-',1)::int)                       AS manzana_max,
+                round(avg(cnt),1)                                     AS predios_por_manzana
+              FROM (
+                SELECT rol, count(*) OVER (PARTITION BY split_part(rol,'-',1)) AS cnt
+                FROM sii_mapasui_predios_cl WHERE sii_comuna_code='15108'
+              ) t;" 2>&1 || echo "(query 1 falló)"
+
+            echo ""
+            echo "── Bbox real (límites de lat/lng de los predios) ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT
+                round(min(lat)::numeric,5) AS lat_min, round(max(lat)::numeric,5) AS lat_max,
+                round(min(lng)::numeric,5) AS lng_min, round(max(lng)::numeric,5) AS lng_max,
+                count(*) FILTER (WHERE lat IS NOT NULL) AS con_coords
+              FROM sii_mapasui_predios_cl WHERE sii_comuna_code='15108';" 2>&1 || echo "(query 2 falló)"
+
+            echo ""
+            echo "── Histograma grueso de IDs de manzana (deciles) ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT width_bucket(split_part(rol,'-',1)::int, 1, 6000, 12) AS banda,
+                     count(DISTINCT split_part(rol,'-',1)) AS manzanas
+              FROM sii_mapasui_predios_cl WHERE sii_comuna_code='15108'
+              GROUP BY 1 ORDER BY 1;" 2>&1 || echo "(query 3 falló)"
+          EOF

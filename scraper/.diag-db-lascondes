@@ -1,0 +1,3 @@
+Centinela: dispara diag-db-lascondes.yml (consulta de solo lectura a la BD:
+rango de IDs de manzana y bbox real de Las Condes, para elegir enumeracion vs
+grilla acotada). No toca el scrape.
