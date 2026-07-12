@@ -1,0 +1,66 @@
+name: Reset SII mapasui (borra estado para re-scrape limpio)
+
+# DESTRUCTIVO: borra en el VPS el estado de descubrimiento/extracción del scrape
+# (output/checkpoints, output/manzanas, output/predios, output/found_predios y
+# los marcadores .complete-*), para que la próxima corrida RE-DESCUBRA las
+# manzanas con la grilla fina y RE-EXTRAIGA los predios desde cero. NO borra la
+# tabla sii_mapasui_predios_cl (el re-scrape la re-ingesta con ON CONFLICT DO
+# UPDATE, así que solo crece/actualiza), ni venv/.env, ni el flag de pausa.
+#
+# Se usa una sola vez tras cambiar la grilla/pipeline (el scrape viejo capturó
+# ~21% de Las Condes). Después se reanuda con el botón de launch.
+#
+# Sentinel-push como los demás (la API no permite workflow_dispatch acá).
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.reset-sii-mapasui'
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Matar el scrape y borrar el estado de output
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari/scraper/sii-scraper
+            echo "⚠ Matando cualquier scrape en curso antes del reset..."
+            pkill -9 -f "run-sii-mapasui.sh" || true
+            pkill -9 -f "sii-scraper/run.py" || true
+            rm -f /tmp/casafari-scrape-sii-mapasui.lock
+            sleep 2
+
+            echo "── Estado ANTES del reset ────────────────────────────"
+            for f in output/manzanas/*.jsonl output/predios/*.jsonl; do
+              [ -f "$f" ] && echo "  $(wc -l < "$f") líneas · $f"
+            done 2>/dev/null || true
+            ls output/.complete-* output/.sii-mapasui-complete 2>/dev/null || true
+
+            echo "▶ Borrando checkpoints, manzanas, predios, found_predios y marcadores..."
+            rm -rf output/checkpoints output/manzanas output/predios output/found_predios
+            rm -f output/.complete-* output/.sii-mapasui-complete
+
+            echo "✅ Reset hecho. output/ quedó:"
+            ls -la output/ 2>/dev/null || echo "(output/ vacío o inexistente)"
+            echo ""
+            echo "El flag de pausa (si existe) NO se tocó. Reanudar con el botón"
+            echo "de launch (.launch-sii-mapasui), que lo limpia y relanza la cola"
+            echo "con la grilla fina y el sondeo por vacíos, desde cero."
+          EOF
+
+      - name: Resumen
+        run: |
+          echo "Estado del scrape SII reseteado en el VPS."
+          echo "Siguiente: pushear scraper/sii-scraper/.launch-sii-mapasui para re-scrapear limpio."

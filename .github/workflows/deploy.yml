@@ -26,6 +26,7 @@ on:
       - '!scraper/.stop-sii-mapasui'
       - '!scraper/sii-scraper/.diag-predio-depth'
       - '!scraper/sii-scraper/.diag-manzana-grid'
+      - '!scraper/.reset-sii-mapasui'
   workflow_dispatch: {}   # botón "Run workflow" manual
 
 concurrency:
