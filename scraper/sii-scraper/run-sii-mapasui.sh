@@ -239,7 +239,7 @@ procesar_comuna() {
     { "comuna_id": ${code}, "nombre_comuna": "${nombre}" }
   ],
   "regiones": [],
-  "ranges": { "manzana_max": 4000, "manzana_probe_depth": 30, "predio_max": 3000, "predio_probe_depth": 60, "predio_initial_scan": 60 },
+  "ranges": { "manzana_min": 1, "manzana_max": 4000, "manzana_probe_depth": 20, "predio_max": 3000, "predio_probe_depth": 60, "predio_initial_scan": 60 },
   "limits": { "max_concurrency": ${SII_CONCURRENCY}, "requests_per_second": ${SII_RPS}, "max_retries": 5, "backoff_base": 2, "predio_max_inciertos": 25 },
   "geo": { "grid_step_m": ${SII_GRID_STEP_M} },
   "output_dir": "output"

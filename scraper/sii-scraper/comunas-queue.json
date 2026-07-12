@@ -17,7 +17,7 @@
     "Los códigos SII se descubren con la etapa 'regiones' (ver README.md)."
   ],
   "comunas": [
-    { "code": "15108", "nombre": "Las Condes", "stage": "manzanas-geo" },
+    { "code": "15108", "nombre": "Las Condes", "stage": "manzanas" },
     { "code": "15160", "nombre": "Vitacura", "stage": "manzanas-geo" }
   ]
 }
