@@ -39,3 +39,10 @@ Historial de lanzamientos:
 - 2026-07-11 — relanzamiento determinista post-merge #132: el lanzamiento del
   merge corrió mientras el deploy aún sincronizaba (pudo tomar el script viejo).
   Este push relanza con el script nuevo ya en disco, en modo cola.
+- 2026-07-12 — RE-SCRAPE LIMPIO tras el fix de cobertura: se detectó que el
+  scrape viejo capturaba ~21% (grilla 100 m subcaptura manzanas; el cap 150 NO
+  era el problema, 73 predios/manzana). Ya desplegado el pipeline nuevo (grilla
+  40 m + sondeo de predios por vacíos + checkpoint por lotes, 2 rps) y reseteado
+  el estado del VPS. Este push limpia la pausa y relanza la cola desde cero:
+  re-descubre manzanas a 40 m y re-extrae predios. Objetivo: Las Condes ~390k,
+  Vitacura ~225k. Tarda días por comuna (inherente a ese volumen a 2 rps).
