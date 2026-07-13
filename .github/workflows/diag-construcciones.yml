@@ -5,6 +5,11 @@ name: Diag construcciones (conteos + migraciones)
 # en Lo Barnechea. No modifica nada.
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/.diag-construcciones'
 
 jobs:
   diag:
