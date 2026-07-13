@@ -1,0 +1,161 @@
+Generado: 2026-07-13T10:26:39+00:00 · run 29242759340
+
+── Lockfile ──────────────────────────────────────────
+▶ Scrape SII EN CURSO (PID 873549)
+UID          PID    PPID  C STIME TTY          TIME CMD
+root      873549       1  0 10:21 ?        00:00:00 bash scraper/sii-scraper/run-sii-mapasui.sh
+
+── Procesos del scraper vivos ────────────────────────
+root      873549  0.0  0.0   7472  3828 ?        S    10:21   0:00 bash scraper/sii-scraper/run-sii-mapasui.sh
+root      873574  0.0  0.0   7340  1816 ?        S    10:21   0:00 bash scraper/sii-scraper/run-sii-mapasui.sh
+root      877966  1.6  0.4 343648 38980 ?        Sl   10:25   0:01 ./venv/bin/python run.py predios --config config.json
+
+── Logs de lanzamiento (todos, más reciente al final) ─
+-rw-r--r-- 1 root root 1048242 Jul  6 06:54 scraper/output/launch-sii-mapasui-20260704_234113.log
+-rw-r--r-- 1 root root 1050356 Jul  8 21:56 scraper/output/launch-sii-mapasui-20260707_143218.log
+-rw-r--r-- 1 root root   27992 Jul  8 22:30 scraper/output/launch-sii-mapasui-20260708_215049.log
+-rw-r--r-- 1 root root    3730 Jul 11 20:05 scraper/output/launch-sii-mapasui-20260711_195320.log
+-rw-r--r-- 1 root root   65189 Jul 11 21:09 scraper/output/launch-sii-mapasui-20260711_195915.log
+-rw-r--r-- 1 root root    3357 Jul 12 03:27 scraper/output/launch-sii-mapasui-20260712_011414.log
+-rw-r--r-- 1 root root    3560 Jul 12 03:48 scraper/output/launch-sii-mapasui-20260712_012130.log
+-rw-r--r-- 1 root root 1304849 Jul 13 10:23 scraper/output/launch-sii-mapasui-20260712_055947.log
+-rw-r--r-- 1 root root   28926 Jul 13 10:26 scraper/output/launch-sii-mapasui-20260713_102118.log
+
+── Último log de lanzamiento: primeras 30 líneas ─────
+(scraper/output/launch-sii-mapasui-20260713_102118.log)
+▶ Proxy SmartProxy CL detectado en .env — el scraper rotará IPs por sesión.
+▶ Modo COLA — 2 comuna(s): Las Condes Vitacura
+
+════════════════════════════════════════════════════════════════════
+▶ Comuna Las Condes (15108) · etapa manzanas · 2 rps × 4
+════════════════════════════════════════════════════════════════════
+▶ [1/3] Descubriendo manzanas (manzanas)...
+2026-07-13 10:21:21,449 INFO [sii_scraper.orchestrator] Catálogo SII: 347 comunas (sanity check, 6 sesión(es) en paralelo)
+2026-07-13 10:21:27,284 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:21:32,844 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:32,894 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:33,054 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:33,647 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:43,119 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:45,061 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:45,650 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:50,120 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:21:51,821 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:53,019 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:53,179 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:55,915 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:21:57,097 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 2/5); renovando sesión...
+2026-07-13 10:21:58,577 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:21:59,169 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:22:05,494 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:22:05,798 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:22:07,904 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:22:07,949 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:22:09,135 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:22:09,339 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+
+── Último log de lanzamiento: últimas 60 líneas ──────
+ConnectionResetError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/pipeline/manzanas.py", line 26, in _process_one
+    manzana = await discover_manzana(client, comuna_id, manzana_id, probe_depth)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/pipeline/manzanas.py", line 16, in discover_manzana
+    raw = await client.fetch_predio(comuna_id, manzana_id, predio_id)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/orchestrator.py", line 58, in fetch_predio
+    return await self._pick().fetch_predio(comuna_id, manzana_id, predio_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/client/sii_client.py", line 172, in fetch_predio
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/client/sii_client.py", line 241, in _post
+    await self.session.refresh(session)
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/client/session.py", line 183, in refresh
+    await self._bootstrap()
+  File "/opt/casafari/scraper/sii-scraper/sii_scraper/client/session.py", line 142, in _bootstrap
+    async with session.get(VIEWER_URL, proxy=proxy_url) as resp:
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/client.py", line 1197, in __aenter__
+    self._resp = await self._coro
+                 ^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/client.py", line 581, in _request
+    conn = await self._connector.connect(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/connector.py", line 544, in connect
+    proto = await self._create_connection(req, traces, timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/connector.py", line 942, in _create_connection
+    _, proto = await self._create_proxy_connection(req, traces, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/connector.py", line 1379, in _create_proxy_connection
+    return await self._start_tls_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/casafari/scraper/sii-scraper/venv/lib/python3.12/site-packages/aiohttp/connector.py", line 1157, in _start_tls_connection
+    raise client_error(req.connection_key, exc) from exc
+aiohttp.client_exceptions.ClientConnectorError: Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:24:16,901 INFO [sii_scraper.pipeline.manzanas] comuna 15108 manzana 456: encontrada
+2026-07-13 10:24:16,956 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:17,453 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Server disconnected
+2026-07-13 10:24:23,302 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:23,346 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:23,633 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:24,955 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:26,809 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:31,105 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+2026-07-13 10:24:37,800 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:38,146 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:38,723 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:41,691 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:42,045 WARNING [sii_scraper.client.sii_client] getPredioNacional respondió 429 (intento 1/5); renovando sesión...
+2026-07-13 10:24:45,617 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+▶ [2/3] Extrayendo predios...
+2026-07-13 10:25:17,200 INFO [sii_scraper.orchestrator] Catálogo SII: 347 comunas (sanity check, 6 sesión(es) en paralelo)
+2026-07-13 10:25:17,213 INFO [sii_scraper.pipeline.predios] comuna 15108: 1605 manzanas, 1321 pendientes de predios
+2026-07-13 10:26:02,695 WARNING [sii_scraper.client.sii_client] getPredioNacional error de red (intento 1/5): Cannot connect to host www4.sii.cl:443 ssl:default [None]
+
+── Output del scraper (scraper/sii-scraper/output/) ──
+scraper/sii-scraper/output/:
+total 24
+drwxr-xr-x 5 root root 4096 Jul 12 13:12 .
+drwxr-xr-x 7 1001 1001 4096 Jul 13 10:20 ..
+drwxr-xr-x 2 root root 4096 Jul 13 10:25 checkpoints
+drwxr-xr-x 2 root root 4096 Jul 12 01:47 manzanas
+drwxr-xr-x 2 root root 4096 Jul 12 13:12 predios
+-rw-r--r-- 1 root root   62 Jul 13 10:21 .sii-mapasui-params
+
+scraper/sii-scraper/output/checkpoints:
+total 204
+drwxr-xr-x 2 root root   4096 Jul 13 10:25 .
+drwxr-xr-x 5 root root   4096 Jul 12 13:12 ..
+-rw-r--r-- 1 root root 159927 Jul 12 03:52 manzanas_geo_las_condes.json
+-rw-r--r-- 1 root root  30878 Jul 13 10:25 manzanas_las_condes.json
+-rw-r--r-- 1 root root   2022 Jul 13 10:25 predios_done_las_condes.json
+
+scraper/sii-scraper/output/manzanas:
+total 216
+drwxr-xr-x 2 root root   4096 Jul 12 01:47 .
+drwxr-xr-x 5 root root   4096 Jul 12 13:12 ..
+-rw-r--r-- 1 root root 204878 Jul 13 10:24 las_condes.jsonl
+
+scraper/sii-scraper/output/predios:
+total 50124
+drwxr-xr-x 2 root root     4096 Jul 12 13:12 .
+drwxr-xr-x 5 root root     4096 Jul 12 13:12 ..
+-rw-r--r-- 1 root root 51314214 Jul 13 10:26 las_condes.jsonl
+
+── Tamaño de JSONL por etapa (líneas = registros) ────
+  1605 líneas · scraper/sii-scraper/output/manzanas/las_condes.jsonl
+  127789 líneas · scraper/sii-scraper/output/predios/las_condes.jsonl
+
+── Predios en BD (sii_mapasui_predios_cl) ────────────
+ 187118 |       1 | 2026-07-13 10:23:02.529505+00
+
+
+── Memoria y disco del VPS ───────────────────────────
+               total        used        free      shared  buff/cache   available
+Mem:            7751        4013         211        1740        5577        3737
+Swap:           4095           0        4095
+/dev/sda1        75G   64G  8.6G  89% /
