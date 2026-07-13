@@ -25,10 +25,9 @@
 --   Puchuncaví:   05401 (guess 0022, 0 roles)   → 5307 (23.149 roles reales, "AVDA DEL MAR"/"EL MEDANO")
 --   Pucón:        09107 (guess 0022, 0 roles)   → 9216 (34.903 roles reales, "CAM VILLARRICA-PUCON")
 --   Villarrica:   09103 (guess 0022, 0 roles)   → 9215 (45.743 roles reales, "CAM VILLARRICA A PUCON")
---
--- La Reina queda sin código confirmado (no se identificó ningún
--- sii_comuna_code con direcciones propias de La Reina en la cobertura
--- actual) — probablemente no se ha subido su archivo SII todavía.
+--   La Reina:     13113 (guess 0022, 0 roles)   → 15132 (confirmado vía /api/chile/sii-search:
+--                 "AV OSSA" y "LARRAIN" — ambas avenidas insignia de La Reina —
+--                 aparecen bajo este código; no tenía entrada en 0022/0049)
 -- ─────────────────────────────────────────────────────────────────────────────
 
 UPDATE chile_comunas SET sii_comuna_code = '15103' WHERE name = 'Providencia';
@@ -37,3 +36,4 @@ UPDATE chile_comunas SET sii_comuna_code = '5204'  WHERE name = 'Zapallar';
 UPDATE chile_comunas SET sii_comuna_code = '5307'  WHERE name = 'Puchuncaví';
 UPDATE chile_comunas SET sii_comuna_code = '9216'  WHERE name = 'Pucón';
 UPDATE chile_comunas SET sii_comuna_code = '9215'  WHERE name = 'Villarrica';
+UPDATE chile_comunas SET sii_comuna_code = '15132' WHERE name = 'La Reina';
