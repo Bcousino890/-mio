@@ -1,0 +1,61 @@
+name: Diag construcciones (conteos + migraciones)
+
+# DIAGNÓSTICO temporal de solo lectura: conteo de sii_construcciones_cl por
+# comuna y estado de las migraciones 006x, para entender el 2->0 de construcciones
+# en Lo Barnechea. No modifica nada.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Consultar la BD
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            echo "── Migraciones 006x aplicadas ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT filename, applied_at FROM schema_migrations
+              WHERE filename LIKE '006%' ORDER BY filename;" 2>&1 || echo "(q migs falló)"
+
+            echo ""
+            echo "── Total de construcciones y roles con construccion ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT count(*) AS total_construcciones,
+                     count(DISTINCT rol_id) AS roles_con_construccion
+              FROM sii_construcciones_cl;" 2>&1 || echo "(q total falló)"
+
+            echo ""
+            echo "── Construcciones por comuna (comunas clave) ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT r.sii_comuna_code,
+                     count(c.id) AS construcciones,
+                     count(DISTINCT c.rol_id) AS roles_con_constr
+              FROM sii_roles_cl r
+              LEFT JOIN sii_construcciones_cl c ON c.rol_id = r.id
+              WHERE r.sii_comuna_code IN ('15161','15160','15108','14201','15103','2201')
+              GROUP BY r.sii_comuna_code ORDER BY construcciones DESC;" 2>&1 || echo "(q comuna falló)"
+
+            echo ""
+            echo "── Rol DEL CANDIL 690 DP 201 A (3377-131, 15161) ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT r.rol, r.direccion, r.superficie_construida_m2,
+                     (SELECT count(*) FROM sii_construcciones_cl c WHERE c.rol_id = r.id) AS n_constr
+              FROM sii_roles_cl r
+              WHERE r.sii_comuna_code='15161' AND r.rol='3377-131';" 2>&1 || echo "(q rol falló)"
+
+            echo ""
+            echo "── Top 15 comunas por construcciones ─────"
+            docker exec casafari-pg psql -U casafari -d casafari -c "
+              SELECT r.sii_comuna_code, count(c.id) AS construcciones
+              FROM sii_roles_cl r JOIN sii_construcciones_cl c ON c.rol_id = r.id
+              GROUP BY r.sii_comuna_code ORDER BY construcciones DESC LIMIT 15;" 2>&1 || echo "(q top falló)"
+          EOF
