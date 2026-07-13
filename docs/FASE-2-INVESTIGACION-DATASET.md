@@ -1,6 +1,32 @@
 # FASE 2: Investigación de dataset "Valor de Suelo" en MINVU IDE
 
-## Estado actual (2026-07-12)
+## ⚠️ Actualización 2026-07-13 — run v1 de `--auto-find-valor` INCONCLUSO (no negativo)
+
+El primer run del modo automático (24 servicios inspeccionados, luego timeout) tenía un
+defecto de fondo: consultaba la **raíz** de cada `FeatureServer`, pero en la REST API de
+Esri los `fields` viven en cada **capa** (`…/FeatureServer/<n>?f=json`), no en la raíz.
+O sea: **nunca se llegó a mirar un campo de verdad**. Los "Sin campos de valor" eran
+vacuos y los "✗ No se pudo describir (HTTP 200)" eran errores del servicio sin mostrar.
+
+**Crawler v2** (mismo modo `auto_find_valor` del workflow) corrige eso:
+- Desciende raíz → `layers[]`/`tables[]` → campos de cada capa.
+- Tolerante a fallos: un timeout en una capa ya no aborta el run (aquel run murió entero
+  por UN `AbortSignal.timeout` de 60s).
+- Pagina el catálogo completo siguiendo links `rel=next` y dedupe servicios repetidos.
+- Presupuesto de tiempo con resumen PARCIAL en vez de morir sin reporte.
+
+**Además** existe ahora la parte 2 del A0 (`scraper/a0-verify-sii.mjs`, workflow modo
+`sii_ckan`): sondea las páginas de estadísticas del SII (¿transferencias con monto o solo
+avalúo?), el Observatorio Urbano MINVU (candidato natural del indicador de precio de
+suelo fuera del Hub) y el CKAN de datos.gob.cl. Y el modo `cbr_probe` (Fase 6) sondea el
+portal del Índice de Propiedad para fijar `--search-url` sin navegador.
+
+**Conclusión pendiente:** hasta que el crawler v2 termine COMPLETO sin candidatas, no se
+puede afirmar que el dato no está en ide.minvu.cl.
+
+---
+
+## Estado anterior (2026-07-12)
 
 El scraper `a0-verify-fuentes.mjs` ya está operativo y ha ejecutado diagnostics exitosas en el VPS vía GitHub Actions. El flujo ha avanzado así:
 

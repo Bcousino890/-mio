@@ -13,10 +13,12 @@
 // vinculación a un rol es posterior. Tabla SEPARADA de datos de precio; no
 // redistribuir.
 //
-// PASO PREVIO (confirmar el contrato del portal, donde la red esté abierta):
-// abrir el Índice de Propiedad de la comuna objetivo en conservadoresdigitales.cl,
-// inspeccionar la petición de búsqueda (endpoint, parámetros, forma de la
-// respuesta) y ajustar --search-url y el parser (parseIndice) a esa forma real.
+// PASO PREVIO (confirmar el contrato del portal, SIN terminal): correr el modo
+//   node scraper/cbr-indice-cl.mjs --probe [--probe-url "https://<portal>"]
+// (workflow verify-mercado-fuentes.yml, modo cbr_probe). Baja el HTML del portal
+// y extrae formularios (action/method/inputs), endpoints XHR del JS, iframes y
+// links de índice — lo que un humano miraría en DevTools. Con eso se fija
+// --search-url y se ajusta el parser (parseIndice) a la forma real.
 //
 // USO:
 //   node scraper/cbr-indice-cl.mjs \
@@ -29,9 +31,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
-import pg from 'pg'
 
-const { Client } = pg
 const UA = 'CasafariMIO/1.0 (+consulta Índice de Propiedad público CBR)'
 const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -43,6 +43,8 @@ const { values } = parseArgs({
     'names-file': { type: 'string' },
     anio: { type: 'string' },
     'dry-run': { type: 'boolean' },
+    probe: { type: 'boolean' },
+    'probe-url': { type: 'string' },
   },
 })
 
@@ -53,7 +55,76 @@ const ANIO = values.anio ? Number(values.anio) : null
 const DRY = values['dry-run'] || !process.env.DATABASE_URL
 
 function fail(m) { console.error(`✗ ${m}`); process.exit(1) }
-if (!SEARCH_URL) fail('Falta --search-url. Confirma el endpoint del Índice de Propiedad (ver cabecera).')
+
+/**
+ * ── Modo --probe: descubrir el contrato del portal SIN navegador ─────────────
+ * Reemplaza el "paso previo" manual: baja el HTML del portal y extrae lo que un
+ * humano buscaría en DevTools para fijar --search-url sin adivinar:
+ *   - <form>: action + method + nombres de inputs/selects (contrato clásico)
+ *   - endpoints XHR citados en el JS inline (fetch/axios/$.ajax, rutas "/api/…")
+ *   - iframes (muchos CBR embeben la app de búsqueda por jurisdicción)
+ *   - links con pinta de índice/propiedad/consulta
+ */
+async function probePortal(url) {
+  console.log(`→ Sonda del portal CBR: ${url}\n`)
+  let res
+  try {
+    res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,*/*' }, redirect: 'follow', signal: AbortSignal.timeout(30000) })
+  } catch (err) {
+    console.log(`✗ No alcanzable: ${err.message}`)
+    return
+  }
+  const html = await res.text()
+  console.log(`HTTP ${res.status} · ${res.headers.get('content-type') || '?'} · ${html.length} bytes${res.url !== url ? ` · redirigida a ${res.url}` : ''}`)
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim()
+  if (title) console.log(`Título: ${title}`)
+
+  // Formularios: el contrato de búsqueda clásico.
+  const forms = html.match(/<form\b[\s\S]*?<\/form>/gi) ?? []
+  console.log(`\nFormularios (${forms.length}):`)
+  for (const f of forms.slice(0, 6)) {
+    const action = f.match(/\baction\s*=\s*["']([^"']*)["']/i)?.[1] ?? '(sin action)'
+    const method = f.match(/\bmethod\s*=\s*["']([^"']*)["']/i)?.[1] ?? 'GET'
+    const inputs = [...f.matchAll(/<(?:input|select|textarea)\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1])
+    console.log(`  • ${method.toUpperCase()} ${action}`)
+    if (inputs.length) console.log(`    campos: ${inputs.join(', ')}`)
+  }
+
+  // Endpoints XHR en el JS inline (lo que DevTools mostraría en Network).
+  const xhr = new Set()
+  for (const m of html.matchAll(/(?:fetch|axios\s*\.\s*(?:get|post)|\$\.(?:ajax|get|post))\s*\(\s*["'`]([^"'`]+)["'`]/gi)) xhr.add(m[1])
+  for (const m of html.matchAll(/["'](\/[^"']{2,120}?(?:api|buscar|consulta|indice|search)[^"']{0,120}?)["']/gi)) xhr.add(m[1])
+  console.log(`\nEndpoints XHR/API citados en el JS (${xhr.size}):`)
+  for (const e of [...xhr].slice(0, 25)) console.log(`  · ${e}`)
+
+  // Iframes: apps embebidas por jurisdicción.
+  const iframes = [...html.matchAll(/<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1])
+  if (iframes.length) {
+    console.log(`\nIframes (${iframes.length}) — sondear también estas URLs:`)
+    for (const i of iframes.slice(0, 10)) console.log(`  · ${i}`)
+  }
+
+  // Links temáticos.
+  const links = new Map()
+  for (const m of html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const text = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    if (/indice|propiedad|conservador|b[uú]squeda|consulta/i.test(`${m[1]} ${text}`)) {
+      try { links.set(new URL(m[1], res.url).toString(), text) } catch { /* href raro */ }
+    }
+  }
+  console.log(`\nLinks de índice/consulta (${links.size}):`)
+  for (const [href, text] of [...links].slice(0, 25)) console.log(`  · ${text || '(sin texto)'} → ${href}`)
+
+  console.log(`\nSiguiente paso: si arriba hay un endpoint JSON claro, fijar --search-url y ajustar`)
+  console.log(`parseIndice; si es un form HTML o iframe, relanzar la sonda con --probe-url <esa URL>.`)
+}
+
+if (values.probe) {
+  await probePortal(values['probe-url'] || 'https://conservadoresdigitales.cl')
+  process.exit(0)
+}
+
+if (!SEARCH_URL) fail('Falta --search-url. Confirma el endpoint del Índice de Propiedad (correr antes --probe, ver cabecera).')
 if (!COMUNA) fail('Falta --comuna (código SII).')
 if (!values['names-file']) fail('Falta --names-file (un nombre de titular por línea).')
 
@@ -103,7 +174,8 @@ async function main() {
   if (names.length === 0) fail('El archivo de nombres está vacío.')
 
   console.log(`→ CBR índice · comuna=${COMUNA} · nombres=${names.length}${DRY ? ' · DRY-RUN' : ''}`)
-  const client = DRY ? null : new Client({ connectionString: process.env.DATABASE_URL })
+  // pg se importa solo si se va a escribir: --probe y --dry-run no lo necesitan.
+  const client = DRY ? null : new (await import('pg')).default.Client({ connectionString: process.env.DATABASE_URL })
   if (client) await client.connect()
 
   let filas = 0
