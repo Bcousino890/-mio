@@ -42,16 +42,21 @@ const { values } = parseArgs({
 const UA = 'CasafariMIO/1.0 (+verificacion A0 fuentes agregadas de mercado)'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// Páginas semilla. Algunas rutas son conjeturas razonables: la gracia de la
-// sonda es confirmar cuáles existen (200) y cuáles no (404), sin adivinar más.
+// Páginas semilla — iteradas con el run 2026-07-13:
+//  · Las 4 rutas conjeturadas del SII dieron 404 (el sitio se reorganizó) →
+//    ahora se parte del home y de /estadisticas/, dejando que el seguimiento
+//    de nivel 2 encuentre la sección real de bienes raíces.
+//  · observatoriourbano.minvu.cl REDIRIGE a centrodeestudios.minvu.gob.cl —
+//    el Centro de Estudios MINVU es el hogar actual del Observatorio del
+//    Mercado de Suelo → se sondean sus secciones de estadísticas directamente.
 const SII_PAGES = [
-  'https://www.sii.cl/sobre_el_sii/estadisticas_de_bienes_raices.html',
-  'https://www.sii.cl/sobre_el_sii/estadisticas_bienes_raices_por_comuna.html',
-  'https://www.sii.cl/estadisticas/estadisticas_bienes_raices_por_comuna.html',
-  'https://www.sii.cl/sobre_el_sii/estadisticas.html',
+  'https://www.sii.cl',
+  'https://www.sii.cl/estadisticas/',
+  'https://www.sii.cl/sobre_el_sii/datos_abiertos.html',
 ]
 const MINVU_PAGES = [
-  'https://www.observatoriourbano.cl',
+  'https://centrodeestudios.minvu.gob.cl/analisis-estadistico-y-economico/',
+  'https://centrodeestudios.minvu.gob.cl/?sfid=1119&_sft_categoria_repositorio=estadisticas',
   'https://observatoriourbano.minvu.cl',
 ]
 const CKAN_BASE = 'https://datos.gob.cl/api/3/action/package_search'
@@ -64,8 +69,9 @@ const CKAN_TERMS = [
   'avaluo',
 ]
 
-// Qué links nos interesan dentro de una página HTML.
-const DATA_FILE_RE = /\.(csv|xlsx?|zip|json|ods)(\?|#|$)/i
+// Qué links nos interesan dentro de una página HTML (pdf incluido: en el
+// Centro de Estudios MINVU los indicadores se publican como XLSX + PDF).
+const DATA_FILE_RE = /\.(csv|xlsx?|zip|json|ods|pdf)(\?|#|$)/i
 const TOPIC_RE = /bienes|ra[ií]ces|transferencia|compraventa|avalu|suelo|estad[ií]stic|mercado/i
 
 async function fetchSafe(url, { method = 'GET', timeoutMs = 30000 } = {}) {
@@ -131,7 +137,7 @@ async function probePage(url, { follow = true } = {}) {
 
   // Nivel 2: seguir las sub-páginas más prometedoras buscando archivos.
   const collected = [...dataLinks]
-  if (follow && dataLinks.length === 0 && pageLinks.length > 0) {
+  if (follow && dataLinks.length < 3 && pageLinks.length > 0) {
     const seen = new Set()
     for (const sub of pageLinks.slice(0, 6)) {
       if (seen.has(sub.href)) continue

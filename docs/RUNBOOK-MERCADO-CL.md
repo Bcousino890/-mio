@@ -30,11 +30,12 @@ Requisitos (los cumple el VPS ya): `DATABASE_URL`, Node ≥18, migraciones aplic
 **Descubrimientos acumulados:**
 - **2026-07-12:** `ide.minvu.cl` es un portal **Esri ArcGIS Hub** ("Geoportal Open Data Minvu"),
   no un GeoServer WFS clásico — el primer intento de `GetCapabilities` devolvió HTML.
-- **2026-07-13:** la búsqueda por término da `numberMatched: 0` con TODOS los términos — ningún
-  título de los 36 datasets menciona valor/suelo/mercado. Y los `fields` de un servicio Esri NO
-  están en la raíz del `FeatureServer` sino en cada capa (`…/FeatureServer/<n>?f=json`): el
-  primer run de `--auto-find-valor` miró solo raíces, así que fue **inconcluso**, no negativo.
-  El crawler v2 inspecciona capa por capa.
+- **2026-07-13 (run v2 COMPLETO, 39 servicios / 91 capas):** el valor de suelo **NO está en
+  ide.minvu.cl** — las únicas capas con montos son subsidios. La pista real: el Observatorio
+  Urbano redirige a **centrodeestudios.minvu.gob.cl** (Centro de Estudios MINVU), que publica
+  el análisis estadístico/económico; la sonda `sii_ckan` apunta ahí. Las rutas viejas de
+  estadísticas del SII dan 404; CKAN no tiene el dataset; `conservadoresdigitales.cl` es una
+  SPA (la sonda CBR baja los bundles JS para hallar los endpoints).
 
 **A0 · MINVU (parte 1) — crawler automático de capas** (workflow: modo `auto_find_valor`):
 ```bash
