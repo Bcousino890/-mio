@@ -393,14 +393,16 @@ export default function CatastroPage() {
       .finally(() => setDetailLoading(false))
   }, [selectedRol, zone.siiCode])
 
-  // Conjunto por dirección: si el rol no trae rol_padre ni bienes comunes
-  // (dataset nacional de catastral.cl), buscar hermanos que compartan la
-  // dirección base ("PEUMO 1190 DP 502" → todas las unidades de PEUMO 1190).
+  // Conjunto por dirección: cuando el rol no trae rol_padre (dataset nacional
+  // de catastral.cl, donde ese vínculo viene NULL), buscar hermanos que
+  // compartan la dirección base ("PEUMO 1190 DP 502" → todas las unidades de
+  // PEUMO 1190). También aplica a roles con rol_bien_comun pero sin hijos por
+  // rol_padre — de ahí que no se excluyan aquí.
   useEffect(() => {
     setAddrSiblings([])
     const r = rolDetail?.rol
     if (!r || !zone.siiCode) return
-    if (r.rol_padre || r.rol_bien_comun_1 || r.rol_bien_comun_2 || !r.direccion) return
+    if (r.rol_padre || !r.direccion) return
     const controller = new AbortController()
     fetch(`/api/chile/sii-building-units?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(r.rol)}`, { signal: controller.signal })
       .then(res => res.json())
@@ -1652,24 +1654,11 @@ export default function CatastroPage() {
                       </div>
                     )}
 
-                    {/* If this rol IS a building (no rol_padre but has bien_comun) */}
-                    {!rolDetail.rol?.rol_padre && (rolDetail.rol?.rol_bien_comun_1 || rolDetail.rol?.rol_bien_comun_2) && (
-                      <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
-                        <p className="text-[10px] text-blue-400 font-semibold mb-2 flex items-center gap-1.5">
-                          <Building2 size={11} />Edificio con bienes comunes
-                        </p>
-                        <button
-                          onClick={() => loadBuildingUnits(rolDetail.rol.rol)}
-                          className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
-                        >
-                          <Layers size={12} />Ver departamentos / unidades
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Conjunto detectado por dirección base (fallback nacional:
-                        el dataset de catastral.cl no trae rol_padre/bien_comun) */}
-                    {!rolDetail.rol?.rol_padre && !rolDetail.rol?.rol_bien_comun_1 && !rolDetail.rol?.rol_bien_comun_2 && addrSiblings.length >= 2 && (
+                    {/* Conjunto detectado por dirección base — cubre el dataset
+                        nacional (catastral.cl no trae rol_padre) y también los
+                        roles con bien común pero sin hijos por rol_padre. Tiene
+                        precedencia sobre la caja de bien común de abajo. */}
+                    {!rolDetail.rol?.rol_padre && addrSiblings.length >= 2 && (
                       <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
                         <p className="text-[10px] text-blue-400 font-semibold mb-1 flex items-center gap-1.5">
                           <Building2 size={11} />Edificio / condominio · {addrSiblings.length >= 500 ? '500+' : addrSiblings.length} unidades
@@ -1680,6 +1669,23 @@ export default function CatastroPage() {
                           className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
                         >
                           <Layers size={12} />Ver unidades del conjunto
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Edificio con bienes comunes (archivos SII oficiales cuyas
+                        unidades sí enlazan por rol_padre). Solo cuando el
+                        agrupado por dirección no aplicó. */}
+                    {!rolDetail.rol?.rol_padre && (rolDetail.rol?.rol_bien_comun_1 || rolDetail.rol?.rol_bien_comun_2) && addrSiblings.length < 2 && (
+                      <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
+                        <p className="text-[10px] text-blue-400 font-semibold mb-2 flex items-center gap-1.5">
+                          <Building2 size={11} />Edificio con bienes comunes
+                        </p>
+                        <button
+                          onClick={() => loadBuildingUnits(rolDetail.rol.rol)}
+                          className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          <Layers size={12} />Ver departamentos / unidades
                         </button>
                       </div>
                     )}

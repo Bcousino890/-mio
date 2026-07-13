@@ -764,6 +764,15 @@ export async function ingestSiiCatastroComuna({
       await client.query('BEGIN')
       try {
         const rolIdMap = await loadRolIdMap(client, comunaCode)
+        // Idempotencia: las construcciones se INSERTAN (no hay upsert como en
+        // los roles), así que re-ingerir una comuna las duplicaba. Se borran
+        // las líneas previas de los roles no agrícolas de esta comuna antes de
+        // recargarlas desde el archivo (el trigger recalcula superficie).
+        await client.query(
+          `DELETE FROM sii_construcciones_cl WHERE rol_id IN (
+             SELECT id FROM sii_roles_cl WHERE sii_comuna_code = $1 AND serie = 'no_agricola')`,
+          [comunaCode]
+        )
         let batch: ConstruccionBatchRow[] = []
         for await (const rec of parseConstruccionesNoAgricolas(files.construccionesNoAgricolas)) {
           const rolId = rolIdMap.get(`${rec.manzana}|${rec.predio}`)
@@ -798,6 +807,13 @@ export async function ingestSiiCatastroComuna({
       await client.query('BEGIN')
       try {
         const rolIdMap = await loadRolIdMap(client, comunaCode)
+        // Idempotencia (ver bloque no agrícola): borrar las líneas previas de
+        // los roles agrícolas de la comuna antes de recargarlas.
+        await client.query(
+          `DELETE FROM sii_construcciones_cl WHERE rol_id IN (
+             SELECT id FROM sii_roles_cl WHERE sii_comuna_code = $1 AND serie = 'agricola')`,
+          [comunaCode]
+        )
         let batch: ConstruccionBatchRow[] = []
         for await (const rec of parseSuelosConstruccionesAgricolas(files.suelosConstruccionesAgricolas)) {
           const rolId = rolIdMap.get(`${rec.manzana}|${rec.predio}`)
