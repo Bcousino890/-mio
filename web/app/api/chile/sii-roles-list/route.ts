@@ -55,17 +55,31 @@ export async function GET(request: NextRequest) {
 
     const where = `WHERE ${conditions.join(' AND ')}`
 
+    // El mismo rol puede aparecer 2 veces en sii_roles_cl (constraint única por
+    // manzana/predio crudo + dos fuentes con distinto padding de ceros). Se
+    // colapsa con DISTINCT ON (rol) quedándose con la fila más completa, para
+    // que la lista y los conteos no muestren duplicados.
+    const dedup = `
+      SELECT DISTINCT ON (r2.rol) r2.*
+      FROM sii_roles_cl r2
+      ${where.replace(/\br\./g, 'r2.')}
+      ORDER BY r2.rol, r2.superficie_construida_m2 DESC NULLS LAST,
+               (r2.nombre_propietario IS NOT NULL) DESC, (r2.lat IS NOT NULL) DESC`
+
     const [countRes, dataRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*) as total FROM sii_roles_cl r ${where}`, params),
+      pool.query(`SELECT COUNT(*) as total FROM (${dedup}) r`, params),
       pool.query(
         `SELECT r.rol, r.manzana, r.predio, r.direccion, r.avaluo_fiscal_total,
                 r.avaluo_exento, r.contribucion_semestral, r.codigo_destino_principal,
                 r.codigo_ubicacion, r.superficie_terreno_m2, r.serie,
                 r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2,
                 p.matched_parcel_id
-         FROM sii_roles_cl r
-         LEFT JOIN property_rc_cl p ON r.rol = p.rol_matriz OR r.rol = p.rol_unidad
-         ${where}
+         FROM (${dedup}) r
+         LEFT JOIN LATERAL (
+           SELECT matched_parcel_id FROM property_rc_cl p
+           WHERE p.rol_matriz = r.rol OR p.rol_unidad = r.rol
+           LIMIT 1
+         ) p ON true
          ORDER BY ${sort}
          LIMIT ${pageSize} OFFSET ${offset}`,
         params

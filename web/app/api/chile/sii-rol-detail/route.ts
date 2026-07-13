@@ -16,8 +16,20 @@ export async function GET(request: NextRequest) {
   const rol = normalizeClRol(rolParam)
 
   try {
+    // El mismo rol puede tener 2 filas en sii_roles_cl: la constraint única es
+    // (sii_comuna_code, manzana, predio) sobre el manzana/predio CRUDO, y dos
+    // fuentes de ingesta con distinto padding de ceros ('00100/00043' vs
+    // '100/43') producen el mismo `rol` normalizado sin colisionar. Se prefiere
+    // la fila con más datos (construcciones, propietario, coordenadas) para no
+    // devolver el duplicado vacío.
     const rolRes = await pool.query(
-      `SELECT * FROM sii_roles_cl WHERE sii_comuna_code = $1 AND rol = $2 LIMIT 1`,
+      `SELECT * FROM sii_roles_cl
+       WHERE sii_comuna_code = $1 AND rol = $2
+       ORDER BY superficie_construida_m2 DESC NULLS LAST,
+                (nombre_propietario IS NOT NULL) DESC,
+                (lat IS NOT NULL) DESC,
+                avaluo_fiscal_total DESC NULLS LAST
+       LIMIT 1`,
       [siiComunaCode, rol]
     )
     if (rolRes.rows.length === 0) {
