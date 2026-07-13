@@ -31,6 +31,13 @@ class Config:
     predio_probe_depth: int = 60
     predio_initial_scan: int = 60
     predio_max_inciertos: int = 25
+    # Sesiones de proxy en PARALELO (cada una con su propia IP sticky). El
+    # proveedor confirmó que no hay límite de sesiones/threads concurrentes:
+    # en vez de una sola sesión al ritmo seguro por IP (requests_per_second),
+    # se corren `sessions` sesiones simultáneas, cada una a ese mismo ritmo
+    # seguro — el throughput total escala ~linealmente con `sessions` sin que
+    # ninguna IP individual supere el ritmo que el WAF tolera.
+    sessions: int = 1
 
 
 def load_config(path: str) -> Config:
@@ -81,4 +88,5 @@ def load_config(path: str) -> Config:
         predio_probe_depth=int(ranges.get("predio_probe_depth", 60)),
         predio_initial_scan=int(ranges.get("predio_initial_scan", 60)),
         predio_max_inciertos=int(limits.get("predio_max_inciertos", 25)),
+        sessions=int(limits.get("sessions", 1)),
     )

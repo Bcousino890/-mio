@@ -33,9 +33,15 @@
 #   SII_MANZANAS_STAGE etapa en modo una-comuna: "manzanas-geo" (default) o
 #                      "manzanas" (en modo cola, la etapa la define cada
 #                      entrada de comunas-queue.json)
-#   SII_RPS            requests/segundo (default 2 — ritmo tolerado por el WAF)
-#   SII_CONCURRENCY    peticiones simultáneas (default 4)
+#   SII_RPS            requests/segundo POR SESIÓN/IP (default 2 — ritmo
+#                      tolerado por el WAF; NO subir esto, ver SII_SESSIONS)
+#   SII_CONCURRENCY    peticiones simultáneas por sesión (default 4)
 #   SII_GRID_STEP_M    paso de la grilla de descubrimiento de manzanas (default 40 m)
+#   SII_SESSIONS       sesiones de proxy EN PARALELO, cada una con su propia IP
+#                      (default 6). SmartProxy confirmó que no hay límite de
+#                      sesiones concurrentes: esto multiplica el throughput
+#                      total (≈ SII_SESSIONS × SII_RPS req/s) sin que ninguna
+#                      IP individual supere el ritmo que el WAF tolera.
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
@@ -80,12 +86,15 @@ else
 fi
 
 # ── Parámetros de velocidad ─────────────────────────────────────────────────
-# Ritmo tolerado por el WAF del SII. El diagnóstico mostró que a 8 rps el WAF
-# devuelve 429 en masa (se estrangula y encima corrompe los datos), mientras que
-# la corrida que sí funcionó iba a 2 rps. Con proxy rotable NO conviene subir de
-# ~2-3: más rápido = más 429 = más lento. Configurable por si el WAF afloja.
+# SII_RPS es el ritmo POR IP/SESIÓN, tolerado por el WAF del SII (a 8 rps en
+# una sola IP el WAF devuelve 429 en masa; la corrida que sí funcionó iba a
+# 2 rps). NO subir esto — en cambio, SII_SESSIONS multiplica el throughput
+# corriendo N sesiones en paralelo, cada una en su propia IP, cada una a este
+# mismo ritmo seguro (SmartProxy confirmó que no hay límite de sesiones
+# concurrentes). Total efectivo ≈ SII_SESSIONS × SII_RPS requests/s.
 SII_RPS="${SII_RPS:-2}"
 SII_CONCURRENCY="${SII_CONCURRENCY:-4}"
+SII_SESSIONS="${SII_SESSIONS:-6}"
 # Paso de la grilla de descubrimiento de manzanas (m). A 100 m se saltaba ~80%
 # de las manzanas de Las Condes (1.099 vs ~5.000 reales → 80.611 predios vs
 # ~390k). Un paso más fino descubre las cuadras chicas. Más fino = más puntos =
@@ -155,6 +164,7 @@ cat > "$PARAMS_FILE" <<PARAMS
 SII_RPS=${SII_RPS}
 SII_CONCURRENCY=${SII_CONCURRENCY}
 SII_GRID_STEP_M=${SII_GRID_STEP_M}
+SII_SESSIONS=${SII_SESSIONS}
 PARAMS
 rm -f "$ALL_COMPLETE_MARKER"
 
@@ -240,7 +250,7 @@ procesar_comuna() {
   ],
   "regiones": [],
   "ranges": { "manzana_min": 1, "manzana_max": 4000, "manzana_probe_depth": 20, "predio_max": 3000, "predio_probe_depth": 60, "predio_initial_scan": 60 },
-  "limits": { "max_concurrency": ${SII_CONCURRENCY}, "requests_per_second": ${SII_RPS}, "max_retries": 5, "backoff_base": 2, "predio_max_inciertos": 25 },
+  "limits": { "max_concurrency": ${SII_CONCURRENCY}, "requests_per_second": ${SII_RPS}, "max_retries": 5, "backoff_base": 2, "predio_max_inciertos": 25, "sessions": ${SII_SESSIONS} },
   "geo": { "grid_step_m": ${SII_GRID_STEP_M} },
   "output_dir": "output"
 }
