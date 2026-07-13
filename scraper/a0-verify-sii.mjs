@@ -49,10 +49,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 //  · observatoriourbano.minvu.cl REDIRIGE a centrodeestudios.minvu.gob.cl —
 //    el Centro de Estudios MINVU es el hogar actual del Observatorio del
 //    Mercado de Suelo → se sondean sus secciones de estadísticas directamente.
+// Run v3: www.sii.cl es un meta-refresh a homer.sii.cl, y /estadisticas/ es un
+// redirect JS a /destacados/ogp/ (¡el portal OGP del plan!). Semillas directas.
 const SII_PAGES = [
-  'https://www.sii.cl',
+  'https://homer.sii.cl/',
+  'https://www.sii.cl/destacados/ogp/',
   'https://www.sii.cl/estadisticas/',
-  'https://www.sii.cl/sobre_el_sii/datos_abiertos.html',
 ]
 const MINVU_PAGES = [
   'https://centrodeestudios.minvu.gob.cl/analisis-estadistico-y-economico/',
@@ -91,8 +93,21 @@ async function fetchSafe(url, { method = 'GET', timeoutMs = 30000 } = {}) {
     const text = method === 'GET' ? await res.text() : ''
     return { ok: res.ok, status: res.status, contentType, length, text, finalUrl: res.url }
   } catch (err) {
-    return { ok: false, status: 0, contentType: '?', length: null, text: '', err: err.name === 'TimeoutError' ? 'timeout' : err.message }
+    // err.cause trae el porqué real (ENOTFOUND, CERT_HAS_EXPIRED, ECONNREFUSED…)
+    // — "fetch failed" a secas no permite decidir el siguiente paso (run v3, Koha).
+    const why = err.name === 'TimeoutError' ? 'timeout' : (err.cause?.code ?? err.cause?.message ?? err.message)
+    return { ok: false, status: 0, contentType: '?', length: null, text: '', err: why }
   }
+}
+
+/** Detecta redirects que fetch NO sigue: <meta http-equiv=refresh> y window.location por JS. */
+function softRedirect(html, baseUrl) {
+  const meta = html.match(/http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'\s>]+)/i)
+    || html.match(/content\s*=\s*["']\d+\s*;\s*url\s*=\s*([^"'\s>]+)["'][^>]*http-equiv\s*=\s*["']?refresh/i)
+  const js = html.match(/window\.location(?:\.href)?\s*(?:=|\.replace\s*\()\s*["']([^"']+)["']/i)
+  const target = meta?.[1] ?? js?.[1]
+  if (!target) return null
+  try { return new URL(target, baseUrl).toString() } catch { return null }
 }
 
 /** Extrae <a href> de un HTML con regex (sin dependencias), href absolutizado. */
@@ -112,7 +127,7 @@ function extractLinks(html, baseUrl) {
 }
 
 /** Sondea una página: status real, y si es HTML, los links de datos/tema. */
-async function probePage(url, { follow = true } = {}) {
+async function probePage(url, { follow = true, hops = 0 } = {}) {
   console.log(`\n→ ${url}`)
   const res = await fetchSafe(url)
   if (!res.ok) {
@@ -120,6 +135,13 @@ async function probePage(url, { follow = true } = {}) {
     return { dataLinks: [], pageLinks: [] }
   }
   console.log(`  ✓ HTTP ${res.status} · ${res.contentType}${res.finalUrl && res.finalUrl !== url ? ` · redirigida a ${res.finalUrl}` : ''}`)
+
+  // Redirect "blando" (meta refresh / window.location, run v3: sii.cl usa ambos).
+  const soft = /html/i.test(res.contentType) && res.text.length < 4000 ? softRedirect(res.text, res.finalUrl || url) : null
+  if (soft && hops < 2) {
+    console.log(`  ↪ redirect blando (meta/JS) → ${soft}`)
+    return probePage(soft, { follow, hops: hops + 1 })
+  }
   if (!/html/i.test(res.contentType)) {
     console.log(`  (no es HTML — es un recurso directo de ${res.length ?? '?'} bytes)`)
     return { dataLinks: [{ href: url, text: '(directo)' }], pageLinks: [] }
@@ -189,7 +211,13 @@ async function headFiles(links) {
 async function kohaSearch(term) {
   const url = `${KOHA_BASE}?q=${encodeURIComponent(term)}`
   console.log(`\n→ Koha catalogo.minvu.cl · q="${term}"`)
-  const res = await fetchSafe(url)
+  let res = await fetchSafe(url)
+  if (!res.ok && res.status === 0) {
+    // Run v3: https falló a nivel de red (probable cert). Reintento por http.
+    const httpUrl = url.replace(/^https:/, 'http:')
+    console.log(`  ✗ https falló (${res.err}) — reintento http: ${httpUrl}`)
+    res = await fetchSafe(httpUrl)
+  }
   if (!res.ok) {
     console.log(`  ✗ HTTP ${res.status}${res.err ? ` · ${res.err}` : ''}`)
     return
@@ -254,6 +282,19 @@ async function main() {
     for (const t of KOHA_TERMS) {
       await kohaSearch(t)
       await sleep(500)
+    }
+
+    // Fallback si Koha no responde: el buscador WordPress del Centro de Estudios
+    // (dominio que SÍ funciona) enlaza los mismos archivos vía tracklinks.pl.
+    console.log(`\n${'═'.repeat(70)}`)
+    console.log('2.6) Buscador del Centro de Estudios (WordPress, mismo repositorio)')
+    console.log('═'.repeat(70))
+    for (const t of ['mercado de suelo', 'precio de suelo']) {
+      const u = `https://centrodeestudios.minvu.gob.cl/resultados/?_sft_categoria_repositorio=estadisticas&_sf_s=${encodeURIComponent(t)}`
+      allData.push(...(await probePage(u, { follow: false })).dataLinks)
+      const u2 = `https://centrodeestudios.minvu.gob.cl/?s=${encodeURIComponent(t)}`
+      allData.push(...(await probePage(u2, { follow: false })).dataLinks)
+      await sleep(400)
     }
 
     await headFiles(allData)

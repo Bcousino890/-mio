@@ -125,7 +125,16 @@ async function probePortal(url) {
     console.log(`\nSPA detectada (sin forms ni endpoints inline). Bundles JS (${srcs.length}); inspecciono hasta 5:`)
     for (const src of srcs.slice(0, 5)) {
       try {
-        const jsRes = await fetch(src, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(30000) })
+        // UA de navegador + Referer: el CDN rechazó el UA de bot en el run v3
+        // ("fetch failed" en cdn.conservadoresdigitales.cl).
+        const jsRes = await fetch(src, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+            Accept: '*/*',
+            Referer: res.url,
+          },
+          signal: AbortSignal.timeout(30000),
+        })
         if (!jsRes.ok) { console.log(`  ✗ [${jsRes.status}] ${src}`); continue }
         const code = (await jsRes.text()).slice(0, 2_000_000)
         const found = new Set()
@@ -133,7 +142,7 @@ async function probePortal(url) {
         console.log(`  • ${src} (${code.length} bytes) → ${found.size} endpoint(s)`)
         for (const e of [...found].slice(0, 20)) console.log(`      · ${e}`)
       } catch (err) {
-        console.log(`  ✗ ${src}: ${err.message}`)
+        console.log(`  ✗ ${src}: ${err.cause?.code ?? err.cause?.message ?? err.message}`)
       }
     }
   }
