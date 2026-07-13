@@ -59,6 +59,23 @@ async function get(url) {
   return { ok: res.ok, status: res.status, contentType, text }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * fetch→JSON que NUNCA lanza: un timeout o error de red en UNA capa no debe
+ * abortar el crawl completo (lección del primer run de --auto-find-valor, que
+ * murió entero por un solo AbortSignal.timeout a los ~24 servicios).
+ */
+async function getJsonSafe(url, timeoutMs = 15000) {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) })
+    const text = await res.text()
+    return { ok: res.ok, status: res.status, json: tryParseJson(text) }
+  } catch (err) {
+    return { ok: false, status: 0, json: null, err: err.name === 'TimeoutError' ? `timeout ${timeoutMs / 1000}s` : err.message }
+  }
+}
+
 // Extracción mínima por regex (evita dependencia de un parser XML, solo para el fallback WFS).
 function matchAll(xml, re) {
   const out = []
@@ -270,11 +287,44 @@ async function search(term) {
   await checkArcgisServicesDirectory()
 }
 
-/** Describe los campos de una capa Esri REST (FeatureServer/MapServer). */
+// Heurísticas de campos para el comando ingest-minvu-suelo.mjs sugerido.
+// "aval"/"uf" cazan avalúos y montos en UF; el humano confirma con el alias.
+const VALOR_FIELD_RE = /uf_?m2|uf_?ha|valor|precio|monto|aval/i
+
+function guessFields(fields) {
+  return {
+    valor: fields.find((f) => VALOR_FIELD_RE.test(f)) ?? null,
+    zona: fields.find((f) => /zona|sector|barrio/i.test(f)) ?? null,
+    comuna: fields.find((f) => /comuna|cut|cod_com/i.test(f)) ?? null,
+  }
+}
+
+function printIngestCommand(layerUrl, g, indent = '  ') {
+  console.log(`${indent}node scraper/ingest-minvu-suelo.mjs \\`)
+  console.log(`${indent}  --esri-url "${layerUrl}" \\`)
+  console.log(`${indent}  --field-valor ${g.valor ?? '<campo_UF_m2>'} \\`)
+  if (g.zona) console.log(`${indent}  --field-zona ${g.zona} \\`)
+  console.log(`${indent}  ${g.comuna ? `--field-comuna ${g.comuna}` : '--comuna 15108'} \\`)
+  console.log(`${indent}  --periodo 2024 --dry-run`)
+}
+
+/**
+ * Descompone una URL de servicio Esri REST: raíz del servicio y, si la URL ya
+ * apunta a una capa concreta (…/FeatureServer/3), el id de esa capa.
+ */
+function parseServiceUrl(u) {
+  const m = typeof u === 'string' ? u.match(/^(.*\/(?:FeatureServer|MapServer))(?:\/(\d+))?\/?(?:\?.*)?$/i) : null
+  if (!m) return null
+  return { root: m[1], layerId: m[2] != null ? Number(m[2]) : null }
+}
+
+/** Describe los campos de una capa Esri REST (FeatureServer/MapServer).
+ *  Si la URL es la RAÍZ del servicio (sin /<n>), los `fields` no están ahí:
+ *  lista las capas (`layers[]`/`tables[]`) y desciende a cada una. */
 async function esriDescribe(layerUrl) {
   const sep = layerUrl.includes('?') ? '&' : '?'
   const url = `${layerUrl}${sep}f=json`
-  console.log(`→ Describe capa ArcGIS REST: ${url}\n`)
+  console.log(`→ Describe ArcGIS REST: ${url}\n`)
   const res = await get(url)
   if (!res.ok) {
     console.log(`✗ HTTP ${res.status}`)
@@ -291,7 +341,22 @@ async function esriDescribe(layerUrl) {
     console.log(`✗ Error del servicio: ${json.error.message ?? JSON.stringify(json.error)}`)
     return
   }
+
   const fieldDefs = Array.isArray(json.fields) ? json.fields : []
+
+  // URL de raíz de servicio: sin fields propios — descender a las capas.
+  const subLayers = [...(Array.isArray(json.layers) ? json.layers : []), ...(Array.isArray(json.tables) ? json.tables : [])]
+  if (fieldDefs.length === 0 && subLayers.length > 0) {
+    const base = layerUrl.replace(/\/+$/, '')
+    console.log(`Es la raíz del servicio (${subLayers.length} capa(s)). Describiendo cada capa:\n`)
+    for (const l of subLayers) {
+      console.log(`── Capa ${l.id} · «${l.name}» ─ ${base}/${l.id}`)
+      await esriDescribe(`${base}/${l.id}`)
+      console.log('')
+    }
+    return
+  }
+
   console.log(`Campos:`)
   if (fieldDefs.length === 0) {
     console.log('  (ninguno encontrado)')
@@ -302,18 +367,9 @@ async function esriDescribe(layerUrl) {
     console.log(`  - ${f.name} (${f.type}${f.alias && f.alias !== f.name ? `, alias: "${f.alias}"` : ''})`)
   }
 
-  const fields = fieldDefs.map(f => f.name)
-  const valorGuess = fields.find(f => /uf.*m2|valor|precio|monto/i.test(f))
-  const zonaGuess = fields.find(f => /zona|objectid|^id$/i.test(f))
-  const comunaGuess = fields.find(f => /comuna|cut|cod_com/i.test(f))
-
+  const g = guessFields(fieldDefs.map((f) => f.name))
   console.log(`\nComando sugerido (ajustá los campos si el guess no es exacto):`)
-  console.log(`  node scraper/ingest-minvu-suelo.mjs \\`)
-  console.log(`    --esri-url "${layerUrl}" \\`)
-  console.log(`    --field-valor ${valorGuess ?? '<campo_UF_m2>'} \\`)
-  if (zonaGuess) console.log(`    --field-zona ${zonaGuess} \\`)
-  console.log(`    ${comunaGuess ? `--field-comuna ${comunaGuess}` : '--comuna 15108'} \\`)
-  console.log(`    --periodo 2024 --dry-run`)
+  printIngestCommand(layerUrl, g)
 }
 
 /** Fallback: GeoServer WFS clásico (ej. otros portales, no MINVU). */
@@ -382,83 +438,130 @@ async function describe(layer) {
   console.log(`    --periodo 2024 --dry-run`)
 }
 
+/** Link rel=next de una respuesta OGC API (paginación robusta, sin adivinar offset). */
+function nextLink(json, currentUrl) {
+  const href = Array.isArray(json.links) ? json.links.find((l) => l.rel === 'next')?.href : null
+  if (!href) return null
+  try { return new URL(href, currentUrl).toString() } catch { return null }
+}
+
 /**
- * Modo automático: inspecciona todos los datasets del catálogo,
- * extrae sus FeatureServer URLs, y testea cada uno para encontrar
- * cuál tiene campos de valor de suelo (UF/m², precio, etc.).
- * Útil cuando la búsqueda por término falla pero el dataset existe.
+ * Modo automático v2: inspecciona TODAS las capas de TODOS los servicios del
+ * catálogo buscando campos de valor de suelo.
+ *
+ * Lecciones del primer run (2026-07-13, inconcluso):
+ *  1. Los `fields` NO están en la raíz del FeatureServer — están en cada capa
+ *     (`…/FeatureServer/<n>?f=json`). El run v1 miraba solo la raíz, así que
+ *     nunca vio un campo de verdad ("Sin campos de valor; campos: ..." vacío).
+ *  2. Un solo timeout de 60s abortaba el run entero → ahora cada request es
+ *     tolerante a fallos (getJsonSafe) y con timeout corto.
+ *  3. El catálogo pagina de a 10-50 → ahora se siguen los links rel=next.
+ *  4. Servicios duplicados entre items → dedupe por raíz de servicio.
  */
 async function autoFindValor() {
-  console.log(`→ Modo automático: buscando dataset con campos de valor de suelo...\n`)
+  const t0 = Date.now()
+  const DEADLINE_MS = 10 * 60 * 1000 // presupuesto duro: resumen parcial antes que morir sin reporte
+  const expired = () => Date.now() - t0 > DEADLINE_MS
+
+  console.log(`→ Modo automático v2: inspeccionando capa por capa (fields viven en …/FeatureServer/<n>, no en la raíz)\n`)
 
   const collectionIds = await listCollections()
+  // "all" es superconjunto de las demás; si existe, basta con esa.
+  const scanIds = collectionIds.includes('all') ? ['all'] : (collectionIds.length ? collectionIds : ['dataset'])
+
+  const seenRoots = new Set()
   const candidates = []
+  const failures = []
+  let services = 0
+  let layersScanned = 0
 
-  for (const collectionId of collectionIds.length ? collectionIds : ['dataset', 'document']) {
-    const url = `${HUB}/api/search/v1/collections/${collectionId}/items?limit=100`
-    console.log(`\n→ Inspeccionando colección "${collectionId}"...`)
-    const res = await get(url)
-    const json = tryParseJson(res.text)
-    if (!res.ok || !json) {
-      console.log(`  ✗ HTTP ${res.status}, skipping`)
-      continue
-    }
-
-    const items = extractItems(json)
-    for (const item of items) {
-      if (!item.url || !item.url.includes('FeatureServer')) continue
-      console.log(`\n  Testeando: ${item.name}`)
-      console.log(`    URL: ${item.url}`)
-
-      const sep = item.url.includes('?') ? '&' : '?'
-      const descUrl = `${item.url}${sep}f=json`
-      const descRes = await get(descUrl)
-      const descJson = tryParseJson(descRes.text)
-
-      if (!descRes.ok || !descJson || descJson.error) {
-        console.log(`    ✗ No se pudo describir (HTTP ${descRes.status})`)
-        continue
+  for (const cid of scanIds) {
+    let pageUrl = `${HUB}/api/search/v1/collections/${cid}/items?limit=50`
+    for (let page = 0; pageUrl && page < 20 && !expired(); page++) {
+      const { ok, status, json, err } = await getJsonSafe(pageUrl, 20000)
+      if (!ok || !json) {
+        console.log(`✗ Página de catálogo falló (HTTP ${status}${err ? ` · ${err}` : ''}): ${pageUrl}`)
+        break
       }
 
-      const fields = Array.isArray(descJson.fields) ? descJson.fields.map(f => f.name) : []
-      const valorField = fields.find(f => /uf.*m2|valor|precio|monto|value/i.test(f))
-      const zonaField = fields.find(f => /zona|objectid|^id$|layer_id/i.test(f))
-      const comunaField = fields.find(f => /comuna|cut|cod_com|code/i.test(f))
+      for (const item of extractItems(json)) {
+        if (expired()) break
+        const svc = parseServiceUrl(item.url)
+        if (!svc) continue // dashboards, docs, webmaps: sin servicio consultable
+        if (seenRoots.has(svc.root)) continue
+        seenRoots.add(svc.root)
+        services++
 
-      if (valorField) {
-        console.log(`    ✓ ENCONTRADO: ${valorField} (valor), zona: ${zonaField || '?'}, comuna: ${comunaField || '?'}`)
-        console.log(`      Campos: ${fields.slice(0, 5).join(', ')}${fields.length > 5 ? '...' : ''}`)
-        candidates.push({
-          name: item.name,
-          url: item.url,
-          valorField,
-          zonaField: zonaField || null,
-          comunaField: comunaField || null,
-          allFields: fields,
-        })
-      } else {
-        console.log(`    • Sin campos de valor; campos: ${fields.slice(0, 3).join(', ')}...`)
+        // Raíz del servicio → lista de capas reales.
+        const root = await getJsonSafe(`${svc.root}?f=json`)
+        if (!root.json || root.json.error) {
+          const why = root.json?.error ? (root.json.error.message ?? JSON.stringify(root.json.error)) : `HTTP ${root.status}${root.err ? ` · ${root.err}` : ''}`
+          console.log(`• ${item.name} — ✗ raíz no describible: ${why}`)
+          failures.push({ name: item.name, url: svc.root, why })
+          continue
+        }
+
+        const subLayers = [
+          ...(Array.isArray(root.json.layers) ? root.json.layers : []),
+          ...(Array.isArray(root.json.tables) ? root.json.tables : []),
+        ].slice(0, 12)
+
+        if (subLayers.length === 0) {
+          console.log(`• ${item.name} — 0 capas en la raíz`)
+          continue
+        }
+
+        console.log(`• ${item.name} — ${subLayers.length} capa(s)`)
+        for (const l of subLayers) {
+          if (expired()) break
+          const layerUrl = `${svc.root}/${l.id}`
+          const desc = await getJsonSafe(`${layerUrl}?f=json`)
+          layersScanned++
+          if (!desc.json || desc.json.error) {
+            const why = desc.json?.error ? (desc.json.error.message ?? JSON.stringify(desc.json.error)) : `HTTP ${desc.status}${desc.err ? ` · ${desc.err}` : ''}`
+            console.log(`    - ${l.id} «${l.name}» ✗ ${why}`)
+            failures.push({ name: `${item.name} / ${l.name}`, url: layerUrl, why })
+            continue
+          }
+          const fields = Array.isArray(desc.json.fields) ? desc.json.fields.map((f) => f.name) : []
+          const g = guessFields(fields)
+          if (g.valor) {
+            console.log(`    - ${l.id} «${l.name}» ✓ VALOR: ${g.valor}${g.comuna ? ` · comuna: ${g.comuna}` : ''}${g.zona ? ` · zona: ${g.zona}` : ''}`)
+            candidates.push({ service: item.name, layer: l.name, layerUrl, fields, g })
+          } else {
+            console.log(`    - ${l.id} «${l.name}» sin valor (${fields.length} campos: ${fields.slice(0, 6).join(', ')}${fields.length > 6 ? '…' : ''})`)
+          }
+          await sleep(120) // ritmo respetuoso: son decenas de requests de metadatos
+        }
       }
+
+      pageUrl = nextLink(json, pageUrl)
     }
+  }
+
+  // ── Resumen ────────────────────────────────────────────────────────────────
+  console.log(`\n${'═'.repeat(70)}`)
+  console.log(`Resumen: ${services} servicio(s) · ${layersScanned} capa(s) inspeccionada(s) · ${candidates.length} candidata(s) · ${failures.length} fallo(s)${expired() ? ' · ⚠ CORTADO por presupuesto de tiempo (resultado PARCIAL)' : ''}`)
+
+  if (failures.length > 0) {
+    console.log(`\nCapas/servicios que no se pudieron describir (revisar a mano si alguna suena a suelo):`)
+    for (const f of failures) console.log(`  ✗ ${f.name} → ${f.url}\n     ${f.why}`)
   }
 
   if (candidates.length === 0) {
-    console.log('\n✗ No se encontró ningún dataset con campos de valor de suelo.')
-    console.log('  Próximas acciones: revisar otros portales (geoportal.cl, catastral.cl) o verificar con MINVU.')
+    console.log(`\n✗ Ninguna capa inspeccionada tiene campos de valor.`)
+    console.log(`  Si el resumen dice PARCIAL, relanzá. Si fue completo: el dato no está en este Hub —`)
+    console.log(`  correr el modo sii_ckan (busca el dataset en datos.gob.cl/Observatorio Urbano) o pivotar a SII agregado.`)
     return
   }
 
-  console.log(`\n✓ Encontrados ${candidates.length} dataset(s) con campos de valor:\n`)
+  console.log(`\n✓ ${candidates.length} capa(s) con campos de valor — elegir la del Observatorio de Mercado de Suelo:\n`)
   for (const c of candidates) {
-    console.log(`Opción: ${c.name}`)
-    console.log(`  URL: ${c.url}`)
-    console.log(`  Comando sugerido:`)
-    console.log(`    node scraper/ingest-minvu-suelo.mjs \\`)
-    console.log(`      --esri-url "${c.url}" \\`)
-    console.log(`      --field-valor ${c.valorField} \\`)
-    if (c.zonaField) console.log(`      --field-zona ${c.zonaField} \\`)
-    console.log(`      ${c.comunaField ? `--field-comuna ${c.comunaField}` : '--comuna 15108'} \\`)
-    console.log(`      --periodo 2024 --dry-run\n`)
+    console.log(`▶ ${c.service} / «${c.layer}»`)
+    console.log(`  ${c.layerUrl}`)
+    console.log(`  campos: ${c.fields.join(', ')}`)
+    printIngestCommand(c.layerUrl, c.g)
+    console.log('')
   }
 }
 

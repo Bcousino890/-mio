@@ -27,20 +27,33 @@ Requisitos (los cumple el VPS ya): `DATABASE_URL`, Node ≥18, migraciones aplic
 
 ## FASE 2 — Verificar fuentes + piloto
 
-**Descubrimiento (2026-07-12):** `ide.minvu.cl` es un portal **Esri ArcGIS Hub** ("Geoportal Open
-Data Minvu"), no un GeoServer WFS clásico — el primer intento de `GetCapabilities` devolvió HTML.
-Por eso A0 tiene dos pasos: buscar el dataset en el Hub, y describir sus campos vía REST de Esri.
+**Descubrimientos acumulados:**
+- **2026-07-12:** `ide.minvu.cl` es un portal **Esri ArcGIS Hub** ("Geoportal Open Data Minvu"),
+  no un GeoServer WFS clásico — el primer intento de `GetCapabilities` devolvió HTML.
+- **2026-07-13:** la búsqueda por término da `numberMatched: 0` con TODOS los términos — ningún
+  título de los 36 datasets menciona valor/suelo/mercado. Y los `fields` de un servicio Esri NO
+  están en la raíz del `FeatureServer` sino en cada capa (`…/FeatureServer/<n>?f=json`): el
+  primer run de `--auto-find-valor` miró solo raíces, así que fue **inconcluso**, no negativo.
+  El crawler v2 inspecciona capa por capa.
 
-**A0 · Buscar el dataset y describir sus campos:**
+**A0 · MINVU (parte 1) — crawler automático de capas** (workflow: modo `auto_find_valor`):
 ```bash
-node scraper/a0-verify-fuentes.mjs                              # busca "valor de suelo" en el Hub
-node scraper/a0-verify-fuentes.mjs --search "observatorio mercado de suelo"  # otro término si no aparece
-node scraper/a0-verify-fuentes.mjs --esri-describe "<url del FeatureServer/MapServer de arriba>"
+node scraper/a0-verify-fuentes.mjs --auto-find-valor            # inspecciona TODAS las capas
+node scraper/a0-verify-fuentes.mjs --esri-describe "<url servicio o capa>"  # detalle de una
 ```
-El `--esri-describe` imprime el comando `ingest-minvu-suelo.mjs` con los flags
+Si encuentra capas con campos de valor, imprime el comando `ingest-minvu-suelo.mjs` con
 `--esri-url` / `--field-valor` / `--field-zona` / `--field-comuna` inferidos. Copiar ese comando.
 
-(Si el portal fuera GeoServer clásico: `--wfs --wfs-url <url> [--describe <capa>]`.)
+**A0 · SII + CKAN (parte 2) — fuentes agregadas + caza del dataset fuera del Hub**
+(workflow: modo `sii_ckan`):
+```bash
+node scraper/a0-verify-sii.mjs        # SII bienes raíces + Observatorio Urbano + datos.gob.cl
+```
+Reporta: qué páginas de estadísticas del SII existen y qué CSV/XLSX/ZIP enlazan (¿transferencias
+con nº+monto o solo avalúo?), si el Observatorio Urbano MINVU publica precio de suelo, y qué
+datasets tiene el CKAN de datos.gob.cl para transferencias / valor de suelo / minvu.
+
+(Si un portal fuera GeoServer clásico: `--wfs --wfs-url <url> [--describe <capa>]`.)
 
 **Piloto (1 comuna, primero en seco):**
 ```bash
@@ -117,9 +130,13 @@ bash scraper/load-gpkg-to-db.sh /ruta/gpkg/
 
 ## FASE 6 — Índice CBR (best-effort)
 
-1. Abrir el Índice de Propiedad público de la comuna objetivo (Santiago primero) en
-   `conservadoresdigitales.cl`, inspeccionar la petición de búsqueda (endpoint, params,
-   forma de la respuesta) y ajustar `parseIndice` en `scraper/cbr-indice-cl.mjs`.
+1. Descubrir el contrato del portal SIN navegador (workflow: modo `cbr_probe`):
+```bash
+node scraper/cbr-indice-cl.mjs --probe                               # conservadoresdigitales.cl
+node scraper/cbr-indice-cl.mjs --probe --probe-url "https://<portal por jurisdicción>"
+```
+   La sonda imprime formularios (action/method/inputs), endpoints XHR del JS, iframes y links
+   de índice. Con eso, fijar `--search-url` y ajustar `parseIndice` en `scraper/cbr-indice-cl.mjs`.
 2. Correr con una lista piloto de nombres:
 ```bash
 node scraper/cbr-indice-cl.mjs \
