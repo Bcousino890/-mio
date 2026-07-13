@@ -66,7 +66,22 @@ const SORT_OPTIONS = [
   { value: 'rol_asc', label: 'Rol (A-Z)' },
 ]
 
-const ZONES = [
+interface Zone {
+  id: string
+  label: string
+  group: string
+  center: { lat: number; lng: number }
+  comuna: string
+  siiCode: string | null
+  hasData: boolean
+}
+
+// Lista curada a mano (centros de mapa aproximados para las comunas del
+// barrio alto RM y zonas de veraneo). El siiCode/hasData de acá se
+// sobreescribe en tiempo de ejecución con lo que /api/chile/zones reporta
+// como realmente ingerido en sii_roles_cl — esta lista es solo el fallback
+// visual y de agrupación mientras esa llamada resuelve.
+const BASE_ZONES: Zone[] = [
   { id: 'vitacura',      label: 'Vitacura',     group: 'Barrio alto RM', center: { lat: -33.3895, lng: -70.5979 }, comuna: 'Vitacura',    siiCode: '15160', hasData: true  },
   { id: 'las-condes',   label: 'Las Condes',   group: 'Barrio alto RM', center: { lat: -33.4095, lng: -70.5677 }, comuna: 'Las Condes',  siiCode: '15108', hasData: true  },
   { id: 'lo-barnechea', label: 'Lo Barnechea', group: 'Barrio alto RM', center: { lat: -33.3504, lng: -70.5167 }, comuna: 'Lo Barnechea',siiCode: '15161', hasData: true  },
@@ -78,9 +93,48 @@ const ZONES = [
   { id: 'maitencillo',  label: 'Maitencillo',  group: 'Vacaciones',     center: { lat: -32.6421, lng: -71.4167 }, comuna: 'Puchuncaví',  siiCode: null,    hasData: false },
   { id: 'pucon',        label: 'Pucón',        group: 'Vacaciones',     center: { lat: -39.2772, lng: -71.9788 }, comuna: 'Pucón',       siiCode: null,    hasData: false },
   { id: 'villarrica',   label: 'Villarrica',   group: 'Vacaciones',     center: { lat: -39.2803, lng: -72.2267 }, comuna: 'Villarrica',  siiCode: null,    hasData: false },
-] as const
+]
 
-type ZoneId = (typeof ZONES)[number]['id']
+type ZoneId = string
+
+interface ZonesApiEntry {
+  siiCode: string
+  comuna: string
+  region: string
+  roles: number
+  lat: number | null
+  lng: number | null
+}
+
+function slugify(s: string) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+// Combina la lista curada con lo que /api/chile/zones reporta como
+// realmente ingerido: confirma siiCode/hasData de las comunas ya conocidas
+// y agrega como zonas nuevas cualquier otra comuna de la BD que ya tenga
+// roles cargados (ej. subida vía Configuración → Subir datos SII).
+function mergeZones(base: Zone[], apiZones: ZonesApiEntry[]): Zone[] {
+  const byComuna = new Map(apiZones.map(a => [a.comuna.toLowerCase(), a]))
+  const merged = base.map(z => {
+    const match = byComuna.get(z.comuna.toLowerCase())
+    if (!match) return z
+    byComuna.delete(z.comuna.toLowerCase())
+    return { ...z, siiCode: match.siiCode, hasData: true }
+  })
+  const extra: Zone[] = Array.from(byComuna.values())
+    .filter(a => a.lat != null && a.lng != null)
+    .map(a => ({
+      id: `sii-${slugify(a.comuna)}`,
+      label: a.comuna,
+      group: 'Otras comunas con datos SII',
+      center: { lat: a.lat as number, lng: a.lng as number },
+      comuna: a.comuna,
+      siiCode: a.siiCode,
+      hasData: true,
+    }))
+  return [...merged, ...extra]
+}
 type SortKey = 'avaluo_desc' | 'avaluo_asc' | 'superficie_desc' | 'rol_asc'
 
 function fmtCLP(n: number | null) {
@@ -90,7 +144,29 @@ function fmtCLP(n: number | null) {
 export default function CatastroPage() {
   const [zoneId, setZoneId] = useState<ZoneId>('vitacura')
   const [dropdownOpen, setDropdownOpen] = useState(false)
-  const zone = ZONES.find((z) => z.id === zoneId)!
+  const [allZones, setAllZones] = useState<Zone[]>(BASE_ZONES)
+
+  // Confirma contra la BD (sii_roles_cl) qué comunas tienen datos reales y
+  // agrega cualquier comuna adicional que ya haya sido subida pero que no
+  // esté hardcodeada en BASE_ZONES.
+  useEffect(() => {
+    fetch('/api/chile/zones')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) setAllZones(mergeZones(BASE_ZONES, data.zones as ZonesApiEntry[]))
+      })
+      .catch(() => {})
+  }, [])
+
+  const zone = allZones.find((z) => z.id === zoneId) ?? allZones[0]
+
+  // Orden fijo para los grupos curados; cualquier grupo nuevo (comunas
+  // detectadas dinámicamente vía /api/chile/zones) va al final.
+  const zoneGroups = useMemo(() => {
+    const preferred = ['Barrio alto RM', 'Vacaciones']
+    const present = Array.from(new Set(allZones.map(z => z.group)))
+    return [...preferred.filter(g => present.includes(g)), ...present.filter(g => !preferred.includes(g))]
+  }, [allZones])
 
   // Search & filter state
   const [search, setSearch] = useState('')
@@ -199,7 +275,7 @@ export default function CatastroPage() {
     const zona = sp.get('zona')
     const rol = sp.get('rol')
     const tab = sp.get('tab')
-    if (zona && ZONES.some(z => z.id === zona)) setZoneId(zona as ZoneId)
+    if (zona && allZones.some(z => z.id === zona)) setZoneId(zona as ZoneId)
     if (rol) setSelectedRol({ rol: normalizeClRol(rol) })
     if (tab && LAYER_TABS.some(t => t.id === tab)) setLayerTab(tab as LayerTab)
   }, [])
@@ -321,13 +397,13 @@ export default function CatastroPage() {
   // Clic en una parcela del mapa → abre la ficha completa del rol. Si la
   // parcela es de otra comuna con zona configurada, salta a esa zona.
   const handleParcelClick = useCallback((p: { rol: string; sii_comuna_code: string }) => {
-    const targetZone = p.sii_comuna_code === zone.siiCode ? zone : ZONES.find(z => z.siiCode === p.sii_comuna_code)
+    const targetZone = p.sii_comuna_code === zone.siiCode ? zone : allZones.find(z => z.siiCode === p.sii_comuna_code)
     if (!targetZone) return
     if (targetZone.id !== zoneId) setZoneId(targetZone.id)
     setLayerTab('catastro')
     setShowBuildingUnits(false)
     setSelectedRol({ rol: normalizeClRol(p.rol) })
-  }, [zone, zoneId])
+  }, [zone, zoneId, allZones])
 
   // Si la búsqueda no encuentra nada en la comuna activa, buscar en todas las
   // comunas (sii-search: rol o dirección con trigram + fallback mapasui) y
@@ -672,11 +748,11 @@ export default function CatastroPage() {
   }, [drawnShape, zone.siiCode, zone.label, fetchWatchlists])
 
   const loadWatchlist = useCallback((w: any) => {
-    const wz = ZONES.find(z => z.siiCode === w.sii_comuna_code)
+    const wz = allZones.find(z => z.siiCode === w.sii_comuna_code)
     if (wz && wz.id !== zoneId) { setZoneId(wz.id); setSelectedRol(null) }
     setDrawnShape(w.shape as DrawnShape)
     setWatchlistsOpen(false)
-  }, [zoneId])
+  }, [zoneId, allZones])
 
   const markWatchlistSeen = useCallback((id: string) => {
     fetch('/api/chile/watchlists', {
@@ -800,10 +876,10 @@ export default function CatastroPage() {
           </button>
           {dropdownOpen && (
             <div className="absolute left-0 top-full mt-1.5 z-50 bg-[var(--c-card)] border border-[var(--c-border-card)] rounded-xl shadow-xl shadow-black/40 py-1.5 w-[180px]">
-              {(['Barrio alto RM', 'Vacaciones'] as const).map(g => (
+              {zoneGroups.map(g => (
                 <div key={g}>
                   <p className="px-3 pt-2 pb-1 text-[9px] font-bold uppercase tracking-widest text-slate-600">{g}</p>
-                  {ZONES.filter(z => z.group === g).map(z => (
+                  {allZones.filter(z => z.group === g).map(z => (
                     <button key={z.id} onClick={() => { setZoneId(z.id); setDropdownOpen(false); setSelectedRol(null) }}
                       className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs transition-colors ${z.id === zoneId ? 'text-blue-400 bg-blue-950/30' : 'text-slate-400 hover:text-slate-200 hover:bg-[var(--c-surface)]'}`}>
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${z.hasData ? 'bg-emerald-400' : 'bg-slate-700'}`} />
@@ -1576,7 +1652,7 @@ export default function CatastroPage() {
                       <div className="space-y-1.5">
                         <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold px-1">Resultados en otras comunas</p>
                         {globalResults.map((g: any) => {
-                          const gz = ZONES.find(z => z.siiCode === g.sii_comuna_code)
+                          const gz = allZones.find(z => z.siiCode === g.sii_comuna_code)
                           return (
                             <button
                               key={g.id}
@@ -1926,7 +2002,7 @@ export default function CatastroPage() {
               <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-white/70 border-b border-white/10">Zonas guardadas</p>
               <div className="max-h-56 overflow-y-auto">
                 {savedZones.map(z => {
-                  const zMeta = ZONES.find(zz => zz.id === z.zoneId)
+                  const zMeta = allZones.find(zz => zz.id === z.zoneId)
                   return (
                     <div key={z.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 transition-colors">
                       <button onClick={() => loadSavedZone(z)} className="flex-1 min-w-0 text-left">
@@ -1953,7 +2029,7 @@ export default function CatastroPage() {
               <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-white/70 border-b border-white/10">Zonas seguidas · novedades de oferta</p>
               <div className="max-h-60 overflow-y-auto">
                 {watchlists.map(w => {
-                  const wz = ZONES.find(z => z.siiCode === w.sii_comuna_code)
+                  const wz = allZones.find(z => z.siiCode === w.sii_comuna_code)
                   return (
                     <div key={w.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 transition-colors">
                       <button onClick={() => loadWatchlist(w)} className="flex-1 min-w-0 text-left">
