@@ -90,12 +90,22 @@ async function probePortal(url) {
     if (inputs.length) console.log(`    campos: ${inputs.join(', ')}`)
   }
 
-  // Endpoints XHR en el JS inline (lo que DevTools mostraría en Network).
+  // Endpoints XHR en el JS (lo que DevTools mostraría en Network).
+  // Lección del run 2026-07-13: el dominio del CDN contiene "conservador", así
+  // que filtrar por el TEXTO completo de la URL matchea todos los assets. Se
+  // filtran extensiones estáticas y se evalúa el patrón API solo sobre el PATH.
+  const ASSET_RE = /\.(png|jpe?g|svg|gif|ico|css|woff2?|ttf|eot|map|webp)([?#]|$)/i
+  const pathOf = (u) => u.replace(/^https?:\/\/[^/]+/, '')
+  const looksApi = (u) => /api|buscar|consulta|search|indice/i.test(pathOf(u))
   const extractEndpoints = (code, into) => {
-    for (const m of code.matchAll(/(?:fetch|axios\s*\.\s*(?:get|post)|\$\.(?:ajax|get|post))\s*\(\s*["'`]([^"'`]+)["'`]/gi)) into.add(m[1])
-    for (const m of code.matchAll(/["'`](\/[^"'`\s]{2,120}?(?:api|buscar|consulta|indice|search)[^"'`\s]{0,120}?)["'`]/gi)) into.add(m[1])
+    for (const m of code.matchAll(/(?:fetch|axios\s*\.\s*(?:get|post)|\$\.(?:ajax|get|post))\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
+      if (!ASSET_RE.test(m[1])) into.add(m[1])
+    }
+    for (const m of code.matchAll(/["'`](\/[^"'`\s]{2,120}?(?:api|buscar|consulta|indice|search)[^"'`\s]{0,120}?)["'`]/gi)) {
+      if (!ASSET_RE.test(m[1])) into.add(m[1])
+    }
     for (const m of code.matchAll(/https?:\/\/[^"'`\s\\)]{8,160}/g)) {
-      if (/api|indice|buscar|consulta|conservador/i.test(m[0])) into.add(m[0])
+      if (!ASSET_RE.test(m[0]) && looksApi(m[0])) into.add(m[0])
     }
   }
   const xhr = new Set()
@@ -103,12 +113,12 @@ async function probePortal(url) {
   console.log(`\nEndpoints XHR/API citados en el JS inline (${xhr.size}):`)
   for (const e of [...xhr].slice(0, 25)) console.log(`  · ${e}`)
 
-  // SPA (run 2026-07-13: conservadoresdigitales.cl trae 0 forms y 0 endpoints
+  // SPA (run 2026-07-13: conservadoresdigitales.cl trae 0 forms y solo assets
   // inline — 264 KB de HTML de una app JS): los endpoints viven en los bundles
-  // externos. Bajar hasta 5 <script src> y buscar dentro, como haría DevTools
-  // en la pestaña Sources.
-  const forms0 = forms.length === 0
-  if (forms0 && xhr.size === 0) {
+  // externos (app.min.*.js). Bajar hasta 5 <script src> y buscar dentro, como
+  // haría DevTools en la pestaña Sources.
+  const apiLike = [...xhr].filter(looksApi)
+  if (forms.length === 0 && apiLike.length === 0) {
     const srcs = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)]
       .map((m) => { try { return new URL(m[1], res.url).toString() } catch { return null } })
       .filter(Boolean)
