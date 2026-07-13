@@ -1,6 +1,28 @@
 # FASE 2: Investigación de dataset "Valor de Suelo" en MINVU IDE
 
-## ⚠️ Actualización 2026-07-13 — run v1 de `--auto-find-valor` INCONCLUSO (no negativo)
+## ✅ VEREDICTO 2026-07-13 (run v2, COMPLETO): el valor de suelo NO está en ide.minvu.cl
+
+Run `auto_find_valor` v2 (capa por capa): **39 servicios · 91 capas inspeccionadas · run
+completo, no parcial**. Las 4 únicas capas con campos de "monto" son subsidios (DS27
+condominios/mejoramiento/eficiencia energética, Espacios Públicos `MONTO_INTERVENCION`) —
+no valor de suelo. Los 13 fallos son capas privadas ("Token Required": campamentos,
+Quiero Mi Barrio) o servicios inexistentes — ninguno relacionado con suelo.
+
+**Nueva pista (sonda `sii_ckan` del mismo run):** `observatoriourbano.minvu.cl` redirige a
+**`centrodeestudios.minvu.gob.cl`** — el Centro de Estudios MINVU, con sección "Análisis
+Estadístico y Económico" y un repositorio "Estadísticas". El Observatorio del Mercado de
+Suelo vive ahí hoy; la sonda v2 apunta directo a esas páginas para extraer los XLSX/PDF.
+
+Otras confirmaciones del run:
+- Las rutas conjeturadas de estadísticas del SII dan **404** (sitio reorganizado) → la
+  sonda v2 parte del home de sii.cl y sigue los links de "estadísticas" a nivel 2.
+- CKAN datos.gob.cl: sin datasets relevantes ("minvu suelo" y "avaluo" → 0; el resto ruido).
+- `conservadoresdigitales.cl` es una **SPA** (0 forms / 0 endpoints en el HTML) → la sonda
+  CBR v2 baja los bundles JS externos y busca los endpoints dentro.
+
+---
+
+## ⚠️ Actualización 2026-07-13 (previa) — run v1 de `--auto-find-valor` INCONCLUSO (no negativo)
 
 El primer run del modo automático (24 servicios inspeccionados, luego timeout) tenía un
 defecto de fondo: consultaba la **raíz** de cada `FeatureServer`, pero en la REST API de

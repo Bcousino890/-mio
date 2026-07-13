@@ -91,11 +91,42 @@ async function probePortal(url) {
   }
 
   // Endpoints XHR en el JS inline (lo que DevTools mostraría en Network).
+  const extractEndpoints = (code, into) => {
+    for (const m of code.matchAll(/(?:fetch|axios\s*\.\s*(?:get|post)|\$\.(?:ajax|get|post))\s*\(\s*["'`]([^"'`]+)["'`]/gi)) into.add(m[1])
+    for (const m of code.matchAll(/["'`](\/[^"'`\s]{2,120}?(?:api|buscar|consulta|indice|search)[^"'`\s]{0,120}?)["'`]/gi)) into.add(m[1])
+    for (const m of code.matchAll(/https?:\/\/[^"'`\s\\)]{8,160}/g)) {
+      if (/api|indice|buscar|consulta|conservador/i.test(m[0])) into.add(m[0])
+    }
+  }
   const xhr = new Set()
-  for (const m of html.matchAll(/(?:fetch|axios\s*\.\s*(?:get|post)|\$\.(?:ajax|get|post))\s*\(\s*["'`]([^"'`]+)["'`]/gi)) xhr.add(m[1])
-  for (const m of html.matchAll(/["'](\/[^"']{2,120}?(?:api|buscar|consulta|indice|search)[^"']{0,120}?)["']/gi)) xhr.add(m[1])
-  console.log(`\nEndpoints XHR/API citados en el JS (${xhr.size}):`)
+  extractEndpoints(html, xhr)
+  console.log(`\nEndpoints XHR/API citados en el JS inline (${xhr.size}):`)
   for (const e of [...xhr].slice(0, 25)) console.log(`  · ${e}`)
+
+  // SPA (run 2026-07-13: conservadoresdigitales.cl trae 0 forms y 0 endpoints
+  // inline — 264 KB de HTML de una app JS): los endpoints viven en los bundles
+  // externos. Bajar hasta 5 <script src> y buscar dentro, como haría DevTools
+  // en la pestaña Sources.
+  const forms0 = forms.length === 0
+  if (forms0 && xhr.size === 0) {
+    const srcs = [...html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)]
+      .map((m) => { try { return new URL(m[1], res.url).toString() } catch { return null } })
+      .filter(Boolean)
+    console.log(`\nSPA detectada (sin forms ni endpoints inline). Bundles JS (${srcs.length}); inspecciono hasta 5:`)
+    for (const src of srcs.slice(0, 5)) {
+      try {
+        const jsRes = await fetch(src, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(30000) })
+        if (!jsRes.ok) { console.log(`  ✗ [${jsRes.status}] ${src}`); continue }
+        const code = (await jsRes.text()).slice(0, 2_000_000)
+        const found = new Set()
+        extractEndpoints(code, found)
+        console.log(`  • ${src} (${code.length} bytes) → ${found.size} endpoint(s)`)
+        for (const e of [...found].slice(0, 20)) console.log(`      · ${e}`)
+      } catch (err) {
+        console.log(`  ✗ ${src}: ${err.message}`)
+      }
+    }
+  }
 
   // Iframes: apps embebidas por jurisdicción.
   const iframes = [...html.matchAll(/<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1])
