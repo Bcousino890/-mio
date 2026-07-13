@@ -46,3 +46,7 @@ Historial de consultas:
 - 2026-07-12 (enum3-bis) — mismo chequeo re-disparado tras añadir el paso que
   publica la salida en la rama sii-status (la API de Actions no siempre está
   disponible desde las sesiones; con la rama, el estado se lee con git fetch).
+- 2026-07-12 (sesiones) — validar el relanzamiento con SII_SESSIONS=6: antes
+  (1 sesión) el conteo de manzanas quedó estancado ~3h (1.548→1.550) bajo 429
+  continuo. Confirmar que ahora hay ~6 procesos de sesión activos y que
+  las_condes.jsonl sube claramente más rápido que esa tasa (~1 manzana/3h).
