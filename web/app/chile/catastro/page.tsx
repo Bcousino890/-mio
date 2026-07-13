@@ -220,6 +220,15 @@ export default function CatastroPage() {
   // Building units state
   const [buildingUnits, setBuildingUnits] = useState<any[]>([])
   const [buildingUnitsLoading, setBuildingUnitsLoading] = useState(false)
+  // Conjunto detectado por dirección base (fallback nacional: el dataset de
+  // catastral.cl trae rol_padre/rol_bien_comun NULL en todo Chile)
+  const [addrSiblings, setAddrSiblings] = useState<any[]>([])
+  // Vista de la lista de Catastro: roles sueltos o edificios/condominios
+  const [catastroView, setCatastroView] = useState<'roles' | 'edificios'>('roles')
+  const [edificios, setEdificios] = useState<any[]>([])
+  const [edificiosLoading, setEdificiosLoading] = useState(false)
+  const [edificiosTotal, setEdificiosTotal] = useState(0)
+  const [edificiosPage, setEdificiosPage] = useState(1)
   const [showBuildingUnits, setShowBuildingUnits] = useState(false)
   // Filter by building
   const [filterRolPadre, setFilterRolPadre] = useState<string | null>(null)
@@ -369,6 +378,22 @@ export default function CatastroPage() {
       .finally(() => setDetailLoading(false))
   }, [selectedRol, zone.siiCode])
 
+  // Conjunto por dirección: si el rol no trae rol_padre ni bienes comunes
+  // (dataset nacional de catastral.cl), buscar hermanos que compartan la
+  // dirección base ("PEUMO 1190 DP 502" → todas las unidades de PEUMO 1190).
+  useEffect(() => {
+    setAddrSiblings([])
+    const r = rolDetail?.rol
+    if (!r || !zone.siiCode) return
+    if (r.rol_padre || r.rol_bien_comun_1 || r.rol_bien_comun_2 || !r.direccion) return
+    const controller = new AbortController()
+    fetch(`/api/chile/sii-building-units?sii_comuna_code=${zone.siiCode}&rol=${encodeURIComponent(r.rol)}`, { signal: controller.signal })
+      .then(res => res.json())
+      .then(d => { if (d.success && Array.isArray(d.units) && d.units.length >= 2) setAddrSiblings(d.units) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [rolDetail, zone.siiCode])
+
   // Polígono catastral del rol seleccionado para el mapa — misma cadena de
   // fallback que tenía el visor /chile/street: polígono real de
   // cadastre_parcels_cl → coords del propio SII → solo centro de zona.
@@ -417,6 +442,22 @@ export default function CatastroPage() {
       .catch(() => {})
     return () => controller.abort()
   }, [search, loading, roles])
+
+  // Edificios/condominios agrupados por dirección base (sii-edificios)
+  useEffect(() => { setEdificiosPage(1) }, [zoneId, search])
+  useEffect(() => {
+    if (layerTab !== 'catastro' || catastroView !== 'edificios' || !zone.siiCode) return
+    const controller = new AbortController()
+    setEdificiosLoading(true)
+    const params = new URLSearchParams({ sii_comuna_code: zone.siiCode, page: String(edificiosPage), page_size: '50' })
+    if (search) params.set('q', search)
+    fetch(`/api/chile/sii-edificios?${params}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (d.success) { setEdificios(d.data); setEdificiosTotal(d.total) } })
+      .catch(() => {})
+      .finally(() => setEdificiosLoading(false))
+    return () => controller.abort()
+  }, [layerTab, catastroView, zone.siiCode, edificiosPage, search])
 
   // Oferta: anuncios reales de la comuna (listings_cl vía /api/chile/anuncios)
   useEffect(() => { setOfertaPage(1) }, [zoneId, ofertaOperation, ofertaSoloOportunidades])
@@ -1092,8 +1133,21 @@ export default function CatastroPage() {
           {/* Roles count + Currency toggle */}
           <div className="flex-none flex items-center justify-between px-3 py-1.5 border-b border-[var(--c-border-card)]">
             <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="flex items-center rounded-md border border-[var(--c-border-card)] overflow-hidden flex-shrink-0">
+                {(['roles', 'edificios'] as const).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => { setCatastroView(v); if (v === 'edificios') { setSelectedRol(null); setRolDetail(null) } }}
+                    className={`text-[10px] px-2 py-0.5 transition-colors ${catastroView === v ? 'bg-blue-950/50 text-blue-400' : 'text-slate-600 hover:text-slate-400'}`}
+                  >
+                    {v === 'roles' ? 'Roles' : 'Edificios'}
+                  </button>
+                ))}
+              </div>
               <p className="text-[11px] text-slate-600">
-                {total > 0 ? <><span className="text-slate-400 font-medium">{rangeStart}–{rangeEnd}</span> de <span className="text-slate-500">{total.toLocaleString('es-CL')}</span> roles</> : zone.hasData ? '0 roles' : 'Sin datos SII'}
+                {catastroView === 'edificios'
+                  ? (edificiosTotal > 0 ? <><span className="text-slate-500">{edificiosTotal.toLocaleString('es-CL')}</span> edificios/condominios</> : edificiosLoading ? '…' : '0 conjuntos')
+                  : total > 0 ? <><span className="text-slate-400 font-medium">{rangeStart}–{rangeEnd}</span> de <span className="text-slate-500">{total.toLocaleString('es-CL')}</span> roles</> : zone.hasData ? '0 roles' : 'Sin datos SII'}
               </p>
               {filterRolPadre && (
                 <button
@@ -1598,6 +1652,23 @@ export default function CatastroPage() {
                       </div>
                     )}
 
+                    {/* Conjunto detectado por dirección base (fallback nacional:
+                        el dataset de catastral.cl no trae rol_padre/bien_comun) */}
+                    {!rolDetail.rol?.rol_padre && !rolDetail.rol?.rol_bien_comun_1 && !rolDetail.rol?.rol_bien_comun_2 && addrSiblings.length >= 2 && (
+                      <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3">
+                        <p className="text-[10px] text-blue-400 font-semibold mb-1 flex items-center gap-1.5">
+                          <Building2 size={11} />Edificio / condominio · {addrSiblings.length >= 500 ? '500+' : addrSiblings.length} unidades
+                        </p>
+                        <p className="text-[10px] text-slate-600 mb-2">Agrupado por dirección (este archivo SII no trae rol padre)</p>
+                        <button
+                          onClick={() => { setBuildingUnits(addrSiblings); setShowBuildingUnits(true) }}
+                          className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          <Layers size={12} />Ver unidades del conjunto
+                        </button>
+                      </div>
+                    )}
+
                     {/* Building units panel */}
                     {showBuildingUnits && (
                       <div>
@@ -1639,6 +1710,61 @@ export default function CatastroPage() {
                     )}
                   </div>
                 ) : <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Sin datos</div>}
+              </div>
+            ) : catastroView === 'edificios' ? (
+              /* Edificios/condominios agrupados por dirección base */
+              <div className="flex-1 overflow-y-auto">
+                {edificiosLoading && edificios.length === 0 ? (
+                  <div className="flex items-center justify-center h-32 text-slate-700 text-xs">Agrupando edificios...</div>
+                ) : edificios.length === 0 ? (
+                  <div className="flex items-center justify-center h-20 text-slate-700 text-xs px-4 text-center">
+                    Sin edificios/condominios detectados{search ? ' para esta búsqueda' : ''} en {zone.label}
+                  </div>
+                ) : (
+                  <div className="p-2 space-y-1.5">
+                    {edificios.map((e: any) => (
+                      <button
+                        key={e.direccion_base}
+                        onClick={() => {
+                          // Ver las unidades del conjunto: búsqueda por la
+                          // dirección base en la vista de roles
+                          setSearchInput(e.direccion_base)
+                          setSearch(e.direccion_base)
+                          setPage(1)
+                          setCatastroView('roles')
+                        }}
+                        className="w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-blue-800/50 hover:bg-blue-950/20 transition-colors"
+                      >
+                        <Building2 size={13} className="text-blue-400 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-slate-300 truncate">{e.direccion_base}</p>
+                          <p className="text-[10px] text-slate-600">
+                            {e.unidades.toLocaleString('es-CL')} unidades
+                            {e.habitacionales > 0 && <> · {e.habitacionales.toLocaleString('es-CL')} hab.</>}
+                            {e.otros > 0 && <> · {e.otros.toLocaleString('es-CL')} otros</>}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className={`text-[11px] font-medium ${showUF ? 'text-blue-400' : 'text-slate-300'}`}>{renderCurrency(e.avaluo_total)}</p>
+                          <p className="text-[10px] text-slate-600">avalúo total</p>
+                        </div>
+                      </button>
+                    ))}
+                    {edificiosTotal > edificios.length && (
+                      <div className="flex items-center justify-between px-1 pt-1">
+                        <button onClick={() => setEdificiosPage(p => Math.max(1, p - 1))} disabled={edificiosPage <= 1}
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                          <ChevronLeft size={13} />Anterior
+                        </button>
+                        <span className="text-[11px] text-slate-600">{edificiosPage} / {Math.max(1, Math.ceil(edificiosTotal / 50)).toLocaleString('es-CL')}</span>
+                        <button onClick={() => setEdificiosPage(p => p + 1)} disabled={edificiosPage >= Math.ceil(edificiosTotal / 50)}
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+                          Siguiente<ChevronRight size={13} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               /* Roles list */
@@ -1726,7 +1852,7 @@ export default function CatastroPage() {
           </div>
 
           {/* Pagination */}
-          {!selectedRol && totalPages > 1 && (
+          {!selectedRol && catastroView === 'roles' && totalPages > 1 && (
             <div className="flex-none flex items-center justify-between px-3 py-2 border-t border-[var(--c-border-card)]">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
                 className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
