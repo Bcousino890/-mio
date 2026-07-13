@@ -54,3 +54,9 @@ Historial de lanzamientos:
 - 2026-07-12 (enum) — relanzamiento con Las Condes en ENUMERACIÓN de manzanas
   (IDs 1-4000, densos 102-3500) en vez de grilla geo: ~3 h vs ~32 h y más
   completo. Vitacura sigue en geo. Este push limpia la pausa y arranca la cola.
+- 2026-07-12 (sesiones) — relanzamiento con SESIONES DE PROXY EN PARALELO
+  (SII_SESSIONS=6): SmartProxy confirmó IPs residenciales reales y SIN límite
+  de sesiones concurrentes. Con 1 sola sesión el scrape quedó estancado ~3 h
+  (1.548→1.550 manzanas) bajo 429 continuo — el WAF satura una sola IP. Este
+  relanzamiento NO resetea (los checkpoints existentes siguen válidos, el
+  cambio es aditivo): retoma con 6 IPs en paralelo, cada una a 2 rps seguro.
