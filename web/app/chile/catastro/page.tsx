@@ -278,16 +278,31 @@ export default function CatastroPage() {
 
   const PAGE_SIZE = 50
 
-  // Deep-links: restaurar ?zona=&rol=&tab= al montar (URL compartible)
+  // Deep-links: restaurar ?zona=&rol=&tab= al montar (URL compartible).
+  // `zona` acepta id de zona o sii_comuna_code (los links de /chile usan el
+  // código); si la comuna es dinámica (llega con la respuesta de
+  // /api/chile/zones), queda pendiente hasta que allZones se actualice.
+  const [pendingZona, setPendingZona] = useState<string | null>(null)
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search)
     const zona = sp.get('zona')
     const rol = sp.get('rol')
     const tab = sp.get('tab')
-    if (zona && allZones.some(z => z.id === zona)) setZoneId(zona as ZoneId)
+    if (zona) {
+      const match = allZones.find(z => z.id === zona || z.siiCode === zona)
+      if (match) setZoneId(match.id)
+      else setPendingZona(zona)
+    }
     if (rol) setSelectedRol({ rol: normalizeClRol(rol) })
     if (tab && LAYER_TABS.some(t => t.id === tab)) setLayerTab(tab as LayerTab)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!pendingZona) return
+    const match = allZones.find(z => z.id === pendingZona || z.siiCode === pendingZona)
+    if (match) { setZoneId(match.id); setPendingZona(null) }
+  }, [allZones, pendingZona])
 
   // Deep-links: reflejar zona/rol/tab en la URL sin recargar
   useEffect(() => {

@@ -1,61 +1,143 @@
 import { Fragment } from 'react'
 import Link from 'next/link'
 import PageShell from '@/components/PageShell'
-import { Globe, Star, MapPinned, Upload, CheckCircle2, Circle, Database, Activity } from 'lucide-react'
-import { CHILE_COMUNAS, CHILE_PRIORITY_COMUNAS, CHILE_REGIONS, groupByRegion } from '@/lib/chile-zones'
+import { Globe, Star, MapPinned, Upload, CheckCircle2, Database, Activity } from 'lucide-react'
 import { pool } from '@/lib/db'
+import { UNIT_ADDR_MATCH, unitBaseAddressExpr } from '@/lib/sii-edificio-sql'
 
-interface CoverageRow {
-  sii_comuna_code: string
+// Render dinámico (el build de Docker no tiene DATABASE_URL: prerender ISR
+// dejaría la página vacía tras cada deploy) + caché en memoria de 1 hora:
+// el desglose por comuna recorre los ~9,6M de roles de sii_roles_cl con un
+// regexp por fila habitacional, demasiado caro para cada request.
+export const dynamic = 'force-dynamic'
+
+const CACHE_TTL_MS = 60 * 60 * 1000
+let resumenCache: { at: number; rows: ComunaResumen[] } | null = null
+
+// Departamento = rol habitacional cuya dirección lleva sufijo de depto tras
+// la numeración ("PEUMO 1190 DP 502"). Solo tokens de depto: BD/EST/LC tienen
+// su propio destino SII (bodega/estacionamiento/local).
+const DEPTO_ADDR_MATCH = '^.*?[0-9]+[[:space:]]+(DP|DPTO|DEPTO|DEP)([[:space:]]|$)'
+
+interface ComunaResumen {
+  name: string
+  region: string
+  provincia: string
+  priority: boolean
+  sii_comuna_code: string | null
   roles: number
-  name: string | null
+  casas: number
+  departamentos: number
+  edificios: number
+  sitios: number
+  bodegas: number
+  estacionamientos: number
+  oficinas: number
+  comercio: number
+  agricolas: number
+  otros: number
 }
 
-async function getSiiCoverage(): Promise<CoverageRow[]> {
+async function getComunasResumen(): Promise<ComunaResumen[]> {
   if (!process.env.DATABASE_URL) return []
+  if (resumenCache && Date.now() - resumenCache.at < CACHE_TTL_MS && resumenCache.rows.length > 0) {
+    return resumenCache.rows
+  }
   try {
     const res = await pool.query(
-      `SELECT r.sii_comuna_code, count(*) AS roles, c.name
-       FROM sii_roles_cl r
-       LEFT JOIN chile_comunas c ON c.sii_comuna_code = r.sii_comuna_code
-       GROUP BY r.sii_comuna_code, c.name
-       ORDER BY roles DESC`
-    )
-    return res.rows.map((r) => ({ sii_comuna_code: r.sii_comuna_code, roles: Number(r.roles), name: r.name }))
-  } catch (e) {
-    // Fallback sin JOIN si chile_comunas no tiene sii_code
-    try {
-      const res2 = await pool.query(
-        `SELECT sii_comuna_code, count(*) AS roles
+      `SELECT cc.name, cc.region, cc.provincia, cc.priority, cc.sii_comuna_code,
+              COALESCE(s.total, 0)            AS roles,
+              COALESCE(s.casas, 0)            AS casas,
+              COALESCE(s.departamentos, 0)    AS departamentos,
+              COALESCE(s.edificios, 0)        AS edificios,
+              COALESCE(s.sitios, 0)           AS sitios,
+              COALESCE(s.bodegas, 0)          AS bodegas,
+              COALESCE(s.estacionamientos, 0) AS estacionamientos,
+              COALESCE(s.oficinas, 0)         AS oficinas,
+              COALESCE(s.comercio, 0)         AS comercio,
+              COALESCE(s.agricolas, 0)        AS agricolas
+       FROM chile_comunas cc
+       LEFT JOIN (
+         SELECT sii_comuna_code,
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'H'
+                                   AND direccion ~ '${DEPTO_ADDR_MATCH}')::int AS departamentos,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'H'
+                                   AND (direccion IS NULL OR direccion !~ '${DEPTO_ADDR_MATCH}'))::int AS casas,
+                COUNT(DISTINCT ${unitBaseAddressExpr('direccion')})
+                  FILTER (WHERE direccion ~ '${UNIT_ADDR_MATCH}')::int AS edificios,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'W')::int AS sitios,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'L')::int AS bodegas,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'Z')::int AS estacionamientos,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'O')::int AS oficinas,
+                COUNT(*) FILTER (WHERE codigo_destino_principal = 'C')::int AS comercio,
+                COUNT(*) FILTER (WHERE serie = 'agricola')::int AS agricolas
          FROM sii_roles_cl
          GROUP BY sii_comuna_code
-         ORDER BY roles DESC`
-      )
-      return res2.rows.map((r) => ({ sii_comuna_code: r.sii_comuna_code, roles: Number(r.roles), name: null }))
-    } catch { return [] }
+       ) s ON s.sii_comuna_code = cc.sii_comuna_code
+       ORDER BY cc.region, roles DESC, cc.name`
+    )
+    const rows = res.rows.map((r) => {
+      const roles = Number(r.roles)
+      const buckets = ['casas', 'departamentos', 'sitios', 'bodegas', 'estacionamientos', 'oficinas', 'comercio'] as const
+      const clasificados = buckets.reduce((s, k) => s + Number(r[k]), 0)
+      return {
+        name: r.name,
+        region: r.region,
+        provincia: r.provincia,
+        priority: r.priority,
+        sii_comuna_code: r.sii_comuna_code,
+        roles,
+        casas: Number(r.casas),
+        departamentos: Number(r.departamentos),
+        edificios: Number(r.edificios),
+        sitios: Number(r.sitios),
+        bodegas: Number(r.bodegas),
+        estacionamientos: Number(r.estacionamientos),
+        oficinas: Number(r.oficinas),
+        comercio: Number(r.comercio),
+        agricolas: Number(r.agricolas),
+        otros: Math.max(0, roles - clasificados),
+      }
+    })
+    resumenCache = { at: Date.now(), rows }
+    return rows
+  } catch {
+    return []
   }
 }
 
 function formatNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace('.0', '')}K`
   return String(n)
 }
 
-export default async function ChilePage() {
-  const grouped = groupByRegion()
-  const coverage = await getSiiCoverage()
+function fmt(n: number): string {
+  return n > 0 ? n.toLocaleString('es-CL') : '—'
+}
 
-  const totalRoles = coverage.reduce((s, r) => s + r.roles, 0)
-  const comunasConSii = new Set(coverage.map((r) => r.sii_comuna_code))
-  const rolesByComunaCode = Object.fromEntries(coverage.map((r) => [r.sii_comuna_code, r.roles]))
-  // Nombres de comunas que tienen SII (desde el JOIN con chile_comunas)
-  const nombreConSii = new Set(coverage.map((r) => r.name).filter(Boolean) as string[])
+export default async function ChilePage() {
+  const comunas = await getComunasResumen()
+
+  const conDatos = comunas.filter((c) => c.roles > 0)
+  const totalRoles = conDatos.reduce((s, c) => s + c.roles, 0)
+  const totalEdificios = conDatos.reduce((s, c) => s + c.edificios, 0)
+  const regiones = Array.from(new Set(comunas.map((c) => c.region)))
+  // Regiones ordenadas por volumen de datos (las con más roles primero)
+  const rolesPorRegion = Object.fromEntries(
+    regiones.map((r) => [r, comunas.filter((c) => c.region === r).reduce((s, c) => s + c.roles, 0)])
+  )
+  regiones.sort((a, b) => rolesPorRegion[b] - rolesPorRegion[a])
+
+  const topComunas = [...conDatos].sort((a, b) => b.roles - a.roles).slice(0, 15)
+  const catastroHref = (c: ComunaResumen) =>
+    c.roles > 0 && c.sii_comuna_code ? `/chile/catastro?zona=${c.sii_comuna_code}` : '/chile/catastro'
 
   return (
     <PageShell
       title="Chile"
-      subtitle={`${CHILE_COMUNAS.length} comunas · ${CHILE_PRIORITY_COMUNAS.length} prioritarias · ${comunasConSii.size} con datos SII`}
+      subtitle={`${comunas.length} comunas · ${conDatos.length} con datos SII · ${formatNum(totalRoles)} roles`}
       action={
         <div className="flex items-center gap-2">
           <Link
@@ -85,135 +167,110 @@ export default async function ChilePage() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <p className="text-[11px] text-slate-500 mb-1">Comunas cubiertas</p>
-          <p className="text-lg font-bold text-slate-200">{CHILE_COMUNAS.length}</p>
-          <p className="text-[10px] text-slate-700 mt-0.5">RM completa + vacaciones</p>
+          <p className="text-[11px] text-slate-500 mb-1">Comunas de Chile</p>
+          <p className="text-lg font-bold text-slate-200">{comunas.length}</p>
+          <p className="text-[10px] text-slate-700 mt-0.5">{regiones.length} regiones</p>
         </div>
-        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <p className="text-[11px] text-slate-500 mb-1">Prioritarias scraping</p>
-          <p className="text-lg font-bold text-slate-200">{CHILE_PRIORITY_COMUNAS.length}</p>
-          <p className="text-[10px] text-slate-700 mt-0.5">Barrio alto RM + veraneo</p>
+        <div className="rounded-xl border border-emerald-900/50 bg-emerald-950/20 p-4">
+          <p className="text-[11px] text-slate-500 mb-1">Con datos SII</p>
+          <p className="text-lg font-bold text-emerald-400">{conDatos.length}</p>
+          <p className="text-[10px] text-slate-700 mt-0.5">catastral.cl S2-2025</p>
         </div>
         <div className="rounded-xl border border-emerald-900/50 bg-emerald-950/20 p-4">
           <p className="text-[11px] text-slate-500 mb-1">Roles SII en BD</p>
           <p className="text-lg font-bold text-emerald-400">{formatNum(totalRoles)}</p>
-          <p className="text-[10px] text-slate-700 mt-0.5">{comunasConSii.size} comunas · catastral.cl S2-2025</p>
+          <p className="text-[10px] text-slate-700 mt-0.5">predios con avalúo fiscal</p>
         </div>
-        <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-          <p className="text-[11px] text-slate-500 mb-1">Regiones</p>
-          <p className="text-lg font-bold text-slate-200">{CHILE_REGIONS.length}</p>
-          <p className="text-[10px] text-slate-700 mt-0.5">RM · Valparaíso · Araucanía</p>
+        <div className="rounded-xl border border-blue-900/50 bg-blue-950/20 p-4">
+          <p className="text-[11px] text-slate-500 mb-1">Edificios / condominios</p>
+          <p className="text-lg font-bold text-blue-400">{formatNum(totalEdificios)}</p>
+          <p className="text-[10px] text-slate-700 mt-0.5">conjuntos agrupados por dirección</p>
         </div>
       </div>
 
       {/* Top comunas por roles */}
-      {coverage.length > 0 && (
+      {topComunas.length > 0 && (
         <div className="mb-5 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Database size={12} className="text-emerald-400" />
             <p className="text-xs font-semibold text-slate-400">Comunas con más roles en BD</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {coverage.slice(0, 15).map((r) => (
+            {topComunas.map((c) => (
               <Link
-                key={r.sii_comuna_code}
-                href={`/chile/catastro`}
+                key={c.name}
+                href={catastroHref(c)}
                 className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-900/50 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-950/50 transition-colors"
               >
                 <CheckCircle2 size={11} className="text-emerald-400 flex-shrink-0" />
-                {r.sii_comuna_code}
-                <span className="text-[10px] text-emerald-600">{formatNum(r.roles)}</span>
+                {c.name}
+                <span className="text-[10px] text-emerald-600">{formatNum(c.roles)}</span>
               </Link>
             ))}
-            {coverage.length > 15 && (
-              <span className="text-xs text-slate-600 px-2.5 py-1.5">+{coverage.length - 15} más</span>
-            )}
           </div>
         </div>
       )}
 
-      {/* Priority comunas quick access */}
-      <div className="mb-5 rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
-        <p className="text-xs font-semibold text-slate-400 mb-3">Comunas prioritarias — acceso rápido</p>
-        <div className="flex flex-wrap gap-2">
-          {CHILE_PRIORITY_COMUNAS.map((c) => {
-            const hasSii = nombreConSii.has(c.name)
-            const roles = coverage.find(r => r.name === c.name)?.roles
-            return (
-              <Link
-                key={c.name}
-                href={`/chile/catastro`}
-                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-                  hasSii
-                    ? 'border-emerald-900/50 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-950/50'
-                    : 'border-[var(--c-border-card)] bg-[var(--c-surface)] text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {hasSii
-                  ? <CheckCircle2 size={11} className="text-emerald-400 flex-shrink-0" />
-                  : <Circle size={11} className="text-slate-600 flex-shrink-0" />
-                }
-                {c.name}
-                {roles && <span className="text-[10px] opacity-60">{formatNum(roles)}</span>}
-              </Link>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Full comunas table */}
-      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-hidden">
-        <table className="w-full text-sm">
+      {/* Full comunas table with per-type breakdown */}
+      <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] overflow-x-auto">
+        <table className="w-full text-sm min-w-[980px]">
           <thead>
             <tr className="border-b border-[var(--c-border-card)] bg-[var(--c-surface)]">
-              <th className="text-left px-5 py-3 text-[11px] text-slate-500 font-medium">Comuna</th>
-              <th className="text-left px-5 py-3 text-[11px] text-slate-500 font-medium">Provincia</th>
-              <th className="text-left px-5 py-3 text-[11px] text-slate-500 font-medium">Localidades</th>
-              <th className="text-left px-5 py-3 text-[11px] text-slate-500 font-medium">Estado</th>
+              <th className="text-left px-4 py-3 text-[11px] text-slate-500 font-medium">Comuna</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Roles</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Casas</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Deptos</th>
+              <th className="text-right px-3 py-3 text-[11px] text-blue-400 font-medium">Edif./Cond.</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Sitios</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Bodegas</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Estac.</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Oficinas</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Comercio</th>
+              <th className="text-right px-3 py-3 text-[11px] text-slate-500 font-medium">Agrícolas</th>
+              <th className="text-right px-4 py-3 text-[11px] text-slate-500 font-medium">Otros</th>
             </tr>
           </thead>
           <tbody>
-            {CHILE_REGIONS.map((region) => (
-              <Fragment key={region}>
-                <tr className="bg-[var(--c-hover)]">
-                  <td colSpan={4} className="px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-                    {region} · {grouped[region].length} comunas
-                  </td>
-                </tr>
-                {grouped[region].map((c, i) => {
-                  const hasSii = nombreConSii.has(c.name)
-                  const roles = coverage.find(r => r.name === c.name)?.roles
-                  return (
+            {regiones.map((region) => {
+              const filas = comunas.filter((c) => c.region === region)
+              const conDatosRegion = filas.filter((c) => c.roles > 0).length
+              return (
+                <Fragment key={region}>
+                  <tr className="bg-[var(--c-hover)]">
+                    <td colSpan={12} className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                      {region} · {filas.length} comunas · {conDatosRegion} con datos · {formatNum(rolesPorRegion[region])} roles
+                    </td>
+                  </tr>
+                  {filas.map((c, i) => (
                     <tr
                       key={c.name}
-                      className={`border-b border-[var(--c-border)] ${i % 2 === 0 ? '' : 'bg-[var(--c-card)]/50'}`}
+                      className={`border-b border-[var(--c-border)] ${i % 2 === 0 ? '' : 'bg-[var(--c-card)]/50'} ${c.roles === 0 ? 'opacity-50' : ''}`}
                     >
-                      <td className="px-5 py-2.5 text-slate-200 font-medium">{c.name}</td>
-                      <td className="px-5 py-2.5 text-slate-500 text-xs">{c.provincia}</td>
-                      <td className="px-5 py-2.5 text-slate-600 text-xs">
-                        {c.localidades?.join(', ') ?? '—'}
+                      <td className="px-4 py-2">
+                        <Link href={catastroHref(c)} className="flex items-center gap-1.5 text-slate-200 font-medium hover:text-blue-400 transition-colors">
+                          {c.roles > 0
+                            ? <CheckCircle2 size={11} className="text-emerald-400 flex-shrink-0" />
+                            : <span className="w-[11px] flex-shrink-0" />}
+                          {c.name}
+                          {c.priority && <Star size={9} className="text-amber-300 flex-shrink-0" />}
+                        </Link>
                       </td>
-                      <td className="px-5 py-2.5">
-                        <div className="flex items-center gap-1.5">
-                          {hasSii && (
-                            <span className="flex items-center gap-1 text-[10px] bg-emerald-950/40 border border-emerald-900/50 text-emerald-400 px-1.5 py-0.5 rounded">
-                              <CheckCircle2 size={9} />
-                              SII {roles ? formatNum(roles) : ''}
-                            </span>
-                          )}
-                          {c.priority && (
-                            <span className="flex items-center gap-1 text-[10px] bg-[var(--c-active)] text-amber-300 px-1.5 py-0.5 rounded">
-                              <Star size={9} />
-                              Prioritaria
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                      <td className="px-3 py-2 text-right font-medium text-emerald-300 whitespace-nowrap">{fmt(c.roles)}</td>
+                      <td className="px-3 py-2 text-right text-slate-400 whitespace-nowrap">{fmt(c.casas)}</td>
+                      <td className="px-3 py-2 text-right text-slate-400 whitespace-nowrap">{fmt(c.departamentos)}</td>
+                      <td className="px-3 py-2 text-right text-blue-400 whitespace-nowrap">{fmt(c.edificios)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.sitios)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.bodegas)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.estacionamientos)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.oficinas)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.comercio)}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{fmt(c.agricolas)}</td>
+                      <td className="px-4 py-2 text-right text-slate-600 whitespace-nowrap">{fmt(c.otros)}</td>
                     </tr>
-                  )
-                })}
-              </Fragment>
-            ))}
+                  ))}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -221,7 +278,8 @@ export default async function ChilePage() {
       <div className="mt-4 flex items-center gap-2 text-xs text-slate-600">
         <Globe size={12} className="text-slate-700" />
         <span>
-          Taxonomía en <code className="font-mono">web/lib/chile-zones.ts</code> · Datos SII: catastral.cl S2-2025 · {formatNum(totalRoles)} roles totales
+          Casas/Deptos = destino SII habitacional (depto si la dirección lleva sufijo DP) · Edif./Cond. = conjuntos agrupados
+          por dirección · Sitios = eriazos (W) · Agrícolas = serie agrícola · Datos: catastral.cl S2-2025 · se recalcula cada hora
         </span>
       </div>
     </PageShell>
