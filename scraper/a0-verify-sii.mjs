@@ -62,12 +62,16 @@ const MINVU_PAGES = [
 const CKAN_BASE = 'https://datos.gob.cl/api/3/action/package_search'
 const CKAN_TERMS = [
   'transferencias bienes raices',
-  'bienes raices',
   'valor de suelo',
   'mercado de suelo',
-  'minvu suelo',
-  'avaluo',
 ]
+
+// Catálogo Koha del Centro de Estudios MINVU (descubierto en run 2026-07-13:
+// el repositorio "Estadísticas" enlaza a catalogo.minvu.cl con descargas vía
+// opac-retrieve-file.pl). Buscar ahí directamente el Observatorio del Mercado
+// de Suelo, sin pasar por el buscador WordPress.
+const KOHA_BASE = 'https://catalogo.minvu.cl/cgi-bin/koha/opac-search.pl'
+const KOHA_TERMS = ['mercado de suelo', 'precio de suelo', 'valor de suelo', 'suelo urbano']
 
 // Qué links nos interesan dentro de una página HTML (pdf incluido: en el
 // Centro de Estudios MINVU los indicadores se publican como XLSX + PDF).
@@ -133,7 +137,16 @@ async function probePage(url, { follow = true } = {}) {
     console.log(`  Páginas relacionadas al tema (${pageLinks.length}):`)
     for (const l of pageLinks.slice(0, 25)) console.log(`    · ${l.text || '(sin texto)'} → ${l.href}`)
   }
-  if (!dataLinks.length && !pageLinks.length) console.log(`  (sin links de datos ni páginas del tema — página probablemente irrelevante)`)
+  if (!dataLinks.length && !pageLinks.length) {
+    // Diagnóstico: distinguir "página irrelevante" de "HTML sin <a> (menús por JS)".
+    if (links.length === 0) {
+      console.log(`  ⚠ 0 links <a> en el HTML (${res.text.length} bytes) — probable sitio con menús por JS.`)
+      console.log(`  Primeros 300 chars: ${res.text.slice(0, 300).replace(/\s+/g, ' ')}`)
+    } else {
+      console.log(`  (${links.length} links, ninguno de datos/tema — muestro los primeros 15 para diagnóstico)`)
+      for (const l of links.slice(0, 15)) console.log(`    - ${l.text || '(sin texto)'} → ${l.href}`)
+    }
+  }
 
   // Nivel 2: seguir las sub-páginas más prometedoras buscando archivos.
   const collected = [...dataLinks]
@@ -167,6 +180,32 @@ async function headFiles(links) {
     console.log(`  ${res.ok ? '✓' : '✗'} [${res.status}] ${l.href} · ${res.contentType} · ${size}`)
     await sleep(300)
   }
+}
+
+/**
+ * Busca en el catálogo Koha del Centro de Estudios MINVU y lista los registros
+ * (biblionumber + título) y los links de descarga directa (opac-retrieve-file).
+ */
+async function kohaSearch(term) {
+  const url = `${KOHA_BASE}?q=${encodeURIComponent(term)}`
+  console.log(`\n→ Koha catalogo.minvu.cl · q="${term}"`)
+  const res = await fetchSafe(url)
+  if (!res.ok) {
+    console.log(`  ✗ HTTP ${res.status}${res.err ? ` · ${res.err}` : ''}`)
+    return
+  }
+  const links = extractLinks(res.text, res.finalUrl || url)
+  const records = new Map()
+  for (const l of links) {
+    const m = l.href.match(/opac-detail\.pl\?biblionumber=(\d+)/)
+    if (m && l.text && !records.has(m[1])) records.set(m[1], { title: l.text, href: l.href })
+  }
+  const files = links.filter((l) => /opac-retrieve-file\.pl|tracklinks\.pl/.test(l.href))
+  const nRes = res.text.match(/(\d[\d.,]*)\s+(?:resultado|result)/i)?.[1]
+  console.log(`  ${records.size} registro(s)${nRes ? ` (el catálogo reporta ${nRes})` : ''}:`)
+  for (const [num, r] of [...records].slice(0, 15)) console.log(`  • [${num}] ${r.title}\n      ${r.href}`)
+  for (const f of files.slice(0, 10)) console.log(`  ↓ archivo: ${f.text || '(sin texto)'} → ${f.href}`)
+  if (records.size === 0 && files.length === 0) console.log(`  (sin registros — ${links.length} links en la página)`)
 }
 
 /** Busca en el CKAN de datos.gob.cl y lista datasets + recursos descargables. */
@@ -208,6 +247,14 @@ async function main() {
     for (const u of MINVU_PAGES) allData.push(...(await probePage(u)).dataLinks)
 
     for (const u of extraPages) allData.push(...(await probePage(u)).dataLinks)
+
+    console.log(`\n${'═'.repeat(70)}`)
+    console.log('2.5) Catálogo Koha del Centro de Estudios MINVU (búsqueda directa)')
+    console.log('═'.repeat(70))
+    for (const t of KOHA_TERMS) {
+      await kohaSearch(t)
+      await sleep(500)
+    }
 
     await headFiles(allData)
   }
