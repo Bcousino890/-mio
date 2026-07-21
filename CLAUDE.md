@@ -25,6 +25,7 @@ Responder siempre en español al usuario.
 - `db/migrations/` — PostgreSQL migrations (sequential, numbered)
 - `web/app/api/chile/` — API routes for Chile cadastral data
 - `docs/SII-ENRICHMENT-ROADMAP.md` — current enrichment plan
+- `docs/PLAN-ANUNCIOS-CL.md` — plan del módulo "Anuncios": scraping 24/7, dedup y trazabilidad de corredoras (Portal Inmobiliario, Chile)
 - `scraper/lib/sii-catastro-cl.mjs` — parser for official SII CSV files
 
 ## Environment variables
