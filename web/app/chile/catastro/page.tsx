@@ -339,7 +339,7 @@ export default function CatastroPage() {
   }, [superficieMaxInput])
 
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
+  useEffect(() => { setPage(1) }, [zoneId, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion, drawnShape])
 
 
   // Fetch stats
@@ -368,6 +368,9 @@ export default function CatastroPage() {
     if (superficieMin) params.set('superficie_min', superficieMin)
     if (superficieMax) params.set('superficie_max', superficieMax)
     if (ubicacion) params.set('ubicacion', ubicacion)
+    // Zona dibujada en el mapa: restringe la lista al área, combinado con
+    // el resto de filtros (antes solo alimentaba el panel flotante aparte).
+    if (drawnShape) params.set('shape', JSON.stringify(drawnShape))
     fetch(`/api/chile/sii-roles-list?${params}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
@@ -380,7 +383,7 @@ export default function CatastroPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
     return () => controller.abort()
-  }, [zone.siiCode, page, search, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion])
+  }, [zone.siiCode, page, search, destinos, sort, filterRolPadre, avaluoMin, avaluoMax, superficieMin, superficieMax, ubicacion, drawnShape])
 
   // Fetch rol detail
   useEffect(() => {
@@ -566,6 +569,32 @@ export default function CatastroPage() {
       setMapPin({ lat: Number(l.latitude), lng: Number(l.longitude), label: `${l.address ?? l.external_id} · ${l.price ? fmtCLP(l.price) : ''}` })
     }
   }, [ofertaListings])
+
+  // Puntos en el mapa por cada resultado de la lista filtrada (pestaña
+  // Catastro, con zona dibujada activa): un punto por rol dentro del área —
+  // ya filtrados por avalúo/superficie/destino/etc. igual que la tabla —
+  // para poder identificar visualmente cuál punto es cuál al hacer clic.
+  const zoneListPins = useMemo(() => {
+    if (layerTab !== 'catastro' || !drawnShape) return []
+    return roles
+      .filter((r: any) => r.lat != null && r.lng != null)
+      .map((r: any) => ({
+        id: r.rol,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        color: '#22d3ee',
+        label: `${r.rol} · ${r.direccion ?? 's/dirección'}${r.avaluo_fiscal_total != null ? ` · ${fmtCLP(r.avaluo_fiscal_total)}` : ''}`,
+      }))
+  }, [layerTab, drawnShape, roles])
+
+  // Clic en un punto de la zona dibujada: abre la ficha completa de ese rol
+  // (igual que clicar su fila en la tabla) para identificar cuál es.
+  const handleZoneListPinClick = useCallback((id: string) => {
+    const r = roles.find((x: any) => x.rol === id)
+    if (!r) return
+    setShowBuildingUnits(false)
+    setSelectedRol(r)
+  }, [roles])
 
   // Consulta DealerNet por RUT (producto según dealernetProducts, por defecto
   // solo Directorio Teléfonos) y guarda el resultado en BD para no repetir la
@@ -2087,8 +2116,8 @@ export default function CatastroPage() {
             enableDraw
             onShapeDrawn={setDrawnShape}
             drawnShape={drawnShape}
-            extraPins={ofertaPins}
-            onExtraPinClick={handleOfertaPinClick}
+            extraPins={layerTab === 'oferta' ? ofertaPins : zoneListPins}
+            onExtraPinClick={layerTab === 'oferta' ? handleOfertaPinClick : handleZoneListPinClick}
             showLocate
           />
           {mapZoomLevel < 15 && (
