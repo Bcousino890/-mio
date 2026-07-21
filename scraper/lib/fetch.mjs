@@ -47,8 +47,21 @@ function proxyUrl(profile) {
   }
   if (process.env.PROXY_URL) return process.env.PROXY_URL
 
+  // Evomi (residencial, geo Chile) — proxy ACTIVO del plan Anuncios CL (H10),
+  // reemplaza a SmartProxy/Geonode para el barrido de Portal Inmobiliario.
+  // Prioridad sobre SMARTPROXY_CL_* (que queda como fallback legacy, ver
+  // docs/PLAN-ANUNCIOS-CL.md §4 H10) — mismo criterio que SMARTPROXY_URL/
+  // PROXY_URL arriba: si está configurado, gana.
+  if (profile === 'portalinmobiliario') {
+    const { EVOMI_PROXY_HOST, EVOMI_PROXY_PORT, EVOMI_PROXY_USER, EVOMI_PROXY_PASS } = process.env
+    if (EVOMI_PROXY_USER) {
+      return `http://${EVOMI_PROXY_USER}:${EVOMI_PROXY_PASS}@${EVOMI_PROXY_HOST}:${EVOMI_PROXY_PORT}`
+    }
+  }
+
   // Cuenta SmartProxy dedicada a Chile (geo-targeting CL/Santiago), separada
   // de la cuenta SMARTPROXY_PROXY_* de España/Idealista para no mezclarlas.
+  // Fallback legacy si Evomi no está configurado (ver arriba).
   if (profile === 'portalinmobiliario') {
     const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
     if (SMARTPROXY_CL_USER) {
