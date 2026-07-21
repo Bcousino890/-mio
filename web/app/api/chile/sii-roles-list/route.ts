@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
   const superficieMin = sp.get('superficie_min')?.trim()
   const superficieMax = sp.get('superficie_max')?.trim()
   const ubicacion = sp.get('ubicacion')?.trim()
+  const shapeParam = sp.get('shape')?.trim()
   const sortParam = sp.get('sort') || 'avaluo_desc'
   const sort = SORT_CLAUSES[sortParam] ?? SORT_CLAUSES.avaluo_desc
   const page = Math.max(1, Number(sp.get('page')) || 1)
@@ -53,6 +54,35 @@ export async function GET(request: NextRequest) {
     if (superficieMax && !Number.isNaN(Number(superficieMax))) conditions.push(`r.superficie_terreno_m2 <= ${addParam(Number(superficieMax))}`)
     if (ubicacion === 'U' || ubicacion === 'R') conditions.push(`r.codigo_ubicacion = ${addParam(ubicacion)}`)
 
+    // Zona dibujada en el mapa (polígono/rectángulo/círculo): filtra por
+    // punto-en-área usando las coordenadas propias de sii_roles_cl, igual
+    // que /api/chile/sii-roles-in-zone pero combinable con el resto de
+    // filtros de esta lista.
+    if (shapeParam) {
+      try {
+        const shape = JSON.parse(shapeParam) as {
+          type: 'polygon' | 'circle' | 'rectangle'
+          coordinates?: [number, number][]
+          center?: [number, number]
+          radius?: number
+        }
+        if (shape.type === 'circle' && shape.center && shape.radius) {
+          const lngP = addParam(shape.center[1])
+          const latP = addParam(shape.center[0])
+          const radiusP = addParam(shape.radius)
+          conditions.push(
+            `r.lat IS NOT NULL AND r.lng IS NOT NULL AND ST_DWithin(ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326)::geography, ST_SetSRID(ST_MakePoint(${lngP}, ${latP}), 4326)::geography, ${radiusP})`
+          )
+        } else if (shape.coordinates && shape.coordinates.length >= 4) {
+          const wkt = `POLYGON((${shape.coordinates.map(([lat, lng]) => `${lng} ${lat}`).join(', ')}))`
+          const wktP = addParam(wkt)
+          conditions.push(
+            `r.lat IS NOT NULL AND r.lng IS NOT NULL AND ST_Contains(ST_GeomFromText(${wktP}, 4326), ST_SetSRID(ST_MakePoint(r.lng, r.lat), 4326))`
+          )
+        }
+      } catch { /* shape inválida: se ignora el filtro geoespacial */ }
+    }
+
     const where = `WHERE ${conditions.join(' AND ')}`
 
     // El mismo rol puede aparecer 2 veces en sii_roles_cl (constraint única por
@@ -73,6 +103,7 @@ export async function GET(request: NextRequest) {
                 r.avaluo_exento, r.contribucion_semestral, r.codigo_destino_principal,
                 r.codigo_ubicacion, r.superficie_terreno_m2, r.serie,
                 r.rol_padre, r.rol_bien_comun_1, r.rol_bien_comun_2,
+                r.lat, r.lng,
                 p.matched_parcel_id
          FROM (${dedup}) r
          LEFT JOIN LATERAL (
