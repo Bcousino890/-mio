@@ -146,16 +146,50 @@ test('discoverTarget: pagina, filtra proyectos, encola solo lo nuevo, marca baja
 test('discoverTarget: fetch que falla en página 1 → incompleto, sin bajas', async () => {
   const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
   const res = await discoverTarget(client, TARGET, {
-    fetch: async () => ({ ok: false, reason: 'HTTP 429' }),
+    fetch: async () => ({ ok: false, status: 500, reason: 'HTTP 500' }),
     enqueueDetail: async () => {},
     sleep: async () => {},
   })
   assert.equal(res.completed, false)
   assert.equal(res.pages, 0)
-  assert.match(res.reason, /429/)
+  assert.match(res.reason, /500/)
   assert.equal(res.delisted, 0) // barrido incompleto → NO se marcan bajas
   assert.equal(client.state.delistedIds.length, 0)
   assert.equal(client.state.stats.completed, false) // igual registra last_run_at
+})
+
+test('discoverTarget: 404 en página 1 = comuna vacía → completo, sin bajas, éxito', async () => {
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({ ok: false, status: 404, reason: 'HTTP 404' }),
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.completed, true) // comuna sin inventario es un barrido vacío LEGÍTIMO
+  assert.equal(res.seen, 0)
+  assert.equal(res.delisted, 0) // seen=0 → no marca bajas
+  assert.match(res.reason, /404/)
+  assert.equal(client.state.stats.completed, true) // last_success_at avanza
+})
+
+test('discoverTarget: portal topa paginación (total > límite) → completo pero SIN bajas', async () => {
+  // Comuna grande: total=3479 pero el portal solo deja paginar 2000 (resultsLimit).
+  // Aunque el barrido "termine" (pageCount), NO es exhaustivo → no dar de baja.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
+  let page = 0
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({ ok: true, html: 'P' }),
+    parseList: () => { page++; return [listing(`MLC-${page}-a`), listing(`MLC-${page}-b`)] },
+    parseMeta: () => ({ total: 3479, pageCount: 1, resultsLimit: 2000 }), // pageCount=1 → termina ya
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.completed, true)
+  assert.equal(res.capped, true)
+  assert.equal(res.exhaustive, false)
+  assert.equal(res.delisted, 0) // MLC-VIVO NO se da de baja pese a no aparecer
+  assert.equal(client.state.delistedIds.length, 0)
+  assert.match(res.reason, /topó/)
 })
 
 test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna', async () => {

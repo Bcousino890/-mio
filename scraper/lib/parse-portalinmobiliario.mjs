@@ -284,11 +284,15 @@ export function parseListPage(html) {
 /**
  * Metadatos de paginación/cobertura de una página de listado, desde el mismo
  * blob Nordic. Los usa el discovery crawler (H1) para saber cuántas páginas hay
- * (`pageCount`) y cuántos resultados declara el portal (`total`) — este último
- * alimenta `scrape_targets_cl.portal_reported_count`, base del gate de cobertura
- * ≥90% (H17/H22). Nunca lanza; devuelve nulls si no calza la estructura.
+ * (`pageCount`), cuántos resultados declara el portal (`total`, alimenta
+ * `scrape_targets_cl.portal_reported_count`, gate ≥90% de H17/H22) y el TOPE de
+ * paginación del portal (`resultsLimit`, típicamente 2000): Portalinmobiliario
+ * NO deja paginar más allá de ~2000 resultados aunque `total` sea mayor, así que
+ * un barrido de una comuna con `total > resultsLimit` NO es exhaustivo (crítico
+ * para no dar de baja anuncios vivos, ver discovery-portalinmobiliario-cl.mjs).
+ * Nunca lanza; devuelve nulls si no calza la estructura.
  *
- * @returns {{ total: number|null, pageCount: number|null }}
+ * @returns {{ total: number|null, pageCount: number|null, resultsLimit: number|null }}
  */
 export function parseListMeta(html) {
   try {
@@ -296,12 +300,14 @@ export function parseListMeta(html) {
     const md = state?.melidata_track?.event_data ?? state?.melidata_track ?? null
     const rawTotal = md?.total
     const rawPages = state?.pagination?.page_count
+    const rawLimit = state?.pagination?.results_limit
     return {
       total: Number.isFinite(rawTotal) ? rawTotal : null,
       pageCount: Number.isFinite(rawPages) ? rawPages : null,
+      resultsLimit: Number.isFinite(rawLimit) ? rawLimit : null,
     }
   } catch {
-    return { total: null, pageCount: null }
+    return { total: null, pageCount: null, resultsLimit: null }
   }
 }
 

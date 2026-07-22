@@ -175,6 +175,7 @@ export async function discoverTarget(client, target, deps = {}) {
   let pages = 0
   let enqueued = 0
   let portalTotal = null
+  let resultsLimit = null
   let completed = false
   let reason = null
 
@@ -183,12 +184,25 @@ export async function discoverTarget(client, target, deps = {}) {
     const url = buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation: target.operation, propertyType: target.property_type, offset })
 
     const res = await fetch(url, { profile: 'portalinmobiliario' })
-    if (!res.ok) { reason = `fetch p${page}: ${res.reason ?? 'fallo'}`; break }
+    if (!res.ok) {
+      // 404 en la primera página = comuna SIN inventario para este tipo/op (el
+      // portal responde 404, no un 200 vacío). Es un barrido vacío LEGÍTIMO y
+      // completo, no un fallo: así last_success_at avanza y el target no queda
+      // "perpetuamente fallido" en la observabilidad (H17).
+      if (page === 1 && (res.status === 404 || /\b404\b/.test(res.reason ?? ''))) {
+        completed = true
+        reason = 'sin inventario (404)'
+      } else {
+        reason = `fetch p${page}: ${res.reason ?? 'fallo'}`
+      }
+      break
+    }
     pages++
 
+    const meta = parseMeta(res.html)
     const listings = parseList(res.html)
-    if (page === 1) portalTotal = parseMeta(res.html).total
-    const pageCount = parseMeta(res.html).pageCount
+    if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
+    const pageCount = meta.pageCount
 
     // El plan cubre USADAS primero; el filtro de URL ya excluye proyectos, pero
     // se doble-filtra por si acaso alguno se cuela (is_development del domain_id).
@@ -209,16 +223,26 @@ export async function discoverTarget(client, target, deps = {}) {
     await sleep(politenessMs)
   }
 
-  // Bajas: solo en barrido completo y con al menos un anuncio visto (evita dar de
-  // baja toda la comuna por un fallo que devolvió 0).
+  // ¿Fue EXHAUSTIVO el barrido? Portalinmobiliario topea la paginación en
+  // ~2000 resultados (resultsLimit): si la comuna declara más (`total`), NUNCA
+  // vimos todo aunque hayamos llegado al último page accesible. Marcar bajas en
+  // ese caso daría de baja anuncios VIVOS que quedaron más allá del corte 2000
+  // (y como el orden cambia entre corridas, oscilarían activo/baja — flapping).
+  // Solo es seguro dar de baja si el barrido cubrió el total real.
+  const capped = portalTotal != null && resultsLimit != null && portalTotal > resultsLimit
+  const exhaustive = completed && !capped
+  if (capped) reason = reason ?? `portal topó paginación (total=${portalTotal} > límite=${resultsLimit}): sin bajas`
+
+  // Bajas: solo en barrido EXHAUSTIVO y con al menos un anuncio visto (evita dar
+  // de baja toda la comuna por un fallo que devolvió 0, o por el tope del portal).
   let delisted = 0
-  if (completed && target.comuna_id && seen.size > 0) {
+  if (exhaustive && target.comuna_id && seen.size > 0) {
     delisted = await markDelisted(client, target, seen, scrapedAt)
   }
 
   await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal })
 
-  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, completed, reason }
+  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, completed, exhaustive, capped, reason }
 }
 
 /**
