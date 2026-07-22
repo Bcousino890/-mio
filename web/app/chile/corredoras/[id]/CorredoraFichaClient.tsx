@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Globe, Phone, ExternalLink, Package, History, Timer, ShieldCheck, GitCompareArrows } from 'lucide-react'
+import { ArrowLeft, Globe, Phone, ExternalLink, Package, History, Timer, ShieldCheck, GitCompareArrows, ImageOff } from 'lucide-react'
 
 type InventoryItem = {
   property_cl_id: string
@@ -21,6 +21,7 @@ type InventoryItem = {
   own_source_url: string | null
   own_is_active: boolean
   seller_reference: string | null
+  own_cover_photo: string | null
 }
 
 type Ficha = {
@@ -64,6 +65,16 @@ function avatarColor(name: string | null): string {
   const s = name ?? ''; let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
+}
+
+// Miniatura de portada del anuncio (fallback si no hay foto o falla la carga).
+function InvThumb({ src }: { src: string | null }) {
+  const [err, setErr] = useState(false)
+  if (!src || err) {
+    return <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageOff size={24} /></div>
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" onError={() => setErr(true)} loading="lazy" className="w-full h-full object-cover" />
 }
 
 function Stat({ icon, label, value, hint, accent }: { icon: React.ReactNode; label: string; value: string; hint?: string; accent: string }) {
@@ -172,56 +183,58 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
               </div>
             </div>
 
-            <div className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 border-b border-slate-700 bg-slate-800/80">
-                      <th className="px-4 py-2.5 font-semibold">Propiedad</th>
-                      <th className="px-3 py-2.5 font-semibold">Comuna</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Precio (su anuncio)</th>
-                      <th className="px-3 py-2.5 font-semibold">Ref. interna</th>
-                      <th className="px-3 py-2.5 font-semibold">Exclusividad</th>
-                      <th className="px-3 py-2.5 font-semibold"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {inventory.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">Sin propiedades en esta vista</td></tr>
-                    )}
-                    {inventory.map(it => (
-                      <tr key={it.property_cl_id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/30">
-                        <td className="px-4 py-3">
-                          <span className="text-slate-100">{(it.bedrooms ?? '?')} dorm · {(it.square_meters ?? '?')} m² · {it.property_type ?? 'casa'}</span>
-                          {!it.own_is_active && <span className="ml-2 text-[10px] text-slate-500">(dada de baja)</span>}
-                        </td>
-                        <td className="px-3 py-3 text-slate-400">{it.comuna_name || '—'}</td>
-                        <td className="px-3 py-3 text-right text-slate-200 font-medium">{clp(it.own_price)}</td>
-                        <td className="px-3 py-3 text-slate-400 text-xs font-mono">{it.seller_reference || '—'}</td>
-                        <td className="px-3 py-3">
-                          {it.shared ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                              <GitCompareArrows size={10} /> en canje ({it.shared_corredora_count})
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                              <ShieldCheck size={10} /> exclusiva
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          {it.own_source_url && (
-                            <a href={it.own_source_url} target="_blank" rel="noopener noreferrer" className="text-slate-500 hover:text-cyan-400 inline-flex" title="Ver anuncio original">
-                              <ExternalLink size={14} />
-                            </a>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {inventory.length === 0 ? (
+              <div className="bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-10 text-center text-slate-500">
+                Sin propiedades en esta vista
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {inventory.map(it => (
+                  <div key={it.property_cl_id} className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden hover:border-amber-500/40 transition-colors flex flex-col">
+                    <div className="relative aspect-[16/10] bg-slate-900">
+                      <InvThumb src={it.own_cover_photo} />
+                      <span className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full bg-black/60 text-slate-200 backdrop-blur-sm capitalize">
+                        {it.operation === 'rent' ? 'Arriendo' : 'Venta'}
+                      </span>
+                      <span className="absolute top-2 right-2">
+                        {it.shared ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/90 text-white backdrop-blur-sm">
+                            <GitCompareArrows size={10} /> en canje ({it.shared_corredora_count})
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/90 text-white backdrop-blur-sm">
+                            <ShieldCheck size={10} /> exclusiva
+                          </span>
+                        )}
+                      </span>
+                      {!it.own_is_active && (
+                        <span className="absolute bottom-2 left-2 text-[10px] px-2 py-0.5 rounded-full bg-black/70 text-slate-300 backdrop-blur-sm">dada de baja</span>
+                      )}
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <div className="text-lg font-bold text-slate-100">{clp(it.own_price)}</div>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400">
+                        {it.bedrooms != null && <span>{it.bedrooms} dorm</span>}
+                        {it.bathrooms != null && <span>{it.bathrooms} baños</span>}
+                        {it.square_meters != null && <span>{it.square_meters} m²</span>}
+                        <span className="capitalize">{it.property_type ?? 'casa'}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">{it.comuna_name || '—'}</div>
+                      <div className="mt-auto pt-2.5 flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-500 font-mono truncate">{it.seller_reference ? `ref. ${it.seller_reference}` : '—'}</span>
+                        {it.own_source_url && (
+                          <a href={it.own_source_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 shrink-0" title="Ver anuncio original">
+                            Ver aviso <ExternalLink size={12} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

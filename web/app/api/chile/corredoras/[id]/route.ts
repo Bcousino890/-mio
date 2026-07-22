@@ -55,7 +55,8 @@ export async function GET(
          l.external_id AS own_external_id,
          l.source_url AS own_source_url,
          l.is_active AS own_is_active,
-         l.seller_reference
+         l.seller_reference,
+         l.photos->>0 AS own_cover_photo
        FROM listings_cl l
        JOIN property_cl p ON p.id = l.property_cl_id
        LEFT JOIN chile_comunas c ON c.id = p.comuna_id
