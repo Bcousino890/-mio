@@ -47,7 +47,7 @@ function rankOf(confidence) {
  *     está activo, el mínimo histórico) — "precio de mercado" tal como lo
  *     definió el usuario en la estrategia original.
  */
-function consolidateFields(rows) {
+export function consolidateFields(rows) {
   const best = rows.reduce((a, b) => (rankOf(b.location_confidence) > rankOf(a.location_confidence) ? b : a));
 
   const mode = (key) => {
@@ -113,7 +113,7 @@ function consolidateFields(rows) {
   };
 }
 
-const LISTING_FIELDS_FOR_CONSOLIDATION = `
+export const LISTING_FIELDS_FOR_CONSOLIDATION = `
   id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
   square_meters, bedrooms, bathrooms, comuna_id, localidad, latitude, longitude,
   location_confidence, exact_address, portal, source_type, advertiser_type,
@@ -126,7 +126,7 @@ const LISTING_FIELDS_FOR_CONSOLIDATION = `
  * quede correcto aunque Nivel 2 (Fase 3) ya haya sumado listings de otras
  * corredoras a este mismo grupo.
  */
-async function refreshPropertyClAggregates(client, propertyClId) {
+export async function refreshPropertyClAggregates(client, propertyClId) {
   const { rows } = await client.query(
     `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION} FROM listings_cl WHERE property_cl_id = $1`,
     [propertyClId]

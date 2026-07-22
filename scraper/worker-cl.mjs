@@ -12,8 +12,17 @@
  *   - detail-cl        → upsertListingCl() sobre una ficha ya conocida (por
  *                         MLC-id), encola media-sync-cl si trae fotos nuevas.
  *   - media-sync-cl     → syncListingMediaCl() al bucket de Hetzner.
- *   - dedup-cluster-cl  → runNivel1DedupCl() (Nivel 1 determinista), cada 15min.
- *   - broker-enrich-cl  → runCorredoraConsolidationCl(), cada 15min.
+ *   - dedup-cluster-cl  → pipeline de dedup en UNA pasada ordenada, cada 15min:
+ *                         Nivel 1 determinista (runNivel1DedupCl) → Nivel 2
+ *                         probabilístico (runNivel2ClusteringCl, fusiona los
+ *                         property_cl de corredoras distintas) → consolidación
+ *                         de corredoras (runCorredoraConsolidationCl). El orden
+ *                         importa: exclusivity_ratio de la corredora depende del
+ *                         corredora_count final de property_cl, que solo queda
+ *                         correcto tras el Nivel 2 (ver dedup-cl.mjs).
+ *   - broker-enrich-cl  → runCorredoraConsolidationCl() suelto, para re-enriquecer
+ *                         corredoras on-demand (boss.send) sin correr todo el
+ *                         pipeline. El refresco periódico ya lo hace dedup-cluster-cl.
  *
  * Cola registrada pero SIN handler real todavía:
  *   - discovery-cl → el patrón de URL de listado de Portal Inmobiliario NO
@@ -38,6 +47,7 @@ import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
+import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -100,15 +110,29 @@ export async function handleMediaSyncJob(dbClient, jobData, deps = {}) {
   return { ok: true, ...res }
 }
 
-/** Job `dedup-cluster-cl` (periódico): Nivel 1 determinista. */
+/**
+ * Job `dedup-cluster-cl` (periódico): pipeline de dedup en una pasada ordenada
+ * Nivel 1 → Nivel 2 → consolidación de corredoras. El orden NO es opcional: la
+ * exclusividad de cada corredora depende del corredora_count final de property_cl,
+ * que solo queda correcto tras fusionar los grupos en el Nivel 2 (ver dedup-cl.mjs).
+ * `deps` inyectables para test.
+ */
 export async function handleDedupClusterJob(dbClient, deps = {}) {
-  const { run = runNivel1DedupCl } = deps
-  const res = await run(dbClient)
+  const {
+    nivel1 = runNivel1DedupCl,
+    nivel2 = runNivel2ClusteringCl,
+    broker = runCorredoraConsolidationCl,
+  } = deps
+  const res = {
+    nivel1: await nivel1(dbClient),
+    nivel2: await nivel2(dbClient),
+    broker: await broker(dbClient),
+  }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res
 }
 
-/** Job `broker-enrich-cl` (periódico): consolidación de corredoras. */
+/** Job `broker-enrich-cl` (on-demand): re-consolida corredoras sin correr el pipeline entero. */
 export async function handleBrokerEnrichJob(dbClient, deps = {}) {
   const { run = runCorredoraConsolidationCl } = deps
   const res = await run(dbClient)
@@ -162,11 +186,13 @@ async function main() {
     })
   }
 
+  // Pipeline de dedup completo (Nivel 1 → Nivel 2 → corredoras) cada 15min.
   await boss.work(QUEUES.DEDUP_CLUSTER, async () => { await handleDedupClusterJob(dbClient) })
   await boss.schedule(QUEUES.DEDUP_CLUSTER, '*/15 * * * *')
 
+  // broker-enrich queda como cola on-demand (boss.send), sin schedule propio: el
+  // refresco periódico de corredoras ya lo hace el pipeline de dedup-cluster.
   await boss.work(QUEUES.BROKER_ENRICH, async () => { await handleBrokerEnrichJob(dbClient) })
-  await boss.schedule(QUEUES.BROKER_ENRICH, '*/15 * * * *')
 
   await boss.work(QUEUES.DISCOVERY, async (jobs) => {
     for (const job of jobs) await handleDiscoveryJob(job.data)
