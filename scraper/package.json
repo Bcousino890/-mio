@@ -8,6 +8,7 @@
     "scrape": "node scrape-zone.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1092.0",
     "axios": "^1.18.1",
     "cheerio": "^1.2.0",
     "graphology": "^0.25.4",
