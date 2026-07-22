@@ -438,7 +438,25 @@ export async function parseDetailPage(html, external_id) {
     }
 
     const advertiser_name = sellerProfile?.seller_name?.title?.text ?? null
-    const advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    // advertiser_id = seller_id de Mercado Libre: el id ESTABLE de la corredora,
+    // clave de identidad de corredoras_cl (H4 / terna §2.1). Fuente primaria:
+    // event_data.seller_id del blob Nordic. Fallbacks para que la empresa NUNCA
+    // quede sin identificar aunque una variante de layout no traiga el blob:
+    //   (a) el dataLayer de GTM (`"sellerId":<n>`), y
+    //   (b) la URL del logo de tienda oficial
+    //       (`classifieds_accounts/MLC_real_estate_agency/<id>_vip_…`).
+    let advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    if (!advertiser_id) {
+      const gtm = html.match(/"sellerId"\s*:\s*(\d+)/)
+      if (gtm) advertiser_id = gtm[1]
+    }
+    if (!advertiser_id) {
+      const logoId = html.match(/MLC_real_estate_agency\/(\d+)_/)
+      if (logoId) advertiser_id = logoId[1]
+    }
+    // Logo de la corredora (tienda oficial), derivable del id — para la ficha de
+    // corredora (H4/H5). NULL si el vendedor no tiene logo de tienda oficial.
+    const advertiser_logo = (html.match(/https:\/\/resources\.mlstatic\.com\/classifieds_accounts\/MLC_real_estate_agency\/\d+_vip[^"'\\]*/) ?? [null])[0]
     const sellerType = eventData?.seller_type ?? null
     const advertiser_type = sellerType
       ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')
@@ -483,6 +501,7 @@ export async function parseDetailPage(html, external_id) {
       address, comuna,
       advertiser_name, advertiser_type,
       advertiser_id,
+      advertiser_logo,
       seller_reference,
       photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
       photos_total_count: photosTotalCount,  // total real declarado por el portal (puede ser > 30)
