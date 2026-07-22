@@ -51,6 +51,7 @@ import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
+import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -60,6 +61,8 @@ export const QUEUES = {
   BROKER_ENRICH: 'broker-enrich-cl',
   DISCOVERY: 'discovery-cl',
   DISCOVERY_SCHEDULER: 'discovery-scheduler-cl',
+  CORREDORA_WEB: 'corredora-web-crawl-cl',
+  CORREDORA_WEB_SCHEDULER: 'corredora-web-scheduler-cl',
 }
 
 /**
@@ -193,6 +196,38 @@ export async function handleDiscoverySchedulerJob(dbClient, deps = {}) {
   return { enqueued: targets.length }
 }
 
+/**
+ * Job `corredora-web-crawl-cl` (H21): crawl de la web propia de UNA corredora →
+ * inserta sus fichas como listings_cl (agency_web). El Nivel 1.5 del pipeline de
+ * dedup las une luego al anuncio de PI por código interno. `deps` inyectables.
+ */
+export async function handleCorredoraWebCrawlJob(dbClient, jobData, deps = {}) {
+  const { crawl = crawlCorredoraWebTarget } = deps
+  const target = jobData?.target
+  if (!target?.id) {
+    console.error('[corredora-web] job sin target válido:', JSON.stringify(jobData))
+    return { ok: false, reason: 'sin target' }
+  }
+  const res = await crawl(dbClient, target, {
+    enqueueMediaSync: deps.enqueueMediaSync,
+  })
+  console.log(`[corredora-web] ${target.domain} (${target.crm_platform}): ${JSON.stringify(res)}`)
+  return res
+}
+
+/**
+ * Job `corredora-web-scheduler-cl` (periódico): encola un crawl por cada web
+ * `enabled` cuya cadencia (24h por defecto) venció. Config-driven — activar una
+ * web es un UPDATE en corredora_web_targets_cl, sin tocar código.
+ */
+export async function handleCorredoraWebSchedulerJob(dbClient, deps = {}) {
+  const { select = selectDueWebTargets, enqueueCrawl = async () => {} } = deps
+  const targets = await select(dbClient)
+  for (const target of targets) await enqueueCrawl(target)
+  console.log(`[corredora-web-scheduler] ${targets.length} webs encoladas`)
+  return { enqueued: targets.length }
+}
+
 async function main() {
   const databaseUrl = process.env.DATABASE_URL
   if (!databaseUrl) {
@@ -264,6 +299,26 @@ async function main() {
     })
   })
   await boss.schedule(QUEUES.DISCOVERY_SCHEDULER, '*/15 * * * *')
+
+  // Webs propias de corredoras (H21): el scheduler lee corredora_web_targets_cl
+  // y encola un crawl por web `enabled` vencida (cadencia suave, 24h por defecto).
+  // Cada crawl inserta las fichas como agency_web; el Nivel 1.5 del dedup-cluster
+  // las une al anuncio de PI por código interno.
+  await boss.work(QUEUES.CORREDORA_WEB, async (jobs) => {
+    for (const job of jobs) {
+      await handleCorredoraWebCrawlJob(dbClient, job.data, {
+        enqueueMediaSync: (listingId) => boss.send(QUEUES.MEDIA_SYNC, { listingId }),
+      })
+    }
+  })
+
+  await boss.work(QUEUES.CORREDORA_WEB_SCHEDULER, async () => {
+    await handleCorredoraWebSchedulerJob(dbClient, {
+      enqueueCrawl: (target) => boss.send(QUEUES.CORREDORA_WEB, { target }),
+    })
+  })
+  // Cada hora basta: la cadencia real la pone interval_hours de cada target (24h).
+  await boss.schedule(QUEUES.CORREDORA_WEB_SCHEDULER, '7 * * * *')
 
   console.log(`[worker-cl] arrancado. Colas: ${Object.values(QUEUES).join(', ')}`)
 
