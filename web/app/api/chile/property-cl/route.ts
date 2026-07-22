@@ -111,11 +111,27 @@ export async function GET(request: NextRequest) {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
 
-    const countResult = await pool.query(
-      `SELECT COUNT(*) AS total FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id ${whereClause}`,
+    // Estadísticas agregadas sobre TODO el conjunto filtrado (no solo la página):
+    // total, en canje, mediana de precio y ubicación confirmada — para la barra
+    // de resumen de la UI. Una sola consulta en vez de varias.
+    const statsResult = await pool.query(
+      `SELECT
+         COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE p.corredora_count > 1) AS multi_corredora,
+         COUNT(*) FILTER (WHERE p.location_confidence = 'confirmed') AS confirmed,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY p.canonical_price)
+           FILTER (WHERE p.canonical_price > 0) AS median_price
+       FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id ${whereClause}`,
       params
     )
-    const total = Number(countResult.rows[0]?.total ?? 0)
+    const statsRow = statsResult.rows[0] ?? {}
+    const total = Number(statsRow.total ?? 0)
+    const stats = {
+      total,
+      multi_corredora: Number(statsRow.multi_corredora ?? 0),
+      confirmed: Number(statsRow.confirmed ?? 0),
+      median_price: statsRow.median_price != null ? Math.round(Number(statsRow.median_price)) : null,
+    }
 
     const dataParams = [...params, pageSize, offset]
     const query = `
@@ -172,6 +188,7 @@ export async function GET(request: NextRequest) {
       success: true,
       count: result.rows.length,
       total,
+      stats,
       page,
       page_size: pageSize,
       total_pages: Math.max(1, Math.ceil(total / pageSize)),
