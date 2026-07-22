@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
-  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy,
+  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images,
 } from 'lucide-react'
 
 type Listing = {
@@ -125,6 +125,33 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
   )
 }
 
+// Celda del grid de características de la ficha (estilo bcousinoprop).
+function FieldCell({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+  return (
+    <div className="bg-slate-800 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+        <span className="text-slate-500">{icon}</span> {label}
+      </div>
+      <div className="text-sm font-semibold text-slate-100 truncate">{value}</div>
+    </div>
+  )
+}
+
+// Miniatura del aviso de una corredora (con fallback si no hay foto o falla).
+function CorredoraThumb({ src }: { src?: string }) {
+  const [err, setErr] = useState(false)
+  return (
+    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center text-slate-600">
+      {src && !err ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" onError={() => setErr(true)} loading="lazy" className="w-full h-full object-cover" />
+      ) : (
+        <ImageOff size={20} />
+      )}
+    </div>
+  )
+}
+
 // ─── Modal / ficha interna ──────────────────────────────────────────────────
 function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
   const gallery = useMemo(() => {
@@ -184,6 +211,7 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
         <div className="p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-0.5">{p.operation === 'rent' ? 'Precio arriendo' : 'Precio venta'}</div>
               <div className="text-2xl font-bold text-slate-100">{clp(p.canonical_price)}</div>
               {p.canonical_price_uf && <div className="text-xs text-slate-500">≈ {Number(p.canonical_price_uf).toLocaleString('es-CL')} UF{p.price_sqm ? ` · ${clp(p.price_sqm)}/m²` : ''}</div>}
             </div>
@@ -192,20 +220,21 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-sm text-slate-300">
-            {p.bedrooms != null && <span className="inline-flex items-center gap-1.5"><BedDouble size={15} /> {p.bedrooms} dorm</span>}
-            {p.bathrooms != null && <span className="inline-flex items-center gap-1.5"><Bath size={15} /> {p.bathrooms} baños</span>}
-            {p.square_meters != null && <span className="inline-flex items-center gap-1.5"><Ruler size={15} /> {p.square_meters} m²</span>}
-            <span className="inline-flex items-center gap-1.5"><Home size={15} /> {p.property_type ?? 'casa'}</span>
-          </div>
-          <div className="flex items-center gap-1.5 mt-2 text-sm text-slate-400">
-            <MapPin size={14} className="text-slate-500" /> {p.comuna_name || 'Sin comuna'}
-            {p.days_on_market != null && <span className="text-slate-600">· {p.days_on_market} días en mercado</span>}
+          {/* Ficha — grid de características (estilo bcousinoprop) */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-px mt-4 rounded-xl overflow-hidden bg-slate-700/50 border border-slate-700">
+            <FieldCell icon={<Home size={13} />} label="Tipo" value={<span className="capitalize">{p.property_type ?? 'Casa'}</span>} />
+            <FieldCell icon={<Building2 size={13} />} label="Operación" value={p.operation === 'rent' ? 'Arriendo' : 'Venta'} />
+            <FieldCell icon={<BedDouble size={13} />} label="Dormitorios" value={p.bedrooms != null ? String(p.bedrooms) : '—'} />
+            <FieldCell icon={<Bath size={13} />} label="Baños" value={p.bathrooms != null ? String(p.bathrooms) : '—'} />
+            <FieldCell icon={<Ruler size={13} />} label="Superficie" value={p.square_meters != null ? `${p.square_meters} m²` : '—'} />
+            <FieldCell icon={<TrendingDown size={13} />} label="Precio / m²" value={p.price_sqm ? `${clpShort(p.price_sqm)}/m²` : '—'} />
+            <FieldCell icon={<MapPin size={13} />} label="Comuna" value={p.comuna_name || '—'} />
+            <FieldCell icon={<CalendarClock size={13} />} label="En mercado" value={p.days_on_market != null ? `${p.days_on_market} días` : '—'} />
           </div>
 
-          {/* Comparación de corredoras */}
+          {/* Avisos por corredora */}
           <div className="mt-5">
-            <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <div className="flex items-center justify-between gap-2 mb-2.5 flex-wrap">
               <h3 className="text-sm font-semibold text-slate-300 inline-flex items-center gap-1.5">
                 {p.corredora_count > 1
                   ? <><GitCompareArrows size={15} className="text-amber-400" /> {p.corredora_count} corredoras la publican</>
@@ -217,30 +246,49 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                 </span>
               )}
             </div>
-            <div className="space-y-2">
-              {sortedListings.map(l => (
-                <div key={l.listing_id} className={`flex items-center justify-between gap-3 rounded-lg px-3 py-2 border ${l.listing_id === cheapest && p.corredora_count > 1 ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-slate-900/50 border-slate-700'}`}>
-                  <div className="min-w-0">
-                    <div className="text-sm text-slate-200 truncate capitalize flex items-center gap-2">
-                      {l.advertiser_name || 'Corredora'}
-                      {l.crm_platform && l.crm_platform !== 'unknown' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-700 text-slate-400">{CRM_LABELS[l.crm_platform] ?? l.crm_platform}</span>
-                      )}
-                      {l.listing_id === cheapest && p.corredora_count > 1 && (
-                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"><Trophy size={9} /> mejor precio</span>
-                      )}
-                      {!l.is_active && <span className="text-[10px] text-slate-500">(baja)</span>}
+            <div className="space-y-2.5">
+              {sortedListings.map(l => {
+                const isBest = l.listing_id === cheapest && p.corredora_count > 1
+                const thumb = l.photos?.[0]
+                return (
+                  <div key={l.listing_id} className={`flex gap-3 rounded-xl p-2.5 border transition-colors ${isBest ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-slate-900/50 border-slate-700 hover:border-slate-600'}`}>
+                    <CorredoraThumb src={thumb} />
+                    <div className="flex-1 min-w-0 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-sm font-medium text-slate-100 truncate capitalize flex items-center gap-2 flex-wrap">
+                            {l.advertiser_name || 'Corredora'}
+                            {l.crm_platform && l.crm_platform !== 'unknown' && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-700 text-slate-400">{CRM_LABELS[l.crm_platform] ?? l.crm_platform}</span>
+                            )}
+                            {isBest && (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"><Trophy size={9} /> mejor precio</span>
+                            )}
+                            {!l.is_active && <span className="text-[10px] text-slate-500">(baja)</span>}
+                          </div>
+                          <span className="text-sm font-semibold text-slate-100 shrink-0">{clp(l.price)}</span>
+                        </div>
+                        <div className="flex items-center gap-2.5 mt-1 text-[11px] text-slate-500">
+                          <span className="uppercase tracking-wide">{l.currency || 'CLP'}</span>
+                          {p.square_meters != null && <span className="inline-flex items-center gap-1"><Ruler size={11} /> {p.square_meters} m²</span>}
+                          {l.photos?.length > 0 && <span className="inline-flex items-center gap-1"><Images size={11} /> {l.photos.length} fotos</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-1.5">
+                        <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {l.web_propia_url && (
+                            <a href={l.web_propia_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-500 hover:text-cyan-400 inline-flex items-center gap-1" title="Web propia de la corredora"><Home size={11} /> web</a>
+                          )}
+                          {l.source_url && (
+                            <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1" title="Ver anuncio original">Ver aviso <ExternalLink size={12} /></a>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500 font-mono">{l.external_id}{l.seller_reference && <> · ref. {l.seller_reference}</>}</div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-sm font-semibold text-slate-100">{clp(l.price)}</span>
-                    {l.source_url && (
-                      <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-slate-500 hover:text-cyan-400" title="Ver anuncio original"><ExternalLink size={15} /></a>
-                    )}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
