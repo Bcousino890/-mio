@@ -445,18 +445,24 @@ export async function parseDetailPage(html, external_id) {
     //   (a) el dataLayer de GTM (`"sellerId":<n>`), y
     //   (b) la URL del logo de tienda oficial
     //       (`classifieds_accounts/MLC_real_estate_agency/<id>_vip_…`).
+    // El logo de la corredora vive en Mercado Libre con DOS formatos de URL, y en
+    // ambos el id va delante de `_vip`:
+    //   1) resources.mlstatic.com/classifieds_accounts/MLC_real_estate_agency/<id>_vip_v3.gif
+    //   2) http2.mlstatic.com/storage/vis-accounts/<id>_vip-<uuid>.jpg
+    // Un único patrón captura la URL completa (grupo 0) y el id (grupo 1).
+    const SELLER_LOGO_RE = /https:\/\/[\w.-]*mlstatic\.com\/(?:classifieds_accounts\/MLC_real_estate_agency|storage\/vis-accounts)\/(\d+)_vip[-_][^"'\\\s>]*/
+    const logoMatch = html.match(SELLER_LOGO_RE)
+
     let advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
     if (!advertiser_id) {
       const gtm = html.match(/"sellerId"\s*:\s*(\d+)/)
       if (gtm) advertiser_id = gtm[1]
     }
-    if (!advertiser_id) {
-      const logoId = html.match(/MLC_real_estate_agency\/(\d+)_/)
-      if (logoId) advertiser_id = logoId[1]
-    }
-    // Logo de la corredora (tienda oficial), derivable del id — para la ficha de
-    // corredora (H4/H5). NULL si el vendedor no tiene logo de tienda oficial.
-    const advertiser_logo = (html.match(/https:\/\/resources\.mlstatic\.com\/classifieds_accounts\/MLC_real_estate_agency\/\d+_vip[^"'\\]*/) ?? [null])[0]
+    if (!advertiser_id && logoMatch) advertiser_id = logoMatch[1]
+
+    // Logo de la corredora, derivable del id — para la ficha de corredora (H4/H5).
+    // NULL si el vendedor no tiene logo de tienda oficial.
+    const advertiser_logo = logoMatch ? logoMatch[0] : null
     const sellerType = eventData?.seller_type ?? null
     const advertiser_type = sellerType
       ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')

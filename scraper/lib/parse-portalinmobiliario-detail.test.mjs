@@ -11,8 +11,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDetailPage } from './parse-portalinmobiliario.mjs';
 
+// Los dos formatos reales de URL de logo de corredora en Mercado Libre.
+const LOGO_URL = {
+  classifieds: (id) => `https://resources.mlstatic.com/classifieds_accounts/MLC_real_estate_agency/${id}_vip_v3.gif`,
+  visAccounts: (id) => `https://http2.mlstatic.com/storage/vis-accounts/${id}_vip-67b6dc3f-204c-4e51-95f3-b286c5b44a6e.jpg`,
+};
+
 /** HTML mínimo con blob Nordic + (opcional) dataLayer GTM + (opcional) logo. */
-function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null } = {}) {
+function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null, logoFormat = 'classifieds' } = {}) {
   const initialState = {
     track: { melidata_event: { event_data: { domain_id: 'MLC-INDIVIDUAL_HOUSES_FOR_SALE', ...eventData } } },
     components: { header: { title: 'Casa en Las Condes' } },
@@ -20,7 +26,7 @@ function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null } = {}) 
   const blob = { appProps: { pageProps: { initialState } } };
   let html = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r=${JSON.stringify(blob)};self.__x=1</script></head><body>`;
   if (gtmSellerId != null) html += `<script>dataLayer.push({"pageId":"VIP","sellerId":${gtmSellerId},"status":"active"});</script>`;
-  if (logoId != null) html += `<img src="https://resources.mlstatic.com/classifieds_accounts/MLC_real_estate_agency/${logoId}_vip_v3.gif" alt="Logo">`;
+  if (logoId != null) html += `<img src="${LOGO_URL[logoFormat](logoId)}" alt="Logo">`;
   html += '</body></html>';
   return html;
 }
@@ -36,14 +42,22 @@ test('advertiser_id fallback: GTM dataLayer sellerId (la fuente del usuario)', a
   assert.equal(p.advertiser_id, '330114547');
 });
 
-test('advertiser_id fallback: URL del logo de tienda oficial', async () => {
-  const p = await parseDetailPage(detailHtml({ eventData: {}, logoId: 491510094 }), 'MLC-3');
+test('advertiser_id fallback: URL del logo (formato classifieds_accounts)', async () => {
+  const p = await parseDetailPage(detailHtml({ eventData: {}, logoId: 491510094, logoFormat: 'classifieds' }), 'MLC-3');
   assert.equal(p.advertiser_id, '491510094');
 });
 
-test('advertiser_logo se captura cuando hay logo de tienda oficial', async () => {
-  const p = await parseDetailPage(detailHtml({ eventData: { seller_id: 491510094 }, logoId: 491510094 }), 'MLC-4');
-  assert.match(p.advertiser_logo, /MLC_real_estate_agency\/491510094_vip/);
+test('advertiser_id fallback: URL del logo (formato vis-accounts, ej. Romo 234292543)', async () => {
+  const p = await parseDetailPage(detailHtml({ eventData: {}, logoId: 234292543, logoFormat: 'visAccounts' }), 'MLC-3b');
+  assert.equal(p.advertiser_id, '234292543');
+});
+
+test('advertiser_logo se captura en AMBOS formatos de URL', async () => {
+  const p1 = await parseDetailPage(detailHtml({ eventData: { seller_id: 491510094 }, logoId: 491510094, logoFormat: 'classifieds' }), 'MLC-4');
+  assert.match(p1.advertiser_logo, /MLC_real_estate_agency\/491510094_vip/);
+  // Formato vis-accounts (el que usa Romo Propiedades): antes se perdía.
+  const p2 = await parseDetailPage(detailHtml({ eventData: { seller_id: 234292543 }, logoId: 234292543, logoFormat: 'visAccounts' }), 'MLC-4b');
+  assert.match(p2.advertiser_logo, /vis-accounts\/234292543_vip-/);
 });
 
 test('sin ninguna fuente de id → advertiser_id null (no revienta)', async () => {
