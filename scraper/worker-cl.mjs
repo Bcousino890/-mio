@@ -49,10 +49,12 @@ import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
+import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
   MEDIA_SYNC: 'media-sync-cl',
+  MATCH_FEEDER: 'match-feeder-cl',
   DEDUP_CLUSTER: 'dedup-cluster-cl',
   BROKER_ENRICH: 'broker-enrich-cl',
   DISCOVERY: 'discovery-cl',
@@ -134,6 +136,19 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
   return res
 }
 
+/**
+ * Job `match-feeder-cl` (periódico): puebla listing_match_cl puntuando los pares
+ * candidatos (blocking + scorer de par). Corre en su propia cadencia (más
+ * espaciada, es O(n²) por comuna); el clustering Nivel 2 consume sus confirmados
+ * en la siguiente pasada del pipeline de dedup.
+ */
+export async function handleMatchFeederJob(dbClient, deps = {}) {
+  const { run = runMatchFeederCl } = deps
+  const res = await run(dbClient)
+  console.log(`[match-feeder] ${JSON.stringify(res)}`)
+  return res
+}
+
 /** Job `broker-enrich-cl` (on-demand): re-consolida corredoras sin correr el pipeline entero. */
 export async function handleBrokerEnrichJob(dbClient, deps = {}) {
   const { run = runCorredoraConsolidationCl } = deps
@@ -209,6 +224,12 @@ async function main() {
       for (const job of jobs) await handleMediaSyncJob(dbClient, job.data, { s3 })
     })
   }
+
+  // Feeder de matches (blocking + scorer de par → listing_match_cl) cada 30min,
+  // en cadencia propia por ser O(n²) por comuna. El clustering Nivel 2 (abajo)
+  // consume sus confirmados en la siguiente pasada.
+  await boss.work(QUEUES.MATCH_FEEDER, async () => { await handleMatchFeederJob(dbClient) })
+  await boss.schedule(QUEUES.MATCH_FEEDER, '13,43 * * * *')
 
   // Pipeline de dedup completo (Nivel 1 → Nivel 2 → corredoras) cada 15min.
   await boss.work(QUEUES.DEDUP_CLUSTER, async () => { await handleDedupClusterJob(dbClient) })
