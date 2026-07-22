@@ -284,11 +284,15 @@ export function parseListPage(html) {
 /**
  * Metadatos de paginación/cobertura de una página de listado, desde el mismo
  * blob Nordic. Los usa el discovery crawler (H1) para saber cuántas páginas hay
- * (`pageCount`) y cuántos resultados declara el portal (`total`) — este último
- * alimenta `scrape_targets_cl.portal_reported_count`, base del gate de cobertura
- * ≥90% (H17/H22). Nunca lanza; devuelve nulls si no calza la estructura.
+ * (`pageCount`), cuántos resultados declara el portal (`total`, alimenta
+ * `scrape_targets_cl.portal_reported_count`, gate ≥90% de H17/H22) y el TOPE de
+ * paginación del portal (`resultsLimit`, típicamente 2000): Portalinmobiliario
+ * NO deja paginar más allá de ~2000 resultados aunque `total` sea mayor, así que
+ * un barrido de una comuna con `total > resultsLimit` NO es exhaustivo (crítico
+ * para no dar de baja anuncios vivos, ver discovery-portalinmobiliario-cl.mjs).
+ * Nunca lanza; devuelve nulls si no calza la estructura.
  *
- * @returns {{ total: number|null, pageCount: number|null }}
+ * @returns {{ total: number|null, pageCount: number|null, resultsLimit: number|null }}
  */
 export function parseListMeta(html) {
   try {
@@ -296,12 +300,14 @@ export function parseListMeta(html) {
     const md = state?.melidata_track?.event_data ?? state?.melidata_track ?? null
     const rawTotal = md?.total
     const rawPages = state?.pagination?.page_count
+    const rawLimit = state?.pagination?.results_limit
     return {
       total: Number.isFinite(rawTotal) ? rawTotal : null,
       pageCount: Number.isFinite(rawPages) ? rawPages : null,
+      resultsLimit: Number.isFinite(rawLimit) ? rawLimit : null,
     }
   } catch {
-    return { total: null, pageCount: null }
+    return { total: null, pageCount: null, resultsLimit: null }
   }
 }
 
@@ -432,7 +438,31 @@ export async function parseDetailPage(html, external_id) {
     }
 
     const advertiser_name = sellerProfile?.seller_name?.title?.text ?? null
-    const advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    // advertiser_id = seller_id de Mercado Libre: el id ESTABLE de la corredora,
+    // clave de identidad de corredoras_cl (H4 / terna §2.1). Fuente primaria:
+    // event_data.seller_id del blob Nordic. Fallbacks para que la empresa NUNCA
+    // quede sin identificar aunque una variante de layout no traiga el blob:
+    //   (a) el dataLayer de GTM (`"sellerId":<n>`), y
+    //   (b) la URL del logo de tienda oficial
+    //       (`classifieds_accounts/MLC_real_estate_agency/<id>_vip_…`).
+    // El logo de la corredora vive en Mercado Libre con DOS formatos de URL, y en
+    // ambos el id va delante de `_vip`:
+    //   1) resources.mlstatic.com/classifieds_accounts/MLC_real_estate_agency/<id>_vip_v3.gif
+    //   2) http2.mlstatic.com/storage/vis-accounts/<id>_vip-<uuid>.jpg
+    // Un único patrón captura la URL completa (grupo 0) y el id (grupo 1).
+    const SELLER_LOGO_RE = /https:\/\/[\w.-]*mlstatic\.com\/(?:classifieds_accounts\/MLC_real_estate_agency|storage\/vis-accounts)\/(\d+)_vip[-_][^"'\\\s>]*/
+    const logoMatch = html.match(SELLER_LOGO_RE)
+
+    let advertiser_id = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    if (!advertiser_id) {
+      const gtm = html.match(/"sellerId"\s*:\s*(\d+)/)
+      if (gtm) advertiser_id = gtm[1]
+    }
+    if (!advertiser_id && logoMatch) advertiser_id = logoMatch[1]
+
+    // Logo de la corredora, derivable del id — para la ficha de corredora (H4/H5).
+    // NULL si el vendedor no tiene logo de tienda oficial.
+    const advertiser_logo = logoMatch ? logoMatch[0] : null
     const sellerType = eventData?.seller_type ?? null
     const advertiser_type = sellerType
       ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')
@@ -477,6 +507,7 @@ export async function parseDetailPage(html, external_id) {
       address, comuna,
       advertiser_name, advertiser_type,
       advertiser_id,
+      advertiser_logo,
       seller_reference,
       photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
       photos_total_count: photosTotalCount,  // total real declarado por el portal (puede ser > 30)

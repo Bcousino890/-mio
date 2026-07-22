@@ -22,6 +22,8 @@ import {
   UserSearch,
   Receipt,
   Contact,
+  Store,
+  Home,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -104,6 +106,20 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'Anuncios',
       icon: Building2,
       description: 'Portal Inmobiliario · venta y arriendo RM',
+      badge: 'NEW',
+    },
+    {
+      href: '/chile/propiedades',
+      label: 'Propiedades',
+      icon: Home,
+      description: '1 inmueble = 1 ficha · N corredoras (dedup)',
+      badge: 'NEW',
+    },
+    {
+      href: '/chile/corredoras',
+      label: 'Corredoras',
+      icon: Store,
+      description: 'Directorio · stock, rotación, exclusividad',
       badge: 'NEW',
     },
     {
