@@ -23,6 +23,7 @@
 // la carga entre IPs y evitar rate-limit por volumen.
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFile } from 'node:child_process'
+import { withResilience } from './resilient-fetch.mjs'
 
 const WHATSAPP_UA = 'WhatsApp/2.23.20.0'
 // UA de navegador moderno (Chrome de escritorio reciente). Usado para portales
@@ -121,3 +122,18 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
 }
 
 export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * fetchHtml + reintentos con backoff exponencial + circuit-breaker por
+ * dominio (plan Anuncios CL · H16, ver resilient-fetch.mjs). Aditivo: no
+ * cambia el comportamiento de `fetchHtml` — pensado para el discovery
+ * crawler/worker 24/7 de Chile (H1/H2), que corren sin supervisión y no
+ * pueden quedarse reintentando a ciegas un dominio caído.
+ *
+ * @param {string} url
+ * @param {{ useProxy?: boolean, profile?: string, retries?: number, baseBackoffMs?: number, failureThreshold?: number, cooldownMs?: number }} [options]
+ */
+export function fetchHtmlResilient(url, options = {}) {
+  const { useProxy, profile, ...resilienceOptions } = options
+  return withResilience(fetchHtml, url, { ...resilienceOptions, fetchOpts: { useProxy, profile } })
+}
