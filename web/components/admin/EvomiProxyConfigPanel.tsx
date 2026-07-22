@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Globe, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
 type Status = 'idle' | 'saving' | 'success' | 'error'
+type Current = { configured: boolean; host: string; port: string; user: string; hasPassword: boolean }
 
 export default function EvomiProxyConfigPanel() {
   const [host, setHost] = useState('')
@@ -12,6 +13,14 @@ export default function EvomiProxyConfigPanel() {
   const [pass, setPass] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
+  const [current, setCurrent] = useState<Current | null>(null)
+
+  useEffect(() => {
+    fetch('/api/admin/evomi-proxy-config')
+      .then((r) => r.json())
+      .then((d) => setCurrent(d))
+      .catch(() => {})
+  }, [])
 
   async function handleSave() {
     if (!host || !port || !user || !pass) {
@@ -39,6 +48,9 @@ export default function EvomiProxyConfigPanel() {
         setPort('')
         setUser('')
         setPass('')
+        // refrescar estado actual para mostrar de inmediato lo que quedó guardado
+        const updated = await fetch('/api/admin/evomi-proxy-config').then((r) => r.json())
+        setCurrent(updated)
       } else {
         setStatus('error')
         setError(data.error || 'Error al guardar')
@@ -54,7 +66,31 @@ export default function EvomiProxyConfigPanel() {
       <div className="flex items-center gap-2">
         <Globe size={14} className="text-purple-400" />
         <p className="text-sm font-semibold text-slate-200">Configuración de Proxy (Evomi CL)</p>
+        {current?.configured && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-900/30 border border-emerald-700/40 rounded-full px-2 py-0.5">
+            <CheckCircle2 size={10} /> Configurado
+          </span>
+        )}
+        {current && !current.configured && (
+          <span className="ml-auto text-[10px] text-amber-400 bg-amber-900/30 border border-amber-700/40 rounded-full px-2 py-0.5">
+            Sin configurar
+          </span>
+        )}
       </div>
+
+      {current?.configured && (
+        <p className="text-[11px] text-slate-500">
+          Guardado ahora mismo:{' '}
+          <code className="bg-slate-900 px-1 py-0.5 rounded text-slate-300">{current.host}:{current.port}</code>
+          {' · usuario '}
+          <code className="bg-slate-900 px-1 py-0.5 rounded text-slate-300">{current.user}</code>
+          {' · contraseña '}
+          <code className="bg-slate-900 px-1 py-0.5 rounded text-slate-300">
+            {current.hasPassword ? '••••••••' : '(sin definir)'}
+          </code>
+        </p>
+      )}
+
       <p className="text-[11px] text-slate-500">
         Credenciales de Evomi (proxy residencial, geo Chile) para el barrido 24/7 de Portal
         Inmobiliario. Se guardan en el <code className="bg-slate-900 px-1 py-0.5 rounded">.env</code> del VPS.

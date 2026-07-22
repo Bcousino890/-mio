@@ -2,6 +2,40 @@ import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 
+function parseEnvVar(content: string, key: string): string {
+  const m = content.match(new RegExp(`^${key}=(.*)$`, 'm'))
+  return m?.[1]?.trim() ?? ''
+}
+
+// GET: refleja lo que hay REALMENTE guardado en el .env del VPS, para que el
+// panel no dependa de adivinar a partir del placeholder gris del formulario
+// (el formulario se limpia tras guardar, ver EvomiProxyConfigPanel.tsx — sin
+// este endpoint no había forma de confirmar visualmente qué quedó guardado).
+// La password NUNCA se revela (ni parcialmente): solo se informa si existe.
+export async function GET() {
+  let host = '', port = '', user = '', pass = ''
+  try {
+    const content = await fs.readFile(join(process.cwd(), '.env'), 'utf-8')
+    host = parseEnvVar(content, 'EVOMI_PROXY_HOST')
+    port = parseEnvVar(content, 'EVOMI_PROXY_PORT')
+    user = parseEnvVar(content, 'EVOMI_PROXY_USER')
+    pass = parseEnvVar(content, 'EVOMI_PROXY_PASS')
+  } catch { /* .env no existe aún */ }
+
+  if (!host) host = process.env.EVOMI_PROXY_HOST ?? ''
+  if (!port) port = process.env.EVOMI_PROXY_PORT ?? ''
+  if (!user) user = process.env.EVOMI_PROXY_USER ?? ''
+  if (!pass) pass = process.env.EVOMI_PROXY_PASS ?? ''
+
+  return NextResponse.json({
+    configured: host.length > 0 && user.length > 0 && pass.length > 0,
+    host,
+    port,
+    user,
+    hasPassword: pass.length > 0,
+  })
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
 
@@ -47,9 +81,18 @@ export async function POST(request: NextRequest) {
 
     await fs.writeFile(envPath, content, 'utf-8')
 
+    // Actualizar process.env en vivo: fetch.mjs (el scraper) lee el .env del
+    // volumen montado directamente, pero esto permite que el GET de arriba
+    // (y cualquier otra parte de la app Next.js que use este proxy) refleje
+    // el cambio de inmediato, sin esperar a reiniciar el contenedor.
+    process.env.EVOMI_PROXY_HOST = host
+    process.env.EVOMI_PROXY_PORT = port
+    process.env.EVOMI_PROXY_USER = user
+    process.env.EVOMI_PROXY_PASS = pass
+
     return NextResponse.json({
       success: true,
-      message: 'Credenciales guardadas. Reinicia el contenedor para que se apliquen.',
+      message: 'Credenciales guardadas y activas.',
     })
   } catch (error) {
     console.error('Error guardando Evomi proxy config:', error)
