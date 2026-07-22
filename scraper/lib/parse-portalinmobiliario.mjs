@@ -155,62 +155,123 @@ function extractInitialState(html) {
   return blob?.appProps?.pageProps?.initialState ?? null
 }
 
+// ─── Parseo del LISTADO (blob Nordic, NO el HTML renderizado) ───────────────
+// CONFIRMADO EN FASE 0 (HTML real de Las Condes, 48 tarjetas): los resultados de
+// una página de listado NO viven en `<li class="ui-search-layout__item">` del
+// HTML — esos marcadores son intervenciones (widgets de filtro/publicidad) y las
+// pocas coincidencias que quedaban eran ocurrencias del string escapadas DENTRO
+// del propio blob JSON. Un split por `<li>` "funcionaba" pero devolvía basura con
+// forma de datos: tomaba un id de FOTO (`891463-MLC110284448549_042026`) como
+// external_id y nunca sacaba precio/atributos. Los anuncios reales están en el
+// mismo blob Nordic que la ficha (`initialState.results[].polycard`), como
+// polycards con `metadata` (id/url/domain_id) + `components[]` (title, price,
+// attributes_list, location, seller). Ver docs/research-portalinmobiliario-chile.md.
+
+/** domain_id (ej. "MLC-INDIVIDUAL_HOUSES_FOR_SALE") → operación/tipo/es-proyecto. */
+function parseDomainId(domainId = '') {
+  const operation = /FOR_RENT/i.test(domainId) ? 'rent'
+    : /FOR_SALE/i.test(domainId) ? 'sale'
+    : null
+  const property_type = /APARTMENT/i.test(domainId) ? 'departamento'
+    : /HOUSE/i.test(domainId) ? 'casa'
+    : null
+  // DEVELOPMENT = proyecto nuevo (unidades múltiples, precio "Desde"). El plan
+  // cubre primero casas USADAS (INDIVIDUAL), así que se expone para poder
+  // filtrar los proyectos en el discovery aunque el listado los incluya.
+  const is_development = /DEVELOPMENT/i.test(domainId)
+  return { operation, property_type, is_development }
+}
+
+/** Texts de attributes_list (["4 dormitorios","3 baños","138 m² útiles"]). */
+function parseAttributesTexts(texts = []) {
+  let bedrooms = null, bathrooms = null, square_meters = null
+  for (const t of texts) {
+    if (bedrooms == null && /dormitor|habitaci/i.test(t)) bedrooms = toInt(t)
+    else if (bathrooms == null && /bañ|bano/i.test(t)) bathrooms = toInt(t)
+    else if (square_meters == null && /m²|m2/i.test(t)) square_meters = toInt(t)
+  }
+  return { bedrooms, bathrooms, square_meters }
+}
+
+/** El texto del vendedor trae placeholders de icono ("Enaco {icon_cockade}"). */
+function cleanSellerText(text) {
+  if (!text) return null
+  const cleaned = decode(String(text).replace(/\{[^}]*\}/g, '')).trim()
+  return cleaned || null
+}
+
 /**
- * Extrae los anuncios de una página de resultados de Portalinmobiliario.
- * Devuelve un array de { external_id, source_url, title, price, currency,
- *   bedrooms, square_meters, advertiser_name, advertiser_type } o `[]` si la
- * estructura no calza con lo esperado (nunca lanza).
+ * Mapea UN polycard de resultado a la forma de anuncio del scraper. Puro y
+ * exportado para test de regresión (blinda el bug histórico del external_id).
+ * Devuelve null si el polycard no trae id (no es un anuncio direccionable).
+ */
+export function mapPolycard(polycard) {
+  const meta = polycard?.metadata
+  if (!meta?.id) return null
+
+  // metadata.id viene sin guion ("MLC4205367480"); normalizar a "MLC-<n>", el
+  // mismo formato que external_id en el resto del scraper y en la URL de ficha.
+  const external_id = String(meta.id).replace(/^MLC-?/, 'MLC-')
+  const rawUrl = meta.url ? String(meta.url) : null
+  const source_url = rawUrl
+    ? (rawUrl.startsWith('http') ? rawUrl : `https://www.${rawUrl}`)
+    : `https://www.portalinmobiliario.com/${external_id}`
+
+  const components = Array.isArray(polycard.components) ? polycard.components : []
+  const comp = (type) => components.find((c) => c?.type === type)
+
+  const title = decode(comp('title')?.title?.text ?? '') || null
+  const { operation, property_type, is_development } = parseDomainId(meta.domain_id)
+
+  const cp = comp('price')?.price?.current_price
+  const price = cp?.value ?? null
+  const currency = cp?.currency === 'CLF' ? 'UF' : (cp?.currency ?? 'CLP')
+  // "Desde" en proyectos: el precio es el mínimo de las unidades, no el del anuncio.
+  const price_from = Boolean(comp('price')?.price?.prefix?.text)
+
+  const { bedrooms, bathrooms, square_meters } = parseAttributesTexts(comp('attributes_list')?.attributes_list?.texts ?? [])
+
+  const location_text = decode(comp('location')?.location?.text ?? '') || null
+  const advertiser_name = cleanSellerText(comp('seller')?.seller?.text)
+
+  return {
+    external_id,
+    source_url,
+    title,
+    operation,
+    property_type,
+    is_development,
+    price,
+    currency,
+    price_from,
+    bedrooms,
+    bathrooms,
+    square_meters,
+    location_text,
+    advertiser_name,
+    // El listado no distingue de forma fiable particular vs profesional
+    // (la insignia "Tienda oficial" no implica los dos casos): eso se resuelve
+    // en la ficha (parseDetailPage, vía seller_type). Aquí queda 'unknown'.
+    advertiser_type: 'unknown',
+  }
+}
+
+/**
+ * Extrae los anuncios de una página de resultados de Portalinmobiliario desde el
+ * blob Nordic. Devuelve un array de objetos de mapPolycard(), o `[]` si no hay
+ * blob o no calza la estructura (nunca lanza). Un `[]` con HTML no vacío es señal
+ * de parser roto / layout cambiado (alerta de observabilidad, H17).
  */
 export function parseListPage(html) {
   try {
     if (!html) return []
+    const state = extractInitialState(html)
+    const results = Array.isArray(state?.results) ? state.results : []
     const out = []
-
-    // Cada resultado: <li class="ui-search-layout__item" ...> ... </li>.
-    // Troceamos por el marcador de apertura del item, igual que parse.mjs
-    // trocea por <article para Idealista.
-    const blocks = html.split(/<li[^>]+class="[^"]*ui-search-layout__item[^"]*"/).slice(1)
-    for (const raw of blocks) {
-      const block = raw
-
-      // ID de ficha: patrón MLC-<dígitos> en cualquier href de la tarjeta.
-      const idM = block.match(/MLC-?(\d+)/)
-      if (!idM) continue
-      const external_id = `MLC-${idM[1]}`
-
-      const urlM = block.match(/href="(https?:\/\/[^"]*portalinmobiliario\.com[^"]*MLC-?\d+[^"]*)"/i)
-      const source_url = urlM ? urlM[1] : `https://www.portalinmobiliario.com/MLC-${idM[1]}`
-
-      const titleM = block.match(/poly-component__title[^>]*>([^<]+)</)
-      const title = titleM ? decode(titleM[1]) : null
-
-      // Precio: bloque típico de Andes es
-      // <span class="andes-money-amount__fraction">123.456</span> con la
-      // moneda en un span hermano ("$" = CLP, "UF" = unidad de fomento).
-      const priceBlockM = block.match(/price[\s\S]{0,300}?andes-money-amount__fraction[^>]*>([\d.,]+)/i)
-      const price = priceBlockM ? toInt(priceBlockM[1]) : null
-      const currency = /\bUF\b/.test(block.slice(0, priceBlockM ? priceBlockM.index + 50 : 300)) ? 'UF' : 'CLP'
-
-      // Atributos tipo "3 dormitorios", "80 m² tot." en
-      // poly-component__attributes-item o similar.
-      const attrs = [...block.matchAll(/poly-component__attributes-item[^>]*>([^<]+)</g)].map((m) => decode(m[1]))
-      let bedrooms = null, square_meters = null
-      for (const a of attrs) {
-        if (/dormitorio|habitaci/i.test(a)) bedrooms = toInt(a)
-        else if (/m²|m2/i.test(a)) square_meters = toInt(a)
-      }
-
-      // Anunciante: Portalinmobiliario casi siempre es agencia/corredora;
-      // sin selector confirmado para particular vs profesional en el listado.
-      const advertiser_name = null
-      const advertiser_type = 'unknown'
-
-      out.push({
-        external_id,
-        source_url,
-        title, price, currency, bedrooms, square_meters,
-        advertiser_name, advertiser_type,
-      })
+    for (const r of results) {
+      if (r?.id !== 'POLYCARD' || !r.polycard) continue
+      const mapped = mapPolycard(r.polycard)
+      if (mapped) out.push(mapped)
     }
     return out
   } catch {

@@ -1,9 +1,11 @@
 # Investigación: scraper de Portalinmobiliario.com (Chile) y resolución de identidad de propiedad
 
-> Fase de research/diseño, con Fase 0 (spike de validación) ya confirmada contra 11 fichas
-> reales subidas por el usuario (no vía fetch en sandbox/entorno remoto, que sigue
-> bloqueando el dominio con 403 — ver "Confirmado en Fase 0" más abajo para lo verificado
-> y la sección de anti-bot para lo que aún no se ha medido en producción real).
+> Fase de research/diseño. Fase 0 confirmada primero contra 11 fichas de detalle reales
+> subidas por el usuario y, desde **2026-07-22**, también contra HTML de LISTADO en vivo:
+> el entorno de ejecución **ya alcanza el dominio (HTTP 200)** y se validó/reescribió
+> `parseListPage()` sobre el blob Nordic. Ver "Validación en vivo del LISTADO (2026-07-22)"
+> y "Confirmado en Fase 0" más abajo. Lo único que sigue sin medir es el rate-limit a
+> concurrencia sostenida (necesita el spike desde el VPS).
 
 ## Estructura de datos y anti-bot
 
@@ -124,6 +126,44 @@ con nivel de confianza, no una resolución determinista de una sola pasada.
 
 ## Apéndice — puntos abiertos para el spike de implementación
 
+### Validación en vivo del LISTADO (2026-07-22) — el entorno YA alcanza el dominio
+
+Contrario a lo que se asumía cuando se escribió este research ("el entorno remoto
+sigue bloqueando el dominio con 403"), hoy el dominio responde **HTTP 200** desde
+el entorno de ejecución. Eso permitió cerrar en vivo dos huecos de Fase 0 que solo
+tenían fichas de detalle pre-descargadas:
+
+- ✅ **`parseListPage()` reescrito y validado contra HTML real** (listado de Las
+  Condes venta/casa, 48 tarjetas). **Hallazgo crítico:** los resultados del listado
+  NO viven en `<li class="ui-search-layout__item">` del HTML — esos son
+  intervenciones (widgets de filtro/publicidad). Los anuncios reales están en el
+  MISMO blob Nordic que la ficha, en `initialState.results[].polycard`. El parser
+  viejo troceaba por `<li>` y "funcionaba" por accidente (coincidencias del string
+  escapadas dentro del JSON), devolviendo **basura con forma de datos**: tomaba un
+  id de FOTO (`891463-MLC110284448549_042026`) como `external_id` y nunca extraía
+  precio/atributos. El parser nuevo lee `polycard.metadata` (id/url/domain_id) +
+  `components[]` (title, price, attributes_list, location, seller) y saca 48/48
+  con precio + dormitorios + baños + m². Blindado con
+  `scraper/lib/parse-portalinmobiliario-list.test.mjs` (fixtures reales).
+- ✅ **Filtro de URL `/venta/casa/propiedades-usadas/<comuna>-metropolitana`
+  confirmado**: excluye proyectos nuevos server-side (48/48 usadas, 0
+  `DEVELOPMENT`). El `domain_id` del polycard además distingue
+  `INDIVIDUAL_HOUSES_FOR_SALE` (usada) de `DEVELOPMENT_HOUSES_FOR_SALE` (proyecto),
+  así que el discovery puede doble-filtrar. Validado en 4 comunas (Las Condes,
+  Vitacura, La Reina, Ñuñoa) y en casa+departamento — 48 resultados por página.
+- ✅ **API pública de Mercado Libre exige auth**: `GET api.mercadolibre.com/sites/MLC/search`
+  y `/sites/MLC` devuelven **HTTP 403 `forbidden`** sin `access_token` (no es el
+  proxy — `mindicador.cl` da 200 por la misma ruta). Confirma el "riesgo a validar"
+  del cuerpo del research: la API NO es usable de forma anónima. Se mantiene la
+  decisión de diseño del plan: **HTML/blob Nordic como fuente, API solo si se
+  registra OAuth** (y aun así no resolvería la ubicación no confiable).
+- ⚠️ **Rate-limit real a concurrencia 3-5: SIGUE ABIERTO.** La sonda fue cortés
+  (4 requests secuenciales, delay ~1.8s) → 0% de 429/403, pero eso NO es el spike
+  de concurrencia del VPS (H0): distinta IP, sin carga sostenida. El bloqueante de
+  Fase 2 a escala sigue necesitando `spike-rate-limit-vps.mjs` en el VPS real.
+- ⚠️ **Endpoint XHR de Convecta (H21): sin investigar todavía** — es trabajo de
+  Fase 4, no bloquea el pipeline de PI.
+
 ### Confirmado en Fase 0 (11 fichas reales)
 
 - ✅ La ficha expone un blob JSON embebido — `__NORDIC_RENDERING_CTX__`, no `__NEXT_DATA__`
@@ -157,15 +197,15 @@ con nivel de confianza, no una resolución determinista de una sola pasada.
 
 ### Aún abierto (no validado en esta Fase 0, ficha estática solamente)
 
-- No confirmado: si `/items/{id}` y `/sites/MLC/search` exigen `access_token` hoy. Sigue
-  sin ser prioritario porque la API tampoco resolvería el problema de ubicación no
-  confiable.
-- No confirmado: agresividad real de rate-limit (429 vs 403) o WAF perimetral con
-  concurrencia 3-5 — las 11 muestras fueron HTML ya descargado por el usuario, no un
-  barrido en vivo. Sigue siendo el bloqueante real antes de la Fase 2 a escala.
-- No confirmado: filtro de URL de listado para traer solo Departamento+Casa de RM (no se
-  subió HTML de listado en esta Fase 0, solo fichas de detalle — `parseListPage()` sigue
-  sin verificar contra HTML real).
+- ~~No confirmado: si `/items/{id}` y `/sites/MLC/search` exigen `access_token`~~ →
+  **RESUELTO 2026-07-22** (ver "Validación en vivo" arriba): la API pública devuelve
+  403 sin auth. HTML/blob Nordic queda como fuente.
+- **Parcialmente resuelto (2026-07-22):** agresividad real de rate-limit. Acceso
+  ligero secuencial desde el entorno = 0% de 429/403, pero la **concurrencia 3-5
+  sostenida sigue sin medir** — necesita `spike-rate-limit-vps.mjs` en el VPS.
+- ~~No confirmado: filtro de URL de listado + `parseListPage()` sin verificar~~ →
+  **RESUELTO 2026-07-22**: `parseListPage()` reescrito sobre el blob Nordic y validado
+  contra HTML real; el filtro `/propiedades-usadas/` excluye proyectos. (Ver arriba.)
 - Definir el umbral pin-vs-geocoder (propuesta inicial: 150 m) con una muestra real de
   decenas de anuncios, no solo el caso de ejemplo.
 - Decidir fuente de tipo de cambio UF→CLP diario y si se persiste también el valor UF
