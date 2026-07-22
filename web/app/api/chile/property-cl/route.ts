@@ -43,12 +43,23 @@ const LISTINGS_JSON = `
       'source_url', l.source_url,
       'is_active', l.is_active,
       'seller_reference', l.seller_reference,
+      'photos', COALESCE(l.photos, '[]'::jsonb),
       'last_seen_at', l.last_seen_at
     ) ORDER BY l.is_active DESC, l.price ASC NULLS LAST)
     FROM listings_cl l
     LEFT JOIN corredoras_cl cor ON cor.id = l.corredora_id
     WHERE l.property_cl_id = p.id
   ), '[]'::jsonb) AS listings
+`
+
+// Foto de portada: la primera foto del anuncio activo más reciente del grupo.
+const COVER_PHOTO = `
+  (SELECT l.photos->>0
+   FROM listings_cl l
+   WHERE l.property_cl_id = p.id
+     AND l.photos IS NOT NULL AND jsonb_array_length(l.photos) > 0
+   ORDER BY l.is_active DESC, l.last_seen_at DESC
+   LIMIT 1) AS cover_photo
 `
 
 export async function GET(request: NextRequest) {
@@ -138,6 +149,7 @@ export async function GET(request: NextRequest) {
         p.first_seen_at,
         p.last_seen_at,
         EXTRACT(DAY FROM (now() - p.first_seen_at))::int AS days_on_market,
+        ${COVER_PHOTO},
         ${LISTINGS_JSON}
       FROM property_cl p
       LEFT JOIN chile_comunas c ON c.id = p.comuna_id
