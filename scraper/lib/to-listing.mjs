@@ -144,7 +144,7 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
  * trae esos campos explícitos se respetan, si no se derivan de `currency`.
  * Devuelve null si no hay suficiente información (anuncio en UF sin tasa).
  */
-function resolvePriceClp(row, ufRate) {
+export function resolvePriceClp(row, ufRate) {
   if (row.price_clp != null) return Math.round(row.price_clp)
   if (row.price_uf != null && ufRate != null) return Math.round(row.price_uf * ufRate)
   if (row.price != null) {
@@ -154,7 +154,7 @@ function resolvePriceClp(row, ufRate) {
   return null
 }
 
-function resolvePriceUf(row) {
+export function resolvePriceUf(row) {
   if (row.price_uf != null) return row.price_uf
   return row.currency === 'UF' ? row.price ?? null : null
 }

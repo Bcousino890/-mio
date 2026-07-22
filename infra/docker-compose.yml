@@ -123,6 +123,28 @@ services:
       retries: 3
       start_period: 20s
 
+  # ── Worker 24/7 de Anuncios CL (pg-boss, plan Anuncios CL · H2) ────────────────
+  # Contenedor SEPARADO de `app` a propósito: si el scraper de Chile se cuelga o
+  # se satura, no debe tumbar el CRM. mem_limit explícito porque el worker NO
+  # usa Playwright (ver worker-cl.mjs) — es liviano (curl+parseo+Postgres), pero
+  # el CX33 es compartido y cualquier proceso 24/7 nuevo necesita un techo duro.
+  worker-cl:
+    build:
+      context: ../scraper
+      dockerfile: Dockerfile
+    image: casafari-worker-cl:latest
+    container_name: casafari-worker-cl
+    restart: unless-stopped
+    mem_limit: 512m
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Sin `ports:` — es un worker de fondo, no expone HTTP.
+
 volumes:
   pgdata:
   redisdata:

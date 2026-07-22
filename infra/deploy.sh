@@ -97,8 +97,19 @@ if [ -n "$SHARED_NGINX" ]; then
   DOMAIN="$DOMAIN" SHARED_NGINX="$SHARED_NGINX" bash "$REPO_DIR/infra/ensure-tls.sh" || true
 fi
 
-echo "▶ [5/5] Aplicando migraciones SQL..."
+echo "▶ [5/6] Aplicando migraciones SQL..."
 bash "$REPO_DIR/infra/post-deploy.sh" || true
+
+# Worker 24/7 de Anuncios CL (H2): se construye AQUÍ, en el VPS, a diferencia
+# de `app` — su Dockerfile es liviano (node:20-bookworm-slim + npm ci, sin
+# chromium/geopandas) y no arriesga el OOM que obligó a mover el build de la
+# app al runner de GitHub. Arranca DESPUÉS de las migraciones a propósito:
+# worker-cl.mjs lee scrape_targets_cl/property_cl/etc. desde el primer
+# segundo (boss.start() + createQueue), así que el esquema debe estar al día
+# antes de levantarlo. `|| true`: un fallo del worker no debe revertir el
+# deploy de la app (que ya sirve tráfico real).
+echo "▶ [6/6] Construyendo y levantando worker-cl (Anuncios CL)..."
+$COMPOSE build worker-cl && $COMPOSE up -d --no-deps worker-cl || echo "⚠ worker-cl no se pudo levantar (revisar logs: docker compose -p casafari logs worker-cl)"
 
 echo ""
 echo "✅ Deploy completado → https://$DOMAIN"
