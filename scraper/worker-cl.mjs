@@ -24,15 +24,15 @@
  *                         corredoras on-demand (boss.send) sin correr todo el
  *                         pipeline. El refresco periódico ya lo hace dedup-cluster-cl.
  *
- * Cola registrada pero SIN handler real todavía:
- *   - discovery-cl → el patrón de URL de listado de Portal Inmobiliario NO
- *     está confirmado contra HTML real (docs/research-portalinmobiliario-chile.md
- *     lo marca explícitamente "no confirmado"). Implementarlo ahora sería
- *     adivinar y arriesgar requests mal formados contra el portal real. El
- *     handler queda como stub (loguea y no toca la red) hasta que el spike
- *     de Fase 0 (H0) confirme el patrón — entonces se completa este archivo,
- *     no se reescribe: la cola, el registro en pg-boss y el resto del worker
- *     ya están listos para recibirlo.
+ *   - discovery-scheduler-cl → periódico (cada 15min): lee scrape_targets_cl y
+ *                         encola un discovery-cl por cada comuna `enabled` cuya
+ *                         cadencia (interval_hours) venció. Config-driven: no hay
+ *                         comunas hardcodeadas (H8).
+ *   - discovery-cl      → barre una comuna (discoverTarget, H1): pagina el listado
+ *                         de usadas, encola detail-cl de los anuncios nuevos y
+ *                         marca las bajas. El patrón de URL/paginación quedó
+ *                         confirmado en Fase 0 contra HTML real (ver
+ *                         docs/research-portalinmobiliario-chile.md).
  *
  * Cada handler de trabajo se expone como función nombrada e inyectable
  * (mismo patrón de dependency injection que resilient-fetch.mjs/dedup-cl.mjs)
@@ -48,6 +48,7 @@ import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
+import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -55,6 +56,7 @@ export const QUEUES = {
   DEDUP_CLUSTER: 'dedup-cluster-cl',
   BROKER_ENRICH: 'broker-enrich-cl',
   DISCOVERY: 'discovery-cl',
+  DISCOVERY_SCHEDULER: 'discovery-scheduler-cl',
 }
 
 /**
@@ -140,10 +142,32 @@ export async function handleBrokerEnrichJob(dbClient, deps = {}) {
   return res
 }
 
-/** Job `discovery-cl`: stub, ver cabecera del archivo. Nunca toca la red. */
-export async function handleDiscoveryJob(jobData) {
-  console.warn(`[discovery] PENDIENTE (Fase 0/H1): ${JSON.stringify(jobData)} — ver docs/PLAN-ANUNCIOS-CL.md`)
-  return { ok: false, reason: 'pending_fase_0' }
+/**
+ * Job `discovery-cl` (H1): barre una comuna y encola detail-cl de lo nuevo.
+ * `deps.enqueueDetail` inyectable; en producción encola en la cola detail-cl.
+ */
+export async function handleDiscoveryJob(dbClient, jobData, deps = {}) {
+  const { discover = discoverTarget, enqueueDetail } = deps
+  const target = jobData?.target
+  if (!target?.id) {
+    console.error('[discovery] job sin target válido:', JSON.stringify(jobData))
+    return { ok: false, reason: 'sin target' }
+  }
+  const res = await discover(dbClient, target, { enqueueDetail })
+  console.log(`[discovery] ${target.comuna_name} ${target.operation}: ${JSON.stringify(res)}`)
+  return { ok: true, ...res }
+}
+
+/**
+ * Job `discovery-scheduler-cl` (periódico): encola un discovery-cl por cada
+ * comuna `enabled` cuya cadencia venció. `deps` inyectables para test.
+ */
+export async function handleDiscoverySchedulerJob(dbClient, deps = {}) {
+  const { select = selectDueTargets, enqueueDiscovery = async () => {} } = deps
+  const targets = await select(dbClient)
+  for (const target of targets) await enqueueDiscovery(target)
+  console.log(`[discovery-scheduler] ${targets.length} comunas encoladas`)
+  return { enqueued: targets.length }
 }
 
 async function main() {
@@ -194,9 +218,23 @@ async function main() {
   // refresco periódico de corredoras ya lo hace el pipeline de dedup-cluster.
   await boss.work(QUEUES.BROKER_ENRICH, async () => { await handleBrokerEnrichJob(dbClient) })
 
+  // Discovery (H1): el scheduler lee scrape_targets_cl y encola un barrido por
+  // comuna `enabled` vencida; cada discovery-cl pagina el listado y encola los
+  // detail-cl nuevos. Config-driven — activar más comunas es un UPDATE, sin código.
   await boss.work(QUEUES.DISCOVERY, async (jobs) => {
-    for (const job of jobs) await handleDiscoveryJob(job.data)
+    for (const job of jobs) {
+      await handleDiscoveryJob(dbClient, job.data, {
+        enqueueDetail: (externalId, sourceUrl) => boss.send(QUEUES.DETAIL, { externalId, sourceUrl }),
+      })
+    }
   })
+
+  await boss.work(QUEUES.DISCOVERY_SCHEDULER, async () => {
+    await handleDiscoverySchedulerJob(dbClient, {
+      enqueueDiscovery: (target) => boss.send(QUEUES.DISCOVERY, { target }),
+    })
+  })
+  await boss.schedule(QUEUES.DISCOVERY_SCHEDULER, '*/15 * * * *')
 
   console.log(`[worker-cl] arrancado. Colas: ${Object.values(QUEUES).join(', ')}`)
 

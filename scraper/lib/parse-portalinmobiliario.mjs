@@ -282,6 +282,30 @@ export function parseListPage(html) {
 }
 
 /**
+ * Metadatos de paginación/cobertura de una página de listado, desde el mismo
+ * blob Nordic. Los usa el discovery crawler (H1) para saber cuántas páginas hay
+ * (`pageCount`) y cuántos resultados declara el portal (`total`) — este último
+ * alimenta `scrape_targets_cl.portal_reported_count`, base del gate de cobertura
+ * ≥90% (H17/H22). Nunca lanza; devuelve nulls si no calza la estructura.
+ *
+ * @returns {{ total: number|null, pageCount: number|null }}
+ */
+export function parseListMeta(html) {
+  try {
+    const state = extractInitialState(html)
+    const md = state?.melidata_track?.event_data ?? state?.melidata_track ?? null
+    const rawTotal = md?.total
+    const rawPages = state?.pagination?.page_count
+    return {
+      total: Number.isFinite(rawTotal) ? rawTotal : null,
+      pageCount: Number.isFinite(rawPages) ? rawPages : null,
+    }
+  } catch {
+    return { total: null, pageCount: null }
+  }
+}
+
+/**
  * Parsea la ficha de detalle de Portalinmobiliario. Devuelve el objeto con
  * los mismos campos "core" que produce parseDetailPage de Idealista (en lo
  * que aplique a Chile) o `null` si no se pudo extraer nada coherente.
