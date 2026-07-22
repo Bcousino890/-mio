@@ -25,6 +25,7 @@
 // mejora la calidad de los campos "duros" (precio, superficie, etc.).
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFile } from 'node:child_process'
+import { withResilience } from './resilient-fetch.mjs'
 
 const API_BASE = 'https://api.mercadolibre.com'
 const SITE_ID = 'MLC'
@@ -113,4 +114,18 @@ export async function getItem(itemId) {
   if (!itemId) return { ok: false, status: 0, reason: 'itemId vacío' }
   const url = `${API_BASE}/items/${encodeURIComponent(itemId)}`
   return curlJson(url)
+}
+
+// searchListings/getItem + reintentos con backoff + circuit-breaker (H16, ver
+// resilient-fetch.mjs). API_BASE fijo como URL para que withResilience derive
+// siempre el mismo dominio ('api.mercadolibre.com'), aunque searchListings/
+// getItem construyan su propia URL internamente — el fetchImpl cierra sobre
+// los parámetros reales y withResilience solo lo usa como "reintentar esto".
+
+export function searchListingsResilient(params, resilienceOptions = {}) {
+  return withResilience(() => searchListings(params), API_BASE, resilienceOptions)
+}
+
+export function getItemResilient(itemId, resilienceOptions = {}) {
+  return withResilience(() => getItem(itemId), API_BASE, resilienceOptions)
 }
