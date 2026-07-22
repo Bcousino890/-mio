@@ -47,6 +47,7 @@ import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
+import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
@@ -116,20 +117,27 @@ export async function handleMediaSyncJob(dbClient, jobData, deps = {}) {
 
 /**
  * Job `dedup-cluster-cl` (periódico): pipeline de dedup en una pasada ordenada
- * Nivel 1 → Nivel 2 → consolidación de corredoras. El orden NO es opcional: la
- * exclusividad de cada corredora depende del corredora_count final de property_cl,
- * que solo queda correcto tras fusionar los grupos en el Nivel 2 (ver dedup-cl.mjs).
+ * Nivel 1 → Nivel 2 → enlace por código interno (Nivel 1.5) → consolidación de
+ * corredoras. El orden NO es opcional: la exclusividad de cada corredora depende
+ * del corredora_count final de property_cl, que solo queda correcto tras fusionar
+ * los grupos en el Nivel 2 y sumar las fichas de webs propias (Nivel 1.5) al
+ * inmueble canónico (ver dedup-cl.mjs y link-internal-code-cl.mjs).
  * `deps` inyectables para test.
  */
 export async function handleDedupClusterJob(dbClient, deps = {}) {
   const {
     nivel1 = runNivel1DedupCl,
     nivel2 = runNivel2ClusteringCl,
+    link15 = runInternalCodeLinkCl,
     broker = runCorredoraConsolidationCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
     nivel2: await nivel2(dbClient),
+    // Nivel 1.5 (H21): engancha las fichas de webs propias (agency_web) al
+    // property_cl del anuncio de PI de la misma corredora por código interno.
+    // Va tras Nivel 1/2 (los portales ya tienen property_cl) y antes de broker.
+    link15: await link15(dbClient),
     broker: await broker(dbClient),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
