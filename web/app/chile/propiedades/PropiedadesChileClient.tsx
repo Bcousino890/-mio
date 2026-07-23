@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
-  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus,
+  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
 } from 'lucide-react'
 
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -75,7 +75,20 @@ const CONF: Record<string, { t: string; dot: string; badge: string }> = {
   confirmed: { t: 'Ubicación confirmada', dot: 'bg-emerald-400', badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
   candidate: { t: 'Ubicación probable', dot: 'bg-blue-400', badge: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
   pin_suspect: { t: 'Pin sospechoso', dot: 'bg-rose-400', badge: 'bg-rose-500/15 text-rose-300 border-rose-500/30' },
-  none: { t: 'Sin ubicar', dot: 'bg-slate-500', badge: 'bg-slate-600/30 text-slate-400 border-slate-600/40' },
+  // "none" = todavía no se triangulό contra el Rol SII — NO significa que no
+  // haya coordenadas (el aviso casi siempre trae pin propio, ver DetailMap).
+  // "Sin ubicar" confundía al equipo (el mapa de abajo sí muestra pin).
+  none: { t: 'Sin confirmar (SII)', dot: 'bg-slate-500', badge: 'bg-slate-600/30 text-slate-400 border-slate-600/40' },
+}
+
+// "En mercado": 300 días es difícil de leer de un vistazo — a partir de 30
+// días se expresa en meses (igual que el helper `timeSince` de la ficha ES,
+// ver app/anuncios/[id]/page.tsx).
+function marketTime(days: number | null): string {
+  if (days == null) return '—'
+  if (days < 30) return `${days} día${days === 1 ? '' : 's'}`
+  const months = Math.round(days / 30)
+  return `${months} ${months === 1 ? 'mes' : 'meses'}`
 }
 
 // Rango de precios entre corredoras (el insight de "en canje").
@@ -110,7 +123,7 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
             </span>
           ) : <span />}
           <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-black/55 text-slate-200 backdrop-blur-sm" title={conf.t}>
-            <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {p.location_confidence === 'confirmed' ? 'Rol SII' : 'sin ubicar'}
+            <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {p.location_confidence === 'confirmed' ? 'Rol SII' : 'sin confirmar'}
           </span>
         </div>
         <span className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 rounded-full bg-black/60 text-slate-200 backdrop-blur-sm capitalize">
@@ -133,7 +146,7 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
         </div>
         <div className="flex items-center gap-1 mt-1.5 text-xs text-slate-400 truncate">
           <MapPin size={12} className="text-slate-500 shrink-0" /> {p.comuna_name || 'Sin comuna'}
-          {p.days_on_market != null && <><span className="text-slate-600">·</span><span className="inline-flex items-center gap-1"><CalendarClock size={11} /> {p.days_on_market}d</span></>}
+          {p.days_on_market != null && <><span className="text-slate-600">·</span><span className="inline-flex items-center gap-1"><CalendarClock size={11} /> {marketTime(p.days_on_market)}</span></>}
         </div>
       </div>
     </button>
@@ -168,13 +181,28 @@ function CorredoraThumb({ src }: { src?: string }) {
 }
 
 // ─── Modal / ficha interna ──────────────────────────────────────────────────
-function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
+function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () => void; onRefetched: (p: Property) => void }) {
+  const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
+  const cheapest = sortedListings.find(l => l.price != null)?.listing_id
+
+  // Cada corredora trae su propio set de fotos del mismo inmueble — mezclarlas
+  // en una sola galería confundía cuál foto era de qué aviso (y de paso hacía
+  // "Ver original"/"Re-scrapear" ambiguos sobre cuál aviso actuar). Ahora son
+  // fichas clicables por corredora: una pestaña por listing con fotos, cada
+  // una con su propia galería.
+  const photoListings = useMemo(() => sortedListings.filter(l => (l.photos?.length ?? 0) > 0), [sortedListings])
+  const [activeListingId, setActiveListingId] = useState<string | null>(() => photoListings[0]?.listing_id ?? null)
+  useEffect(() => {
+    setActiveListingId(prev => photoListings.some(l => l.listing_id === prev) ? prev : (photoListings[0]?.listing_id ?? null))
+  }, [photoListings])
+  const activeListing = photoListings.find(l => l.listing_id === activeListingId) ?? photoListings[0]
   const gallery = useMemo(() => {
-    const all = [p.cover_photo, ...p.listings.flatMap(l => l.photos || [])].filter((x): x is string => !!x)
-    return Array.from(new Set(all))
-  }, [p])
+    if (activeListing?.photos?.length) return activeListing.photos
+    return p.cover_photo ? [p.cover_photo] : []
+  }, [activeListing, p.cover_photo])
   const [idx, setIdx] = useState(0)
   const [imgError, setImgError] = useState(false)
+  useEffect(() => { setIdx(0); setImgError(false) }, [activeListingId])
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
 
@@ -226,8 +254,37 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
       setSavingPin(false)
     }
   }, [p.id])
-  const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
-  const cheapest = sortedListings.find(l => l.price != null)?.listing_id
+  // Re-scrapea el aviso de la corredora activa (la pestaña seleccionada en la
+  // galería) bajo demanda, en vez de esperar el próximo barrido programado de
+  // esa comuna, y refresca la propiedad completa para que fotos/precio queden
+  // al día en la ficha.
+  const [refetching, setRefetching] = useState(false)
+  const [refetchMsg, setRefetchMsg] = useState<string | null>(null)
+  const doRefetch = useCallback(async () => {
+    if (!activeListing || refetching) return
+    setRefetching(true)
+    setRefetchMsg(null)
+    try {
+      const res = await fetch('/api/chile/listings-cl/refetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: activeListing.listing_id }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setRefetchMsg('Aviso actualizado ✓')
+        const refreshed = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(p.id)}`).then(r => r.json())
+        if (refreshed.success && refreshed.data) onRefetched(refreshed.data)
+      } else {
+        setRefetchMsg(data.error ?? 'Error al re-scrapear')
+      }
+    } catch {
+      setRefetchMsg('Error al re-scrapear')
+    } finally {
+      setRefetching(false)
+      setTimeout(() => setRefetchMsg(null), 4000)
+    }
+  }, [activeListing, refetching, p.id, onRefetched])
 
   const prev = useCallback(() => { setImgError(false); setIdx(i => (i - 1 + gallery.length) % gallery.length) }, [gallery.length])
   const next = useCallback(() => { setImgError(false); setIdx(i => (i + 1) % gallery.length) }, [gallery.length])
@@ -260,6 +317,21 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
           ) : (
             <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageOff size={40} /></div>
           )}
+          <div className="absolute top-3 left-3 flex items-center gap-2">
+            <button onClick={doRefetch} disabled={refetching || !activeListing}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-blue-600/90 text-white hover:bg-blue-600 disabled:opacity-50 backdrop-blur-sm shadow">
+              <RefreshCw size={13} className={refetching ? 'animate-spin' : ''} /> {refetching ? 'Re-scrapeando…' : 'Re-scrapear'}
+            </button>
+            {activeListing?.source_url && (
+              <a href={activeListing.source_url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm shadow">
+                <ExternalLink size={13} /> Ver original
+              </a>
+            )}
+          </div>
+          {refetchMsg && (
+            <span className="absolute top-12 left-3 text-[11px] px-2 py-1 rounded-full bg-black/70 text-emerald-300 shadow">{refetchMsg}</span>
+          )}
           <button onClick={onClose} className="absolute top-3 right-3 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/80"><X size={18} /></button>
           {gallery.length > 1 && (
             <>
@@ -269,6 +341,17 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
             </>
           )}
         </div>
+        {/* Fichas por corredora — cada una con su propia galería, sin mezclar fotos */}
+        {photoListings.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto px-4 pt-2.5 bg-slate-900/40">
+            {photoListings.map(l => (
+              <button key={l.listing_id} onClick={() => setActiveListingId(l.listing_id)}
+                className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full border transition-colors capitalize ${l.listing_id === activeListing?.listing_id ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500'}`}>
+                {l.advertiser_name || 'Corredora'} · {l.photos.length}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Thumbnails */}
         {gallery.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto px-4 py-2 bg-slate-900/40">
@@ -302,7 +385,7 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
             <FieldCell icon={<Ruler size={13} />} label="Superficie" value={p.square_meters != null ? `${p.square_meters} m²` : '—'} />
             <FieldCell icon={<TrendingDown size={13} />} label="Precio / m²" value={p.price_sqm ? `${clpShort(p.price_sqm)}/m²` : '—'} />
             <FieldCell icon={<MapPin size={13} />} label="Comuna" value={p.comuna_name || '—'} />
-            <FieldCell icon={<CalendarClock size={13} />} label="En mercado" value={p.days_on_market != null ? `${p.days_on_market} días` : '—'} />
+            <FieldCell icon={<CalendarClock size={13} />} label="En mercado" value={marketTime(p.days_on_market)} />
           </div>
 
           {(() => {
@@ -687,7 +770,7 @@ export default function PropiedadesChileClient() {
         )}
       </div>
 
-      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} />}
+      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} onRefetched={setSelected} />}
     </div>
   )
 }

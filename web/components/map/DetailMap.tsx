@@ -30,9 +30,12 @@ const TILE_LAYERS = {
   },
   // Mismo patrón ya usado en components/map/StreetViewMap.tsx (visor de
   // catastro): tiles satelitales de Google servidos directo, sin API key.
+  // Google solo sirve mt0-mt3 — sin `subdomains` explícito, Leaflet usa su
+  // default ['a','b','c'] y pide mta/mtb/mtc (404), dejando el mapa en gris.
   satellite: {
     url: 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
     attribution: '',
+    subdomains: ['0', '1', '2', '3'],
   },
 }
 
@@ -70,7 +73,11 @@ export default function DetailMap({
       })
 
       const tile = TILE_LAYERS[tileStyle]
-      L.tileLayer(tile.url, { attribution: tile.attribution, maxZoom: 20 }).addTo(map)
+      L.tileLayer(tile.url, {
+        attribution: tile.attribution,
+        maxZoom: 20,
+        ...('subdomains' in tile ? { subdomains: tile.subdomains } : {}),
+      }).addTo(map)
 
       L.control.zoom({ position: 'topright' }).addTo(map)
 
