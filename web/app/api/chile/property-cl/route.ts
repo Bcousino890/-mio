@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { extractListing, findRolAtPoint, setRolFromPin } from '@/lib/captar-pipeline'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/property-cl — propiedades CANÓNICAS deduplicadas (plan Anuncios CL
@@ -228,12 +229,22 @@ export async function GET(request: NextRequest) {
 // anuncio, ver 0064/0077) — es un segundo pin aparte para poder comparar en la
 // ficha. Guardarlo marca location_confidence='confirmed' (reusa el enum: un
 // humano confirmando la ubicación a mano es el caso de máxima confianza).
-// Body: { id: string, latitude: number, longitude: number } — o
-// { id, latitude: null, longitude: null } para borrar el pin manual.
+// Body: { id: string, latitude: number, longitude: number, source_url?: string }
+// — o { id, latitude: null, longitude: null } para borrar el pin manual.
+//
+// Si viene `source_url` (el aviso cuya ubicación declarada se está
+// corrigiendo) y se está guardando un pin (no borrando), además:
+//   1. busca la parcela SII que contiene ese punto (findRolAtPoint — mismo
+//      point-in-polygon que el visor de catastro), y
+//   2. crea/actualiza la captación de ese aviso en captaciones_cl con ese rol
+//      ya resuelto (setRolFromPin) — así el pin corregido a mano entra solo
+//      al pipeline de captación (dueño vía TGR, contacto vía DealerNet) sin
+//      que el equipo tenga que volver a pegar la URL en /chile/captar-url.
+// Es best-effort: si falla, el pin igual queda guardado.
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, latitude, longitude } = body ?? {}
+    const { id, latitude, longitude, source_url } = body ?? {}
 
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
@@ -256,7 +267,26 @@ export async function PATCH(request: NextRequest) {
     if (rows.length === 0) {
       return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
     }
-    return NextResponse.json({ success: true, data: rows[0] })
+
+    let captacion: { id: string; sii_rol: string | null; comuna_name: string | null } | null = null
+    let captacionError: string | null = null
+    if (!clearing && typeof source_url === 'string' && source_url) {
+      try {
+        const rolHit = await findRolAtPoint(latitude, longitude)
+        const { captacion: c } = await extractListing(source_url)
+        if (rolHit) {
+          const updated = await setRolFromPin(c.id, rolHit.rol, rolHit.sii_comuna_code)
+          captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rolHit.comuna_name }
+        } else {
+          captacion = { id: c.id, sii_rol: null, comuna_name: null }
+          captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
+        }
+      } catch (e) {
+        captacionError = e instanceof Error ? e.message : 'Error al buscar el rol / guardar en captación'
+      }
+    }
+
+    return NextResponse.json({ success: true, data: rows[0], captacion, captacion_error: captacionError })
   } catch (error) {
     console.error('Error guardando pin manual de property_cl:', error)
     return NextResponse.json(

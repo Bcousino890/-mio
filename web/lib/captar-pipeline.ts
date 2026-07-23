@@ -13,6 +13,7 @@
 // certificado TGR se cruza después contra la dirección SII — si no calzan, la
 // captación vuelve a revisión (ver crossCheckTgrAddress).
 import { pool } from '@/lib/db'
+import { ProxyAgent, type Dispatcher } from 'undici'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import {
@@ -155,9 +156,22 @@ export function extractFromSlug(url: string): Record<string, string | number | n
   return info
 }
 
-export async function fetchListingPage(url: string): Promise<string> {
-  const cleanUrl = url.split('#')[0].split('?')[0]
-  const res = await fetch(cleanUrl, {
+// Mismo criterio de proxy que scraper/lib/fetch.mjs (proxyUrl()) — variables
+// de entorno compartidas con el scraper standalone, prioridad idéntica:
+// SMARTPROXY_URL / PROXY_URL (genéricos) → Evomi CL (H10, activo) →
+// SmartProxy CL (legacy).
+function chileProxyUrl(): string | null {
+  if (process.env.SMARTPROXY_URL) return process.env.SMARTPROXY_URL
+  if (process.env.PROXY_URL) return process.env.PROXY_URL
+  const { EVOMI_PROXY_HOST, EVOMI_PROXY_PORT, EVOMI_PROXY_USER, EVOMI_PROXY_PASS } = process.env
+  if (EVOMI_PROXY_USER) return `http://${EVOMI_PROXY_USER}:${EVOMI_PROXY_PASS}@${EVOMI_PROXY_HOST}:${EVOMI_PROXY_PORT}`
+  const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
+  if (SMARTPROXY_CL_USER) return `http://${SMARTPROXY_CL_USER}:${SMARTPROXY_CL_PASS}@${SMARTPROXY_CL_HOST}:${SMARTPROXY_CL_PORT}`
+  return null
+}
+
+async function fetchListingPageVia(url: string, proxy: string | null): Promise<{ status: number; html: string }> {
+  const init: RequestInit & { dispatcher?: Dispatcher } = {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -171,9 +185,50 @@ export async function fetchListingPage(url: string): Promise<string> {
       'Sec-Fetch-Site': 'none',
     },
     signal: AbortSignal.timeout(10000),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.text()
+  }
+  if (proxy) init.dispatcher = new ProxyAgent(proxy)
+  const res = await fetch(url, init)
+  return { status: res.status, html: await res.text() }
+}
+
+/**
+ * Fetch de una ficha de Portal Inmobiliario, DIRECTO primero (igual que
+ * scraper/lib/fetch.mjs `fetchHtmlPi` — PI no tiene anti-bot agresivo tipo
+ * DataDome, el directo suele bastar). Si el directo viene bloqueado (403/
+ * IP de datacenter) o sirve la variante "ligera" sin el blob Nordic (el
+ * parser saca 0 de ella), cae al proxy residencial (Evomi/SmartProxy CL) SOLO
+ * si hay uno configurado — evita que el botón "Re-scrapear" de la ficha
+ * (que corre en el mismo servidor que la web, sin el proxy del scraper 24/7)
+ * falle en seco con HTTP 403.
+ */
+export async function fetchListingPage(url: string): Promise<string> {
+  const cleanUrl = url.split('#')[0].split('?')[0]
+  const hasBlob = (html: string) => html.includes('__NORDIC_RENDERING_CTX__')
+
+  let direct: { status: number; html: string } | null = null
+  let directErr: unknown = null
+  try {
+    direct = await fetchListingPageVia(cleanUrl, null)
+    if (direct.status === 200 && hasBlob(direct.html)) return direct.html
+  } catch (e) {
+    directErr = e
+  }
+
+  const proxy = chileProxyUrl()
+  if (proxy) {
+    try {
+      const proxied = await fetchListingPageVia(cleanUrl, proxy)
+      if (proxied.status === 200) return proxied.html
+    } catch {
+      // sin proxy que responda, se degrada al resultado directo de abajo
+    }
+  }
+
+  if (direct) {
+    if (direct.status !== 200) throw new Error(`HTTP ${direct.status}`)
+    return direct.html // 200 sin blob Nordic — variante ligera, mejor que nada
+  }
+  throw directErr instanceof Error ? directErr : new Error('No se pudo descargar la página')
 }
 
 // ─── Candidatos SII con scoring V3 ───────────────────────────────────────────
@@ -812,6 +867,50 @@ export async function selectRolManual(captacionId: string, rol: string): Promise
      WHERE id = $1 RETURNING *`,
     [captacionId, chosen.rol, chosen.direccion, chosen.match_score, JSON.stringify(chosen.match_result_v3.signals)],
   )
+  await syncListingIdentity(rows[0] as CaptacionRow)
+  return rows[0] as CaptacionRow
+}
+
+// ─── Rol SII a partir de un punto (pin corregido a mano en la ficha) ────────
+
+export interface RolAtPoint { rol: string; comuna_name: string; sii_comuna_code: string }
+
+/** Parcela SII que contiene el punto dado (point-in-polygon sobre el catastro
+ * ya cargado, mismo criterio que /api/chile/parcels-bbox). Se usa cuando el
+ * equipo arrastra el "pin corregido" de la ficha: esa corrección ES la
+ * ubicación real, así que el rol se resuelve por geometría en vez de
+ * depender del matching de texto/candidatos de matchRol(). */
+export async function findRolAtPoint(lat: number, lng: number): Promise<RolAtPoint | null> {
+  const { rows } = await pool.query(
+    `SELECT p.rol, cc.name AS comuna_name, cc.sii_comuna_code
+     FROM cadastre_parcels_cl p
+     JOIN chile_comunas cc ON cc.id = p.comuna_id
+     WHERE p.rol IS NOT NULL
+       AND ST_Contains(p.geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+     LIMIT 1`,
+    [lng, lat],
+  )
+  return (rows[0] as RolAtPoint) ?? null
+}
+
+/**
+ * Fija el rol SII resuelto por geometría (findRolAtPoint) directo sobre la
+ * captación — a diferencia de selectRolManual() no exige que el rol esté
+ * entre `candidates` (esos vienen del scoring por texto/dirección; un pin
+ * arrastrado a mano y cruzado contra el polígono catastral es evidencia más
+ * directa que cualquier candidato de esa lista).
+ */
+export async function setRolFromPin(captacionId: string, rol: string, siiComunaCode: string | null): Promise<CaptacionRow> {
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       sii_rol = $2,
+       sii_comuna_code = COALESCE($3, sii_comuna_code),
+       match_confidence = 'manual', match_method = 'manual_pin', match_score = 1,
+       stage = 'matched', needs_review = false, review_reason = NULL, updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [captacionId, rol, siiComunaCode],
+  )
+  if (!rows[0]) throw new Error('Captación no encontrada')
   await syncListingIdentity(rows[0] as CaptacionRow)
   return rows[0] as CaptacionRow
 }
