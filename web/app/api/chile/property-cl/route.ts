@@ -52,6 +52,9 @@ const LISTINGS_JSON = `
       'square_meters', l.square_meters,
       'bedrooms', l.bedrooms,
       'bathrooms', l.bathrooms,
+      'has_video', l.has_video,
+      'video_modal_url', l.video_modal_url,
+      'stored_video', l.stored_video,
       'last_seen_at', l.last_seen_at
     ) ORDER BY l.is_active DESC, l.price ASC NULLS LAST)
     FROM listings_cl l

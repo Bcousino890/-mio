@@ -55,6 +55,7 @@ function detectChangeType(existing, next) {
   const photosCountAfter = Array.isArray(next.photos) ? next.photos.length : 0
   const somethingElseChanged =
     photosCountBefore !== photosCountAfter ||
+    Boolean(existing.has_video) !== Boolean(next.has_video) ||
     existing.description !== next.description ||
     existing.square_meters !== next.square_meters ||
     existing.bedrooms !== next.bedrooms ||
@@ -74,7 +75,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const { ufRate = null, ufRateDate = null, scrapedAt = new Date() } = options
 
   const { rows: existingRows } = await client.query(
-    `SELECT id, price, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active
+    `SELECT id, price, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
      FROM listings_cl WHERE portal = $1 AND external_id = $2`,
     [parsed.portal ?? 'portalinmobiliario', parsed.external_id]
   )
@@ -92,6 +93,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
     square_meters: parsed.square_meters ?? null,
     bedrooms: parsed.bedrooms ?? null,
     bathrooms: parsed.bathrooms ?? null,
+    has_video: parsed.has_video ?? false,
     is_active: true, // solo llegamos aquí si la ficha SÍ se pudo fetch/parsear ahora
   }
 
@@ -102,12 +104,12 @@ export async function upsertListingCl(client, parsed, options = {}) {
        portal, source_type, external_id, source_url, operation, advertiser_type, advertiser_name, phone,
        price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos,
-       property_code, advertiser_id, seller_reference, features,
+       property_code, advertiser_id, seller_reference, features, has_video, video_modal_url,
        status, is_active, last_seen_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
        $18,$19,$20,$21,$22,$23,$24,$25,
-       $26,$27,$28,$30,
+       $26,$27,$28,$30,$31,$32,
        'active', true, $29, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
@@ -122,6 +124,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
        longitude = EXCLUDED.longitude, description = EXCLUDED.description, photos = EXCLUDED.photos,
        property_code = EXCLUDED.property_code, advertiser_id = EXCLUDED.advertiser_id,
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
+       has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
        status = 'active', is_active = true, last_seen_at = EXCLUDED.last_seen_at, updated_at = now()
      RETURNING id`,
     [
@@ -134,6 +137,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       parsed.property_code ?? null, parsed.advertiser_id ?? null, parsed.seller_reference ?? null,
       scrapedAt,
       JSON.stringify(parsed.features ?? []),
+      parsed.has_video ?? false, parsed.video_modal_url ?? null,
     ]
   )
   const listingId = upserted[0].id
