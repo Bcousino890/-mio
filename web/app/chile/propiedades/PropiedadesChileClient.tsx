@@ -27,6 +27,7 @@ type Listing = {
 }
 type Property = {
   id: string
+  ref_code: string | null
   operation: string | null
   property_type: string | null
   canonical_price: number | null
@@ -109,6 +110,7 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
         </span>
       </div>
       <div className="p-3">
+        {p.ref_code && <div className="text-[10px] font-mono text-amber-400/80 mb-0.5">{p.ref_code}</div>}
         <div className="flex items-baseline justify-between gap-2">
           <div className="text-lg font-bold text-slate-100">{clp(p.canonical_price)}</div>
           {p.price_sqm ? <div className="text-[11px] text-slate-500 shrink-0">{clpShort(p.price_sqm)}/m²</div> : null}
@@ -224,6 +226,7 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
         <div className="p-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
+              {p.ref_code && <div className="text-[11px] font-mono font-semibold text-amber-400 mb-1">{p.ref_code}</div>}
               <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-0.5">{p.operation === 'rent' ? 'Precio arriendo' : 'Precio venta'}</div>
               <div className="text-2xl font-bold text-slate-100">{clp(p.canonical_price)}</div>
               {p.canonical_price_uf && <div className="text-xs text-slate-500">≈ {Number(p.canonical_price_uf).toLocaleString('es-CL')} UF{p.price_sqm ? ` · ${clp(p.price_sqm)}/m²` : ''}</div>}

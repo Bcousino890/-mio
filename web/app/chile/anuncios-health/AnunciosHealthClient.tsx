@@ -63,9 +63,9 @@ export default function AnunciosHealthClient() {
       .finally(() => setLoading(false))
   }, [])
 
-  const rerun = useCallback(() => {
+  const rerun = useCallback((refetch = false) => {
     setRerunning(true); setRerunMsg(null)
-    fetch('/api/chile/anuncios-health', { method: 'POST' })
+    fetch(`/api/chile/anuncios-health${refetch ? '?refetch=1' : ''}`, { method: 'POST' })
       .then(r => r.json())
       .then(d => setRerunMsg(d.success ? d.message : (d.error || 'Error')))
       .catch(e => setRerunMsg(e instanceof Error ? e.message : 'Error'))
@@ -94,9 +94,13 @@ export default function AnunciosHealthClient() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={rerun} disabled={rerunning}
+            <button onClick={() => rerun(false)} disabled={rerunning}
               className="inline-flex items-center gap-1.5 text-xs text-white bg-cyan-600 border border-cyan-600 px-3 py-2 rounded-lg hover:bg-cyan-500 disabled:opacity-50">
               <RefreshCw size={13} className={rerunning ? 'animate-spin' : ''} /> {rerunning ? 'Encolando…' : 'Forzar re-barrido'}
+            </button>
+            <button onClick={() => { if (confirm('Re-scrapear TODA la ficha (fotos, características, permalink) de los avisos ya guardados. Corre en el próximo ciclo y toma un rato. ¿Continuar?')) rerun(true) }} disabled={rerunning}
+              className="inline-flex items-center gap-1.5 text-xs text-white bg-amber-600 border border-amber-600 px-3 py-2 rounded-lg hover:bg-amber-500 disabled:opacity-50">
+              <RefreshCw size={13} className={rerunning ? 'animate-spin' : ''} /> Re-scrapear todo
             </button>
             <button onClick={load} className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
               <RefreshCw size={13} /> Refrescar
