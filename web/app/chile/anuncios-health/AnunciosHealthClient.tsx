@@ -12,6 +12,7 @@ type Totals = {
 }
 type Target = {
   comuna: string; operation: string; property_type: string; interval_hours: number
+  force_refetch: boolean
   last_run_at: string | null; last_success_at: string | null
   last_listing_count: number | null; portal_reported_count: number | null; cadencia: string
 }
@@ -162,7 +163,14 @@ export default function AnunciosHealthClient() {
                         ? Math.round((tg.last_listing_count / tg.portal_reported_count) * 100) : null
                       return (
                         <tr key={i} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/30">
-                          <td className="px-4 py-2.5 text-slate-100 capitalize">{tg.comuna}</td>
+                          <td className="px-4 py-2.5 text-slate-100 capitalize">
+                            {tg.comuna}
+                            {tg.force_refetch && (
+                              <span className="ml-2 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30" title="Re-scrapeando toda la ficha (fotos/características/permalink) de los avisos ya guardados">
+                                <RefreshCw size={9} className="animate-spin" /> re-scrapeando
+                              </span>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 text-slate-400 capitalize">{tg.operation === 'rent' ? 'arriendo' : 'venta'}</td>
                           <td className="px-3 py-2.5">
                             <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${cad.cls}`}>{cad.icon} {cad.t}</span>

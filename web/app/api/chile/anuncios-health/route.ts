@@ -64,7 +64,7 @@ export async function GET() {
       pool.query(`
         SELECT
           c.name AS comuna, t.operation, t.property_type,
-          t.enabled, t.interval_hours,
+          t.enabled, t.interval_hours, t.force_refetch,
           t.last_run_at, t.last_success_at,
           t.last_listing_count, t.portal_reported_count,
           CASE
@@ -110,6 +110,7 @@ export async function GET() {
         operation: t.operation,
         property_type: t.property_type,
         interval_hours: num(t.interval_hours),
+        force_refetch: !!t.force_refetch,
         last_run_at: t.last_run_at,
         last_success_at: t.last_success_at,
         last_listing_count: t.last_listing_count == null ? null : num(t.last_listing_count),
