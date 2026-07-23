@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Sidebar />
           <main
             style={{ marginLeft: 'var(--sidebar-w)', background: 'var(--c-bg)' }}
-            className="h-full"
+            className="h-full overflow-y-auto"
           >
             {children}
           </main>

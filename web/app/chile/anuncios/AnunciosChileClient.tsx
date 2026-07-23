@@ -25,6 +25,12 @@ function transformChileRow(row: any): Listing {
   const portal = row.portal || 'portalinmobiliario'
   const price = row.price || 0
   const listedDate = new Date().toISOString().split('T')[0]
+  // El sector/barrio (localidad, ej. "Vaticano", "La Llavería") es más específico
+  // que la comuna — cuando existe, se antepone para que la ficha no muestre solo
+  // "Las Condes" cuando el propio anuncio ya declara el sector exacto.
+  const zoneName = row.localidad && row.comuna_name
+    ? `${row.localidad}, ${row.comuna_name}`
+    : (row.comuna_name || 'Sin comuna')
 
   return {
     id: row.id || row.external_id,
@@ -32,11 +38,14 @@ function transformChileRow(row: any): Listing {
     title: `${row.bedrooms || '?'} dorm · ${row.square_meters || '?'} m² · ${row.comuna_name || 'Chile'}`,
     operation: row.operation || 'sale',
     price,
+    currency: 'CLP' as const,
+    price_uf: row.price_uf != null ? Number(row.price_uf) : null,
     square_meters: row.square_meters || 0,
     price_sqm: row.price_sqm || 0,
     bedrooms: row.bedrooms || 0,
     bathrooms: row.bathrooms || 0,
-    zone_name: row.comuna_name || 'Sin comuna',
+    zone_name: zoneName,
+    barrio: row.localidad || undefined,
     portal,
     source_type: 'portal' as const,
     advertiser_type: row.advertiser_type || 'professional',
@@ -52,7 +61,8 @@ function transformChileRow(row: any): Listing {
     price_drops: 0,
     rc_status: 'none' as const,
     description: row.description,
-    features: [],
+    features: Array.isArray(row.features) ? row.features.filter((f: any) => typeof f === 'string') : [],
+    videos: row.has_video && row.video_modal_url ? [row.video_modal_url] : [],
     priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
     sources: [{
       id: row.external_id,
@@ -379,6 +389,11 @@ export default function AnunciosChileClient() {
                   listing={listing}
                   active={combinedActive === listing.id}
                   onHover={setHoverId}
+                  onOpen={(l) => {
+                    // Chile no tiene ficha propia por anuncio todavía (/anuncios/[id]
+                    // es la tabla de España): abrir el aviso original en vez de un 404.
+                    if (l.source_url) window.open(l.source_url, '_blank', 'noopener,noreferrer')
+                  }}
                 />
               </div>
             ))}
