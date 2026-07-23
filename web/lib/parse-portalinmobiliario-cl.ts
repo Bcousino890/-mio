@@ -281,7 +281,7 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       latitude, longitude,
       address, comuna,
       advertiser_name, advertiser_type,
-      photos: photos.slice(0, 80),
+      photos: photos.slice(0, 40),
       description,
       gallery_url: galleryUrl,
       photos_total_count: photosTotalCount,
