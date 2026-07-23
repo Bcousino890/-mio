@@ -144,6 +144,25 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
 export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * Fetch de Portal Inmobiliario con estrategia DIRECTO-primero, proxy-fallback.
+ * Verificado en Fase 0: el fetch directo trae la variante con el blob Nordic sin
+ * bloqueos (PI no tiene anti-bot agresivo tipo DataDome). Enrutar todo por el
+ * residencial Evomi es más frágil (IP residencial puede recibir otra variante o
+ * bloqueo) y era la causa de que el barrido no ingresara datos. Se prueba directo
+ * y SOLO si falla (bloqueo/429/HTML corto) se reintenta por Evomi — reservando el
+ * proxy para cuando de verdad hace falta (criterio del plan H10). Es UN intento
+ * lógico para el circuit-breaker de withResilience (que envuelve esta función).
+ */
+async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
+  const direct = await fetchHtml(url, { useProxy: false, profile })
+  if (direct.ok) return direct
+  const proxied = await fetchHtml(url, { useProxy: true, profile })
+  // Si el proxy tampoco (o no está configurado → repite directo), devolvemos el
+  // fallo más informativo del primer intento directo.
+  return proxied.ok ? proxied : direct
+}
+
+/**
  * fetchHtml + reintentos con backoff exponencial + circuit-breaker por
  * dominio (plan Anuncios CL · H16, ver resilient-fetch.mjs). Aditivo: no
  * cambia el comportamiento de `fetchHtml` — pensado para el discovery
@@ -155,5 +174,11 @@ export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
  */
 export function fetchHtmlResilient(url, options = {}) {
   const { useProxy, profile, ...resilienceOptions } = options
+  // Portal Inmobiliario, sin useProxy explícito: directo-primero con fallback a
+  // Evomi (fetchHtmlPi). Es lo que hace que el barrido ingrese datos de forma
+  // fiable en vez de depender de que el residencial devuelva la variante buena.
+  if (profile === 'portalinmobiliario' && useProxy === undefined) {
+    return withResilience(fetchHtmlPi, url, { ...resilienceOptions, fetchOpts: { profile } })
+  }
   return withResilience(fetchHtml, url, { ...resilienceOptions, fetchOpts: { useProxy, profile } })
 }
