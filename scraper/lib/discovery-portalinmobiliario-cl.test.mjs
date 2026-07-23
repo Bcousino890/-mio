@@ -201,6 +201,50 @@ test('discoverTarget: comuna que topa paginación → subdivide por precio y SÍ
   assert.match(res.reason, /bandas de precio/)
 })
 
+test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la encuentra topada → se subdivide y corrige (no se pierde en silencio)', async () => {
+  // Modela la brecha real vista en producción (Las Condes/Venta quedó en 69%,
+  // 2416/3487, pese a que la bisección da cobertura exacta en pruebas con probes
+  // que nunca fallan ni cambian de valor): el total de una sub-banda cambia entre
+  // el probe y el barrido real (o el probe pudo fallar y devolver null, tratado
+  // igual que "cabe" — ver subdividePriceBands). Sin corrección, esos resultados
+  // extra se pierden en silencio y el barrido se reporta "completo" sin serlo.
+  const client = makeClient({ known: [], activeInComuna: [] })
+  const RESULTS_LIMIT = 2000
+  const calls = {}
+
+  const fetchFn = async (url) => {
+    calls[url] = (calls[url] || 0) + 1
+    return { ok: true, html: `${url}|CALL|${calls[url]}` }
+  }
+  const parseMetaFn = (html) => {
+    const sep = html.lastIndexOf('|CALL|')
+    const url = html.slice(0, sep)
+    const call = Number(html.slice(sep + 6))
+    if (!url.includes('_PriceRange_')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // barrido base: topa
+    if (url.includes('_PriceRange_0CLP-10000000000CLP')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // probe rango completo
+    if (url.includes('_PriceRange_0CLP-5000000000CLP')) {
+      // 1ª vez (el probe de subdividePriceBands): "chica", queda como hoja.
+      // 2ª vez (el barrido REAL de esa hoja): en realidad topa.
+      return call === 1 ? { total: 800, pageCount: 1, resultsLimit: RESULTS_LIMIT } : { total: 2500, pageCount: 1, resultsLimit: RESULTS_LIMIT }
+    }
+    if (url.includes('_PriceRange_5000000000CLP-10000000000CLP')) return { total: 50, pageCount: 1, resultsLimit: RESULTS_LIMIT }
+    // Sub-bandas nacidas de la corrección de [0, 5.000.000.000]: caben.
+    return { total: 1200, pageCount: 1, resultsLimit: RESULTS_LIMIT }
+  }
+  let n = 0
+  const res = await discoverTarget(client, TARGET, {
+    fetch: fetchFn,
+    parseMeta: parseMetaFn,
+    parseList: () => { n++; return [listing(`MLC-${n}-a`), listing(`MLC-${n}-b`)] },
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+
+  assert.equal(res.capped, true)      // el barrido base topó → dispara bisección
+  assert.equal(res.completed, true)   // la corrección subdivide la hoja "engañosa" y termina completo
+  assert.equal(res.exhaustive, true)  // por lo tanto, sí es seguro dar de baja lo que no reaparezca
+})
+
 test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso Colina)', async () => {
   // Modela una comuna densa (tipo Colina): la banda alta sigue por encima del
   // tope y hay que partirla otra vez. `probe` devuelve el total por rango.
