@@ -1,11 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import dynamic from 'next/dynamic'
 import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
-  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images,
+  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video,
 } from 'lucide-react'
+
+const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
 
 type Listing = {
   listing_id: string
@@ -24,6 +27,9 @@ type Listing = {
   latitude: number | null
   longitude: number | null
   features: string[]
+  has_video: boolean
+  video_modal_url: string | null
+  stored_video: string | null
 }
 type Property = {
   id: string
@@ -263,6 +269,14 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                 {(address || geo) && (
                   <div className="mt-5">
                     <h3 className="text-sm font-semibold text-slate-300 mb-2 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
+                    {geo && (
+                      // Pin declarado por el aviso — SIEMPRE existe con lat/lng, aunque
+                      // location_confidence sea 'none' (no depende de que el Rol SII se
+                      // haya triangulado): mostrar el punto no es lo mismo que confirmarlo.
+                      <div className="h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
+                        <DetailMap latitude={geo.latitude!} longitude={geo.longitude!} exact={p.location_confidence === 'confirmed'} />
+                      </div>
+                    )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
                       {address && <div>{address}</div>}
                       <div className="text-slate-500 text-xs mt-0.5">{p.comuna_name}{geo ? ` · ${geo.latitude!.toFixed(5)}, ${geo.longitude!.toFixed(5)}` : ''}</div>
@@ -337,6 +351,7 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                           <span className="uppercase tracking-wide">{l.currency || 'CLP'}</span>
                           {p.square_meters != null && <span className="inline-flex items-center gap-1"><Ruler size={11} /> {p.square_meters} m²</span>}
                           {l.photos?.length > 0 && <span className="inline-flex items-center gap-1"><Images size={11} /> {l.photos.length} fotos</span>}
+                          {l.has_video && <span className="inline-flex items-center gap-1 text-rose-400"><Video size={11} /> video</span>}
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-1.5">
@@ -344,6 +359,9 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                         <div className="flex items-center gap-2 shrink-0">
                           {l.web_propia_url && (
                             <a href={l.web_propia_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-500 hover:text-cyan-400 inline-flex items-center gap-1" title="Web propia de la corredora"><Home size={11} /> web</a>
+                          )}
+                          {(l.stored_video || l.video_modal_url) && (
+                            <a href={l.stored_video || l.video_modal_url || undefined} target="_blank" rel="noopener noreferrer" className="text-[11px] text-rose-400 hover:text-rose-300 inline-flex items-center gap-1" title="Ver video del aviso"><Video size={12} /> video</a>
                           )}
                           {l.source_url && (
                             <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1" title="Ver anuncio original">Ver aviso <ExternalLink size={12} /></a>
