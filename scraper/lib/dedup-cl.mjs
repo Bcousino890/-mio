@@ -258,12 +258,19 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
 
   for (const { advertiser_id } of pending.rows) {
     const { rows: family } = await client.query(
-      `SELECT id, corredora_id, advertiser_name, phone, comuna_id, is_active,
+      `SELECT id, corredora_id, advertiser_name, advertiser_logo, phone, comuna_id, is_active,
               first_seen_at, last_seen_at, taken_down_at, property_cl_id
        FROM listings_cl WHERE advertiser_id = $1`,
       [advertiser_id]
     );
     if (family.length === 0) continue;
+
+    // Logo canónico = el más reciente no nulo entre sus anuncios (mismo criterio
+    // que el nombre). Se usa tanto al crear la corredora como para rellenarlo en
+    // una ya existente que quedó sin logo (backfill, ver abajo).
+    const latestLogoed = [...family]
+      .filter((r) => r.advertiser_logo)
+      .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1))[0];
 
     let corredoraId = family.find((r) => r.corredora_id)?.corredora_id ?? null;
     if (!corredoraId) {
@@ -272,20 +279,29 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
         .filter((r) => r.advertiser_name)
         .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1))[0];
       const { rows: inserted } = await client.query(
-        `INSERT INTO corredoras_cl (advertiser_id, name_normalized, name_raw, first_seen_at, last_seen_at)
-         VALUES ($1, $2, $2, $3, $4)
+        `INSERT INTO corredoras_cl (advertiser_id, name_normalized, name_raw, logo_url, first_seen_at, last_seen_at)
+         VALUES ($1, $2, $2, $3, $4, $5)
          ON CONFLICT (advertiser_id) WHERE advertiser_id IS NOT NULL
          DO UPDATE SET last_seen_at = GREATEST(corredoras_cl.last_seen_at, EXCLUDED.last_seen_at)
          RETURNING id`,
         [
           advertiser_id,
           latestNamed?.advertiser_name ?? null,
+          latestLogoed?.advertiser_logo ?? null,
           family.reduce((min, r) => (r.first_seen_at < min ? r.first_seen_at : min), family[0].first_seen_at),
           family.reduce((max, r) => (r.last_seen_at > max ? r.last_seen_at : max), family[0].last_seen_at),
         ]
       );
       corredoraId = inserted[0].id;
       created++;
+    } else if (latestLogoed?.advertiser_logo) {
+      // Corredora ya existente (creada antes de que el logo se persistiera, o
+      // sin logo visto todavía): rellena solo si sigue en null — no pisa un
+      // logo ya guardado en cada corrida.
+      await client.query(
+        `UPDATE corredoras_cl SET logo_url = $2, updated_at = now() WHERE id = $1 AND logo_url IS NULL`,
+        [corredoraId, latestLogoed.advertiser_logo]
+      );
     }
 
     const listingIds = family.map((r) => r.id);

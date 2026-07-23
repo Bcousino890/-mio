@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
   const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'stock'
 
   const page = Math.max(1, Number(sp.get('page')) || 1)
-  const pageSize = Math.min(Math.max(1, Number(sp.get('page_size')) || 30), 200)
+  // Corredoras está acotado por advertisers ÚNICOS (no por anuncios): a
+  // diferencia de listings_cl/property_cl, el cap alto es seguro — el
+  // directorio (/chile/corredoras) pide todas de una vez, sin paginar.
+  const pageSize = Math.min(Math.max(1, Number(sp.get('page_size')) || 30), 5000)
   const offset = (page - 1) * pageSize
 
   try {
@@ -61,6 +64,7 @@ export async function GET(request: NextRequest) {
          id,
          advertiser_id,
          COALESCE(name_normalized, name_raw) AS name,
+         logo_url,
          phones,
          web_propia_url,
          crm_platform,
