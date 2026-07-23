@@ -154,12 +154,24 @@ export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
  * lógico para el circuit-breaker de withResilience (que envuelve esta función).
  */
 async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
+  // "Éxito" para PI NO es solo HTTP 200: la variante LIGERA que PI sirve a
+  // algunas IPs (p. ej. datacenter) responde 200 pero SIN el blob Nordic, y el
+  // parser saca 0. Solo cuenta como bueno si trae el blob. Así, si el directo
+  // (IP de la VPS) recibe la variante ligera, se cae a Evomi (residencial CL),
+  // que suele recibir la buena — en vez de aceptar un 200 inútil.
+  const hasBlob = (r) => r.ok && typeof r.html === 'string' && r.html.includes('__NORDIC_RENDERING_CTX__')
+
   const direct = await fetchHtml(url, { useProxy: false, profile })
-  if (direct.ok) return direct
+  if (hasBlob(direct)) return direct
+
   const proxied = await fetchHtml(url, { useProxy: true, profile })
-  // Si el proxy tampoco (o no está configurado → repite directo), devolvemos el
-  // fallo más informativo del primer intento directo.
-  return proxied.ok ? proxied : direct
+  if (hasBlob(proxied)) return proxied
+
+  // Ninguna vía trajo el blob. Devolvemos el mejor 200 disponible (para no
+  // disparar el circuit-breaker con un falso "caído"), marcando el motivo.
+  if (proxied.ok) return { ...proxied, reason: 'sin blob Nordic (variante ligera)' }
+  if (direct.ok) return { ...direct, reason: 'sin blob Nordic (variante ligera)' }
+  return direct
 }
 
 /**
