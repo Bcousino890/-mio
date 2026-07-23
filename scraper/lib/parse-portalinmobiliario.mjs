@@ -1,3 +1,5 @@
+import { load as cheerioLoad } from 'cheerio'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Parsers del HTML de Portalinmobiliario.com (vertical inmobiliario de
 // Mercado Libre Chile). Espeja la forma de `lib/parse.mjs` (Idealista):
@@ -529,6 +531,27 @@ export async function parseDetailPage(html, external_id) {
 
     const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
+    // Características COMPLETAS del inmueble: la tabla rayada
+    // `.ui-vpp-striped-specs__row` del HTML trae TODAS (superficie útil,
+    // orientación, bodegas, pisos, terraza, walk-in clóset, piscina…), no solo
+    // las ~5 "destacadas" del blob. Mismo criterio que smartbc: valor "Sí" →
+    // solo la etiqueta; si no, "Etiqueta: valor". Se omiten las que ya se ven en
+    // la grilla de specs (dormitorios/baños/superficie total) para no repetir.
+    const features = []
+    const seenFeat = new Set()
+    const SKIP_FEAT = /^(dormitorios?|ba[ñn]os?|superficie total)$/i
+    try {
+      const $$ = cheerioLoad(html)
+      $$('.ui-vpp-striped-specs__row').each((_, el) => {
+        const key = decode($$(el).find('th').first().text()).replace(/:\s*$/, '').trim()
+        const value = decode($$(el).find('td').first().text()).trim()
+        if (!key || SKIP_FEAT.test(key)) return
+        const label = /^s[ií]$/i.test(value) ? key : (value ? `${key}: ${value}` : key)
+        const k = label.toLowerCase()
+        if (!seenFeat.has(k)) { seenFeat.add(k); features.push(label) }
+      })
+    } catch { /* HTML raro: features queda vacío, no rompe la ficha */ }
+
     return {
       external_id,
       property_code,  // ID canónico de la propiedad (persiste en republicas)
@@ -555,6 +578,7 @@ export async function parseDetailPage(html, external_id) {
       video_modal_url: videoModalUrl,  // el archivo real no está en el HTML estático, solo este modal
       videos,  // URLs de video directas si alguna vez aparecen embebidas (raro)
       description,
+      features,  // características destacadas del inmueble (amenities)
     }
   } catch {
     // Estructura inesperada de la ficha: degradar a `null`, igual que un
