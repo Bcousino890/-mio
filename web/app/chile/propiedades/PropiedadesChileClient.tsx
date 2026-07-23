@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
-  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video,
+  Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus,
 } from 'lucide-react'
 
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -49,6 +49,8 @@ type Property = {
   cover_photo: string | null
   days_on_market: number | null
   listings: Listing[]
+  manual_latitude: number | null
+  manual_longitude: number | null
 }
 type Stats = { total: number; multi_corredora: number; confirmed: number; median_price: number | null }
 
@@ -175,6 +177,55 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
   const [imgError, setImgError] = useState(false)
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
+
+  // Pin manual (corrección del equipo): "el pin que puse yo" — un segundo pin
+  // aparte del declarado por el anuncio, para comparar y corregir a mano
+  // cuando el corredor lo puso mal. Se guarda en property_cl.manual_latitude/
+  // longitude (0077) vía PATCH /api/chile/property-cl.
+  const [manualPin, setManualPin] = useState<{ latitude: number; longitude: number } | null>(
+    p.manual_latitude != null && p.manual_longitude != null
+      ? { latitude: p.manual_latitude, longitude: p.manual_longitude }
+      : null
+  )
+  const [manualPinDirty, setManualPinDirty] = useState(false)
+  const [savingPin, setSavingPin] = useState(false)
+
+  const addManualPin = useCallback((baseLat: number, baseLng: number) => {
+    // Offset pequeño para que el pin nuevo no quede exactamente encima del
+    // declarado (si no, no se ve que hay dos hasta que se arrastra).
+    setManualPin({ latitude: baseLat + 0.0004, longitude: baseLng + 0.0004 })
+    setManualPinDirty(true)
+  }, [])
+
+  const saveManualPin = useCallback(async () => {
+    if (!manualPin) return
+    setSavingPin(true)
+    try {
+      await fetch('/api/chile/property-cl', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, latitude: manualPin.latitude, longitude: manualPin.longitude }),
+      })
+      setManualPinDirty(false)
+    } finally {
+      setSavingPin(false)
+    }
+  }, [manualPin, p.id])
+
+  const removeManualPin = useCallback(async () => {
+    setSavingPin(true)
+    try {
+      await fetch('/api/chile/property-cl', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, latitude: null, longitude: null }),
+      })
+      setManualPin(null)
+      setManualPinDirty(false)
+    } finally {
+      setSavingPin(false)
+    }
+  }, [p.id])
   const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
   const cheapest = sortedListings.find(l => l.price != null)?.listing_id
 
@@ -268,7 +319,27 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                 {/* Ubicación */}
                 {(address || geo) && (
                   <div className="mt-5">
-                    <h3 className="text-sm font-semibold text-slate-300 mb-2 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold text-slate-300 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
+                      {geo && !manualPin && (
+                        <button onClick={() => addManualPin(geo.latitude!, geo.longitude!)}
+                          className="text-xs text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
+                          <Plus size={12} /> Agregar pin
+                        </button>
+                      )}
+                      {manualPin && (
+                        <div className="flex items-center gap-2">
+                          {manualPinDirty && (
+                            <button onClick={saveManualPin} disabled={savingPin}
+                              className="text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
+                              {savingPin ? 'Guardando…' : 'Guardar ubicación'}
+                            </button>
+                          )}
+                          <button onClick={removeManualPin} disabled={savingPin}
+                            className="text-xs text-slate-500 hover:text-rose-400 disabled:opacity-50">Quitar</button>
+                        </div>
+                      )}
+                    </div>
                     {geo && (
                       // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
                       // la ubicación a propósito y solo se muestra precisa tras resolver el
@@ -276,15 +347,27 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                       // directamente (confirmado en Fase 0/research). `location_confidence`
                       // mide otra cosa — si ya se triangulό contra el Rol SII (Fase 7,
                       // pendiente) — y no debe gatear si el pin se ve preciso o difuso.
+                      //
+                      // Satélite (mismo tile de Google sin API key que /chile/catastro) +
+                      // segundo pin manual arrastrable: "el pin que puse yo" — corrección
+                      // del equipo, aparte del declarado por el anuncio, para comparar.
                       <div className="h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
-                        <DetailMap latitude={geo.latitude!} longitude={geo.longitude!} exact />
+                        <DetailMap
+                          latitude={geo.latitude!} longitude={geo.longitude!} exact
+                          tileStyle="satellite"
+                          secondPin={manualPin}
+                          onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
+                        />
                       </div>
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
                       {address && <div>{address}</div>}
                       <div className="text-slate-500 text-xs mt-0.5">{p.comuna_name}{geo ? ` · ${geo.latitude!.toFixed(5)}, ${geo.longitude!.toFixed(5)}` : ''}</div>
+                      {manualPin && (
+                        <div className="text-emerald-400 text-xs mt-0.5">Pin corregido · {manualPin.latitude.toFixed(5)}, {manualPin.longitude.toFixed(5)}</div>
+                      )}
                       {geo && (
-                        <a href={`https://www.google.com/maps/search/?api=1&query=${geo.latitude},${geo.longitude}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${manualPin?.latitude ?? geo.latitude},${manualPin?.longitude ?? geo.longitude}`} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
                       )}
                     </div>
@@ -430,7 +513,10 @@ export default function PropiedadesChileClient() {
 
   useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy])
 
-  // Sincroniza el estado a la URL sin recargar (history.replaceState).
+  // Sincroniza el estado a la URL sin recargar (history.replaceState). Incluye
+  // la ficha abierta (?p=<id>) — URL específica y compartible por propiedad,
+  // sin necesitar una ruta [id] aparte (evitaría dos efectos peleando por el
+  // pathname: este ya usa query params sobre la MISMA página).
   useEffect(() => {
     const qs = new URLSearchParams()
     if (operation !== 'sale') qs.set('op', operation)
@@ -443,9 +529,23 @@ export default function PropiedadesChileClient() {
     if (onlyConfirmed) qs.set('conf', '1')
     if (sortBy !== 'recent') qs.set('sort', sortBy)
     if (page > 1) qs.set('page', String(page))
+    if (selected) qs.set('p', selected.id)
     const s = qs.toString()
     window.history.replaceState(null, '', s ? `?${s}` : window.location.pathname)
-  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy, page])
+  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy, page, selected])
+
+  // Al montar: si la URL trae ?p=<id> (link compartido/bookmark de una ficha
+  // específica), abre esa ficha directo — sin depender de que esté en la
+  // página/filtro actual de la grilla (fetch por id, independiente del listado).
+  useEffect(() => {
+    const id = initial.get('p')
+    if (!id) return
+    fetch(`/api/chile/property-cl?id=${encodeURIComponent(id)}`)
+      .then(r => r.json())
+      .then(data => { if (data.success && data.data) setSelected(data.data) })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     setLoading(true)
