@@ -184,6 +184,10 @@ function CorredoraThumb({ src }: { src?: string }) {
 function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () => void; onRefetched: (p: Property) => void }) {
   const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
   const cheapest = sortedListings.find(l => l.price != null)?.listing_id
+  // Aviso cuya ubicación declarada se muestra/corrige en el mapa de la ficha
+  // (el primero de los listings con lat/lng) — su source_url es el que se
+  // manda al guardar el pin manual, para poder crear/actualizar la captación.
+  const geo = useMemo(() => p.listings.find(l => l.latitude != null && l.longitude != null), [p])
 
   // Cada corredora trae su propio set de fotos del mismo inmueble — mezclarlas
   // en una sola galería confundía cuál foto era de qué aviso (y de paso hacía
@@ -217,6 +221,9 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
   )
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
+  // Feedback del rol SII resuelto bajo el pin + su guardado en captación
+  // (best-effort, ver PATCH /api/chile/property-cl).
+  const [captacionMsg, setCaptacionMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const addManualPin = useCallback((baseLat: number, baseLng: number) => {
     // Offset pequeño para que el pin nuevo no quede exactamente encima del
@@ -228,17 +235,27 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
   const saveManualPin = useCallback(async () => {
     if (!manualPin) return
     setSavingPin(true)
+    setCaptacionMsg(null)
     try {
-      await fetch('/api/chile/property-cl', {
+      const res = await fetch('/api/chile/property-cl', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: p.id, latitude: manualPin.latitude, longitude: manualPin.longitude }),
+        body: JSON.stringify({
+          id: p.id, latitude: manualPin.latitude, longitude: manualPin.longitude,
+          source_url: geo?.source_url ?? undefined,
+        }),
       })
+      const data = await res.json()
       setManualPinDirty(false)
+      if (data.captacion?.sii_rol) {
+        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación` })
+      } else if (data.captacion_error) {
+        setCaptacionMsg({ ok: false, text: data.captacion_error })
+      }
     } finally {
       setSavingPin(false)
     }
-  }, [manualPin, p.id])
+  }, [manualPin, p.id, geo?.source_url])
 
   const removeManualPin = useCallback(async () => {
     setSavingPin(true)
@@ -395,7 +412,6 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
             const withDesc = p.listings.filter(l => l.description)
             const primary = withDesc.sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0))[0] ?? p.listings[0]
             const address = p.listings.map(l => l.address).find(Boolean) ?? null
-            const geo = p.listings.find(l => l.latitude != null && l.longitude != null)
             const feats = Array.from(new Set(p.listings.flatMap(l => l.features ?? [])))
             return (
               <>
@@ -423,6 +439,9 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                         </div>
                       )}
                     </div>
+                    {captacionMsg && (
+                      <div className={`text-xs mb-2 ${captacionMsg.ok ? 'text-emerald-400' : 'text-slate-500'}`}>{captacionMsg.text}</div>
+                    )}
                     {geo && (
                       // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
                       // la ubicación a propósito y solo se muestra precisa tras resolver el
