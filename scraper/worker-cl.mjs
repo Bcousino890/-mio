@@ -91,6 +91,13 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
     return { ok: false, reason: 'parse_failed' }
   }
 
+  // El permalink CON slug del listado (sourceUrl del discovery) es el que
+  // redirige a la ficha real; la forma corta MLC-<id> del blob de detalle
+  // redirige al home. Preferimos el del discovery para el "Ver aviso" de la UI.
+  if (sourceUrl && /portalinmobiliario\.com\/MLC-?\d+-/.test(sourceUrl)) {
+    parsed.source_url = sourceUrl
+  }
+
   const { listingId, changeType } = await upsert(dbClient, parsed)
   console.log(`[detail] ${externalId} → listing ${listingId} (${changeType ?? 'sin cambios'})`)
 
