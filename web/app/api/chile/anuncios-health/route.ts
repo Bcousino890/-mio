@@ -17,15 +17,24 @@ export const dynamic = 'force-dynamic'
 // objetivos "vencidos") los re-toma en la próxima pasada, sin esperar las 8h de
 // cadencia. Útil en la puesta en marcha y para forzar una actualización a mano
 // desde el panel, sin comandos en la VPS.
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    // ?refetch=1 → además de re-barrer, marca force_refetch para RE-BAJAR la ficha
+    // de TODOS los avisos (no solo los nuevos): backfill de fotos/características/
+    // permalink sobre el histórico ya scrapeado.
+    const refetch = new URL(request.url).searchParams.get('refetch') === '1'
     const { rowCount } = await pool.query(
-      `UPDATE scrape_targets_cl SET last_run_at = NULL, updated_at = now() WHERE enabled = true`
+      refetch
+        ? `UPDATE scrape_targets_cl SET force_refetch = true, last_run_at = NULL, updated_at = now() WHERE enabled = true`
+        : `UPDATE scrape_targets_cl SET last_run_at = NULL, updated_at = now() WHERE enabled = true`
     )
     return NextResponse.json({
       success: true,
       requeued: rowCount ?? 0,
-      message: `${rowCount ?? 0} objetivo(s) marcados para re-barrido en el próximo ciclo (≤15 min).`,
+      mode: refetch ? 'refetch' : 'rescan',
+      message: refetch
+        ? `${rowCount ?? 0} objetivo(s) marcados para RE-SCRAPEAR toda la ficha (fotos/características/permalink) en el próximo ciclo (≤15 min).`
+        : `${rowCount ?? 0} objetivo(s) marcados para re-barrido en el próximo ciclo (≤15 min).`,
     })
   } catch (error) {
     console.error('Error forzando re-barrido:', error)

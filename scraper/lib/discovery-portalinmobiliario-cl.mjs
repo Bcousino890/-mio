@@ -209,8 +209,10 @@ async function sweepBand(client, ctx, priceRange, seen) {
     const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
     for (const l of usable) seen.add(l.external_id)
 
+    // Normal: encolar detalle SOLO de los avisos nuevos. force_refetch (backfill):
+    // encolar TODOS con su permalink fresco, para re-bajar la ficha completa.
     const ids = usable.map((l) => l.external_id)
-    const known = await existingExternalIds(client, ids)
+    const known = ctx.forceRefetch ? new Set() : await existingExternalIds(client, ids)
     for (const l of usable) {
       if (!known.has(l.external_id)) { await enqueueDetail(l.external_id, l.source_url); enqueued++ }
     }
@@ -256,13 +258,14 @@ export async function discoverTarget(client, target, deps = {}) {
     politenessMs = 1500,
     sleep = SLEEP,
     includeDevelopments = false,
+    forceRefetch = !!target.force_refetch,
     now = () => new Date(),
   } = deps
 
   const slug = comunaSlug(target.comuna_name)
   const rslug = regionSlug(target.region)
   const scrapedAt = now()
-  const ctx = { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target, slug, rslug }
+  const ctx = { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, forceRefetch, target, slug, rslug }
 
   const seen = new Set()
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, reason = null
@@ -311,7 +314,13 @@ export async function discoverTarget(client, target, deps = {}) {
 
   await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal })
 
-  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, completed, exhaustive, capped: base.capped, reason }
+  // Backfill: tras un barrido forzado que completó, apagar force_refetch para
+  // no re-bajar todo en cada ciclo (solo era una pasada de puesta al día).
+  if (forceRefetch && completed) {
+    await client.query(`UPDATE scrape_targets_cl SET force_refetch = false, updated_at = now() WHERE id = $1`, [target.id])
+  }
+
+  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, force_refetch: forceRefetch, completed, exhaustive, capped: base.capped, reason }
 }
 
 /**
@@ -322,7 +331,7 @@ export async function discoverTarget(client, target, deps = {}) {
 export async function selectDueTargets(client, { limit = 50 } = {}) {
   const { rows } = await client.query(
     `SELECT t.id, t.comuna_id, c.name AS comuna_name, c.region,
-            t.operation, t.property_type
+            t.operation, t.property_type, t.force_refetch
      FROM scrape_targets_cl t
      JOIN chile_comunas c ON c.id = t.comuna_id
      WHERE t.enabled = true

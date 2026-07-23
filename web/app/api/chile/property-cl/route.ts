@@ -145,6 +145,7 @@ export async function GET(request: NextRequest) {
     const query = `
       SELECT
         p.id,
+        p.ref_code,
         p.operation,
         p.property_type,
         p.canonical_price,
