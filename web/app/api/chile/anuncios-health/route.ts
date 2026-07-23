@@ -12,6 +12,55 @@ import { pool } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// ─── Sonda EN VIVO del total real que declara Portal Inmobiliario ────────────
+// `scrape_targets_cl.portal_reported_count` es un valor guardado la última vez
+// que corrió un barrido — puede tener HORAS de antigüedad, y en ese tiempo el
+// portal cambia (altas/bajas). Comparar "vistos" (de la BD) contra ese número
+// viejo da una "cobertura" engañosa. Esta sonda consulta el portal AHORA MISMO,
+// en cada carga del panel, para que "Portal declara" sea siempre el número real
+// del momento — mismo patrón de headers que /anuncios-health/probe (verificado:
+// sin esto Portal Inmobiliario sirve una variante sin el total).
+const PI_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'es-CL,es;q=0.9',
+  'Upgrade-Insecure-Requests': '1',
+}
+
+/** "Las Condes" → "las-condes", "Ñuñoa" → "nunoa" (sin acentos, espacios→guiones). */
+function comunaSlug(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** Consulta el total actual de un objetivo directo contra Portal Inmobiliario. */
+async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<number | null> {
+  try {
+    const opSlug = operation === 'rent' ? 'arriendo' : 'venta'
+    const typeSlug = propertyType || 'casa'
+    const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-metropolitana`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    let res: Response
+    try {
+      res = await fetch(url, { headers: PI_HEADERS, redirect: 'follow', signal: controller.signal, cache: 'no-store' })
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) return null
+    const html = await res.text()
+    const m = html.match(/"total"\s*:\s*(\d+)/)
+    return m ? Number(m[1]) : null
+  } catch {
+    return null
+  }
+}
+
 // POST → fuerza un re-barrido: pone last_run_at=NULL en los objetivos activos,
 // así el discovery-scheduler del worker (que corre cada 15 min y encola los
 // objetivos "vencidos") los re-toma en la próxima pasada, sin esperar las 8h de
@@ -88,6 +137,14 @@ export async function GET() {
     const c = counts.rows[0]
     const num = (v: unknown) => Number(v ?? 0)
 
+    // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
+    // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
+    // quedó guardado la última vez que corrió un barrido (que puede tener horas).
+    const liveTotals = await Promise.all(
+      targets.rows.map((t) => probeLivePortalTotal(t.comuna, t.operation, t.property_type))
+    )
+    const probedAt = new Date().toISOString()
+
     return NextResponse.json({
       success: true,
       generated_at: new Date().toISOString(),
@@ -105,7 +162,7 @@ export async function GET() {
       },
       // Objetivos activos: el corazón del diagnóstico. Si last_run_at es reciente
       // pero last_listing_count=0/bajo → el fetch está fallando (proxy/bloqueo).
-      targets: targets.rows.map((t) => ({
+      targets: targets.rows.map((t, i) => ({
         comuna: t.comuna,
         operation: t.operation,
         property_type: t.property_type,
@@ -114,7 +171,12 @@ export async function GET() {
         last_run_at: t.last_run_at,
         last_success_at: t.last_success_at,
         last_listing_count: t.last_listing_count == null ? null : num(t.last_listing_count),
+        // Histórico (guardado la última vez que corrió un barrido) + EN VIVO
+        // (consultado ahora mismo). El frontend usa live_portal_total cuando
+        // está disponible; portal_reported_count queda de referencia/fallback.
         portal_reported_count: t.portal_reported_count == null ? null : num(t.portal_reported_count),
+        live_portal_total: liveTotals[i],
+        live_probed_at: liveTotals[i] != null ? probedAt : null,
         cadencia: t.cadencia,
       })),
       // Pulso de actividad de las últimas 24h (altas, cambios de precio, bajas…).

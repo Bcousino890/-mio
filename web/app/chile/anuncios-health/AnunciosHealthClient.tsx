@@ -14,7 +14,9 @@ type Target = {
   comuna: string; operation: string; property_type: string; interval_hours: number
   force_refetch: boolean
   last_run_at: string | null; last_success_at: string | null
-  last_listing_count: number | null; portal_reported_count: number | null; cadencia: string
+  last_listing_count: number | null; portal_reported_count: number | null
+  live_portal_total: number | null; live_probed_at: string | null
+  cadencia: string
 }
 type Health = {
   success: boolean; generated_at: string; totals: Totals
@@ -149,7 +151,9 @@ export default function AnunciosHealthClient() {
                       <th className="px-3 py-2.5 font-semibold">Cadencia</th>
                       <th className="px-3 py-2.5 font-semibold">Último barrido</th>
                       <th className="px-3 py-2.5 font-semibold text-right">Vistos</th>
-                      <th className="px-3 py-2.5 font-semibold text-right">Portal declara</th>
+                      <th className="px-3 py-2.5 font-semibold text-right">
+                        Portal declara <span className="inline-flex items-center gap-0.5 text-emerald-400 normal-case font-normal" title="Consultado en tiempo real en cada carga del panel"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> en vivo</span>
+                      </th>
                       <th className="px-3 py-2.5 font-semibold text-right">Cobertura</th>
                     </tr>
                   </thead>
@@ -159,8 +163,12 @@ export default function AnunciosHealthClient() {
                     )}
                     {data.targets.map((tg, i) => {
                       const cad = CAD[tg.cadencia] ?? CAD['nunca']
-                      const cov = tg.last_listing_count != null && tg.portal_reported_count
-                        ? Math.round((tg.last_listing_count / tg.portal_reported_count) * 100) : null
+                      // Prioriza el total EN VIVO (consultado ahora); si el probe falló,
+                      // cae al histórico guardado en la BD (con aviso de que es viejo).
+                      const declared = tg.live_portal_total ?? tg.portal_reported_count
+                      const isLive = tg.live_portal_total != null
+                      const cov = tg.last_listing_count != null && declared
+                        ? Math.round((tg.last_listing_count / declared) * 100) : null
                       return (
                         <tr key={i} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/30">
                           <td className="px-4 py-2.5 text-slate-100 capitalize">
@@ -177,7 +185,12 @@ export default function AnunciosHealthClient() {
                           </td>
                           <td className="px-3 py-2.5 text-slate-400">{ago(tg.last_run_at)}</td>
                           <td className="px-3 py-2.5 text-right text-slate-200 font-medium">{tg.last_listing_count ?? '—'}</td>
-                          <td className="px-3 py-2.5 text-right text-slate-400">{tg.portal_reported_count?.toLocaleString('es-CL') ?? '—'}</td>
+                          <td className="px-3 py-2.5 text-right">
+                            <span className={isLive ? 'text-slate-200 font-medium' : 'text-slate-500'} title={isLive ? `Consultado hace ${ago(tg.live_probed_at)}` : 'Sonda en vivo falló; mostrando el último valor guardado'}>
+                              {declared?.toLocaleString('es-CL') ?? '—'}
+                            </span>
+                            {!isLive && declared != null && <span className="ml-1 text-[10px] text-amber-400">(viejo)</span>}
+                          </td>
                           <td className="px-3 py-2.5 text-right">
                             {cov == null ? <span className="text-slate-600">—</span>
                               : <span className={cov >= 90 ? 'text-emerald-300' : cov >= 50 ? 'text-amber-300' : 'text-rose-300'}>{cov}%</span>}
