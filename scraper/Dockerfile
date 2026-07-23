@@ -18,6 +18,15 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+# curl es OBLIGATORIO: fetch.mjs descarga todo el HTML vía `execFile('curl', …)`
+# (curl pasa el fingerprint TLS/JA3 mejor que undici para los anti-bot). La
+# imagen base bookworm-slim NO lo trae → sin esto, TODAS las descargas del worker
+# fallan con `spawn curl ENOENT` y el barrido ingresa 0 anuncios. ca-certificates
+# para validar TLS de los portales.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN npm ci --omit=dev
 
