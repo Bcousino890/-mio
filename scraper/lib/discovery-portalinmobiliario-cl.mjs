@@ -227,6 +227,44 @@ async function sweepBand(client, ctx, priceRange, seen) {
 }
 
 /**
+ * Barre una banda y, si el barrido REAL la encuentra topada pese a que el probe
+ * previo la había dado por chica, la subdivide más y vuelve a barrer — en vez de
+ * aceptar el tope y perder el resto en silencio.
+ *
+ * Esto corrige dos huecos reales del diseño de un solo probe-y-barre:
+ *   (a) el probe de esa sub-banda falló (red/proxy) y `subdividePriceBands` la
+ *       trató como si ya cupiera bajo el tope (ver ahí: `total == null` → hoja);
+ *   (b) el total de la banda creció entre el probe y el barrido real (nuevas
+ *       publicaciones), típico en un barrido largo con cientos de requests.
+ * Verificado contra producción: Las Condes/Venta quedó en 69% (2416/3487) con el
+ * probe-único, pese a que la bisección da cobertura exacta en pruebas aisladas
+ * (con probes que nunca fallan y totales que no cambian a mitad de barrido).
+ */
+async function sweepBandCorrective(client, ctx, range, seen, depth = 0) {
+  const r = await sweepBand(client, ctx, range, seen)
+  if (!r.capped) return { pages: r.pages, enqueued: r.enqueued, completed: r.completed, capped: false }
+
+  const minClp = range?.minClp ?? 0
+  const maxClp = range?.maxClp ?? PRICE_CEILING_CLP
+  const width = maxClp - minClp
+  if (depth >= MAX_PRICE_DEPTH || width <= MIN_BAND_WIDTH_CLP) {
+    // No se puede seguir partiendo: mejor esfuerzo, esta porción queda incompleta.
+    return { pages: r.pages, enqueued: r.enqueued, completed: false, capped: true }
+  }
+
+  const mid = minClp + Math.floor(width / 2)
+  await ctx.sleep(ctx.politenessMs)
+  const lower = await sweepBandCorrective(client, ctx, { minClp, maxClp: mid }, seen, depth + 1)
+  const upper = await sweepBandCorrective(client, ctx, { minClp: mid, maxClp }, seen, depth + 1)
+  return {
+    pages: r.pages + lower.pages + upper.pages,
+    enqueued: r.enqueued + lower.enqueued + upper.enqueued,
+    completed: lower.completed && upper.completed,
+    capped: lower.capped || upper.capped,
+  }
+}
+
+/**
  * Bisección recursiva por precio: parte una banda [minClp,maxClp] hasta que cada
  * sub-banda esté bajo el tope de paginación del portal. `probe(range)` devuelve
  * el `total` que el portal declara para esa banda. Puro respecto a la red (recibe
@@ -293,7 +331,7 @@ export async function discoverTarget(client, target, deps = {}) {
     bandsUsed = bands.length
     completed = true
     for (const band of bands) {
-      const r = await sweepBand(client, ctx, band, seen)
+      const r = await sweepBandCorrective(client, ctx, band, seen)
       pages += r.pages; enqueued += r.enqueued
       if (!r.completed || r.capped) { allBandsExhaustive = false; completed = false }
       await sleep(politenessMs)
