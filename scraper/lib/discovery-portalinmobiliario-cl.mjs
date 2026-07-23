@@ -31,6 +31,13 @@ import { fold } from './chile-comunas.mjs'
 
 const PAGE_SIZE = 48 // confirmado en Fase 0: 48 resultados por página (_Desde_49, _Desde_97…)
 
+// Bisección por banda de precio (para comunas que superan el tope de paginación
+// del portal, ~2000). Techo alto en CLP que cubre cualquier residencial chileno
+// (≈ USD 10M); el tramo por encima se barre como banda abierta [techo, ∞).
+const PRICE_CEILING_CLP = 10_000_000_000
+const MAX_PRICE_DEPTH = 8            // 2^8 = 256 bandas máx: sobra para cualquier comuna
+const MIN_BAND_WIDTH_CLP = 10_000_000 // no bisecar por debajo de 10M CLP de ancho
+
 /** operación interna → segmento de URL de Portalinmobiliario. */
 export function operationSlug(operation) {
   return operation === 'rent' ? 'arriendo' : 'venta'
@@ -58,12 +65,28 @@ export function regionSlug(region) {
 }
 
 /**
+ * Sufijo de filtro de banda de precio de Portalinmobiliario, en CLP. `0` = sin
+ * límite (así lo escribe el propio portal: `_PriceRange_1000000000CLP-0CLP` =
+ * "más de mil millones"). Filtra TODAS las publicaciones convirtiendo UF→CLP,
+ * así que la unión de bandas cubre el 100% de la comuna (verificado: las bandas
+ * nativas de Las Condes suman exactamente su total). `null` = sin filtro.
+ */
+export function priceRangeSegment(priceRange) {
+  if (!priceRange) return ''
+  const { minClp = 0, maxClp = 0 } = priceRange
+  return `/_PriceRange_${Math.round(minClp)}CLP-${Math.round(maxClp)}CLP`
+}
+
+/**
  * URL de una página de listado de propiedades USADAS. `offset` en {0,48,96,…};
  * la página 1 (offset 0) no lleva sufijo, el resto usa `/_Desde_{offset+1}_NoIndex_True`.
+ * `priceRange` opcional ({minClp,maxClp}) añade el filtro de banda de precio, que
+ * PI apila ANTES del sufijo de paginación.
  */
-export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0 }) {
+export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0, priceRange = null }) {
   const type = fold(String(propertyType ?? 'casa')) || 'casa'
   let url = `https://www.portalinmobiliario.com/${operationSlug(operation)}/${type}/propiedades-usadas/${slug}-${rslug}`
+  url += priceRangeSegment(priceRange)
   if (offset > 0) url += `/_Desde_${offset + 1}_NoIndex_True`
   return url
 }
@@ -154,6 +177,75 @@ async function updateTargetStats(client, targetId, { scrapedAt, completed, listi
  * @param {object} [deps] inyectables para test
  * @returns {Promise<{ target_id, pages, seen, enqueued, delisted, portal_total, completed, reason }>}
  */
+/**
+ * Barre UNA banda (una URL de listado, opcionalmente con filtro de precio) hasta
+ * agotar su paginación. Acumula en `seen` los external_id y encola detail de los
+ * nuevos. NO da de baja ni actualiza stats — eso lo hace el orquestador sobre el
+ * agregado de todas las bandas. Devuelve el estado de esta banda.
+ */
+async function sweepBand(client, ctx, priceRange, seen) {
+  const { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
+  let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, completed = false, reason = null
+
+  for (let page = 1; page <= maxPages; page++) {
+    const offset = (page - 1) * PAGE_SIZE
+    const url = buildListUrl({ comunaSlug: ctx.slug, regionSlug: ctx.rslug, operation: target.operation, propertyType: target.property_type, offset, priceRange })
+
+    const res = await fetch(url, { profile: 'portalinmobiliario' })
+    if (!res.ok) {
+      if (page === 1 && (res.status === 404 || /\b404\b/.test(res.reason ?? ''))) {
+        completed = true; reason = 'sin inventario (404)'
+      } else {
+        reason = `fetch p${page}: ${res.reason ?? 'fallo'}`
+      }
+      break
+    }
+    pages++
+
+    const meta = parseMeta(res.html)
+    const listings = parseList(res.html)
+    if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
+
+    const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
+    for (const l of usable) seen.add(l.external_id)
+
+    const ids = usable.map((l) => l.external_id)
+    const known = await existingExternalIds(client, ids)
+    for (const l of usable) {
+      if (!known.has(l.external_id)) { await enqueueDetail(l.external_id, l.source_url); enqueued++ }
+    }
+
+    const d = decideContinue({ page, pageItems: listings.length, pageCount: meta.pageCount, maxPages })
+    if (d.stop) { completed = d.completed; reason = reason ?? d.reason; break }
+    await sleep(politenessMs)
+  }
+
+  const capped = portalTotal != null && resultsLimit != null && portalTotal > resultsLimit
+  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, reason }
+}
+
+/**
+ * Bisección recursiva por precio: parte una banda [minClp,maxClp] hasta que cada
+ * sub-banda esté bajo el tope de paginación del portal. `probe(range)` devuelve
+ * el `total` que el portal declara para esa banda. Puro respecto a la red (recibe
+ * `probe` inyectable). Devuelve las bandas hoja a barrer.
+ *
+ * Colina (5699, banda alta 2118 > 2000) es justo el caso: la banda que aún topa
+ * se subdivide sola, sin listas de barrios ni tope por comuna.
+ */
+export async function subdividePriceBands(probe, resultsLimit, minClp = 0, maxClp = PRICE_CEILING_CLP, depth = 0) {
+  const total = await probe({ minClp, maxClp })
+  // Sin dato o ya bajo el tope: es una banda hoja.
+  if (total == null || total <= resultsLimit) return [{ minClp, maxClp }]
+  // No se puede seguir partiendo (profundidad/ancho mínimo): se barre igual
+  // (topará, pero es el mejor esfuerzo — caso extremo improbable).
+  if (depth >= MAX_PRICE_DEPTH || (maxClp - minClp) <= MIN_BAND_WIDTH_CLP) return [{ minClp, maxClp }]
+  const mid = minClp + Math.floor((maxClp - minClp) / 2)
+  const lower = await subdividePriceBands(probe, resultsLimit, minClp, mid, depth + 1)
+  const upper = await subdividePriceBands(probe, resultsLimit, mid, maxClp, depth + 1)
+  return [...lower, ...upper]
+}
+
 export async function discoverTarget(client, target, deps = {}) {
   const {
     fetch = fetchHtmlResilient,
@@ -170,71 +262,48 @@ export async function discoverTarget(client, target, deps = {}) {
   const slug = comunaSlug(target.comuna_name)
   const rslug = regionSlug(target.region)
   const scrapedAt = now()
+  const ctx = { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target, slug, rslug }
 
   const seen = new Set()
-  let pages = 0
-  let enqueued = 0
-  let portalTotal = null
-  let resultsLimit = null
-  let completed = false
-  let reason = null
+  let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, reason = null
+  let bandsUsed = 1
+  let allBandsExhaustive = true
 
-  for (let page = 1; page <= maxPages; page++) {
-    const offset = (page - 1) * PAGE_SIZE
-    const url = buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation: target.operation, propertyType: target.property_type, offset })
+  // Barrido sin filtro. Si la comuna cabe bajo el tope, con esto basta.
+  const base = await sweepBand(client, ctx, null, seen)
+  pages += base.pages; enqueued += base.enqueued
+  portalTotal = base.portalTotal; resultsLimit = base.resultsLimit; reason = base.reason
+  let completed = base.completed
 
-    const res = await fetch(url, { profile: 'portalinmobiliario' })
-    if (!res.ok) {
-      // 404 en la primera página = comuna SIN inventario para este tipo/op (el
-      // portal responde 404, no un 200 vacío). Es un barrido vacío LEGÍTIMO y
-      // completo, no un fallo: así last_success_at avanza y el target no queda
-      // "perpetuamente fallido" en la observabilidad (H17).
-      if (page === 1 && (res.status === 404 || /\b404\b/.test(res.reason ?? ''))) {
-        completed = true
-        reason = 'sin inventario (404)'
-      } else {
-        reason = `fetch p${page}: ${res.reason ?? 'fallo'}`
-      }
-      break
+  if (base.capped) {
+    // Comuna por encima del tope: subdividir por precio. Cada banda se barre
+    // ENTERA; su unión cubre el 100% de la comuna. Los 2000 ya vistos en el
+    // barrido base se re-ven en sus bandas (dedup natural por el Set `seen`).
+    const probe = async (range) => {
+      const url = buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation: target.operation, propertyType: target.property_type, priceRange: range })
+      const res = await fetch(url, { profile: 'portalinmobiliario' })
+      if (!res.ok) return null
+      await sleep(politenessMs)
+      return parseMeta(res.html).total
     }
-    pages++
-
-    const meta = parseMeta(res.html)
-    const listings = parseList(res.html)
-    if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
-    const pageCount = meta.pageCount
-
-    // El plan cubre USADAS primero; el filtro de URL ya excluye proyectos, pero
-    // se doble-filtra por si acaso alguno se cuela (is_development del domain_id).
-    const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
-    for (const l of usable) seen.add(l.external_id)
-
-    const ids = usable.map((l) => l.external_id)
-    const known = await existingExternalIds(client, ids)
-    for (const l of usable) {
-      if (!known.has(l.external_id)) {
-        await enqueueDetail(l.external_id, l.source_url)
-        enqueued++
-      }
+    const bands = await subdividePriceBands(probe, resultsLimit ?? 2000)
+    bandsUsed = bands.length
+    completed = true
+    for (const band of bands) {
+      const r = await sweepBand(client, ctx, band, seen)
+      pages += r.pages; enqueued += r.enqueued
+      if (!r.completed || r.capped) { allBandsExhaustive = false; completed = false }
+      await sleep(politenessMs)
     }
-
-    const d = decideContinue({ page, pageItems: listings.length, pageCount, maxPages })
-    if (d.stop) { completed = d.completed; reason = reason ?? d.reason; break }
-    await sleep(politenessMs)
+    reason = `comuna topó paginación (total=${portalTotal}): subdividida en ${bandsUsed} bandas de precio`
   }
 
-  // ¿Fue EXHAUSTIVO el barrido? Portalinmobiliario topea la paginación en
-  // ~2000 resultados (resultsLimit): si la comuna declara más (`total`), NUNCA
-  // vimos todo aunque hayamos llegado al último page accesible. Marcar bajas en
-  // ese caso daría de baja anuncios VIVOS que quedaron más allá del corte 2000
-  // (y como el orden cambia entre corridas, oscilarían activo/baja — flapping).
-  // Solo es seguro dar de baja si el barrido cubrió el total real.
-  const capped = portalTotal != null && resultsLimit != null && portalTotal > resultsLimit
-  const exhaustive = completed && !capped
-  if (capped) reason = reason ?? `portal topó paginación (total=${portalTotal} > límite=${resultsLimit}): sin bajas`
+  // Exhaustivo (seguro para dar de baja) = barrido base completo y no topado, o
+  // banda-por-banda con TODAS las bandas completas (unión = 100% de la comuna).
+  const exhaustive = base.capped
+    ? (completed && allBandsExhaustive)
+    : (completed && !base.capped)
 
-  // Bajas: solo en barrido EXHAUSTIVO y con al menos un anuncio visto (evita dar
-  // de baja toda la comuna por un fallo que devolvió 0, o por el tope del portal).
   let delisted = 0
   if (exhaustive && target.comuna_id && seen.size > 0) {
     delisted = await markDelisted(client, target, seen, scrapedAt)
@@ -242,7 +311,7 @@ export async function discoverTarget(client, target, deps = {}) {
 
   await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal })
 
-  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, completed, exhaustive, capped, reason }
+  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, completed, exhaustive, capped: base.capped, reason }
 }
 
 /**

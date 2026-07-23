@@ -16,6 +16,7 @@ import {
   buildListUrl,
   decideContinue,
   discoverTarget,
+  subdividePriceBands,
 } from './discovery-portalinmobiliario-cl.mjs'
 
 // ── Puras ────────────────────────────────────────────────────────────────────
@@ -172,24 +173,58 @@ test('discoverTarget: 404 en página 1 = comuna vacía → completo, sin bajas, 
   assert.equal(client.state.stats.completed, true) // last_success_at avanza
 })
 
-test('discoverTarget: portal topa paginación (total > límite) → completo pero SIN bajas', async () => {
-  // Comuna grande: total=3479 pero el portal solo deja paginar 2000 (resultsLimit).
-  // Aunque el barrido "termine" (pageCount), NO es exhaustivo → no dar de baja.
+test('discoverTarget: comuna que topa paginación → subdivide por precio y SÍ es exhaustiva', async () => {
+  // Comuna grande: total=3479 > tope 2000 → el barrido base topa. Ahora se
+  // subdivide por bandas de precio; cada banda cabe → la unión ve el 100% de la
+  // comuna → exhaustivo → sí puede dar de baja lo que ya no aparece.
   const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
-  let page = 0
+  let page = 0, metaCall = 0
   const res = await discoverTarget(client, TARGET, {
     fetch: async () => ({ ok: true, html: 'P' }),
     parseList: () => { page++; return [listing(`MLC-${page}-a`), listing(`MLC-${page}-b`)] },
-    parseMeta: () => ({ total: 3479, pageCount: 1, resultsLimit: 2000 }), // pageCount=1 → termina ya
+    parseMeta: () => {
+      metaCall++
+      // Primera llamada (barrido base, página 1): la comuna topa.
+      if (metaCall === 1) return { total: 3479, pageCount: 1, resultsLimit: 2000 }
+      // Probes y barridos de banda: cada banda cabe bajo el tope y termina.
+      return { total: 800, pageCount: 1, resultsLimit: 2000 }
+    },
     enqueueDetail: async () => {},
     sleep: async () => {},
   })
-  assert.equal(res.completed, true)
   assert.equal(res.capped, true)
-  assert.equal(res.exhaustive, false)
-  assert.equal(res.delisted, 0) // MLC-VIVO NO se da de baja pese a no aparecer
-  assert.equal(client.state.delistedIds.length, 0)
-  assert.match(res.reason, /topó/)
+  assert.ok(res.bands >= 1)              // se subdividió por precio
+  assert.equal(res.completed, true)
+  assert.equal(res.exhaustive, true)     // la unión de bandas cubre todo
+  assert.equal(res.delisted, 1)          // MLC-VIVO ya no aparece → baja correcta
+  assert.deepEqual(client.state.delistedIds, ['uuid-vivo'])
+  assert.match(res.reason, /bandas de precio/)
+})
+
+test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso Colina)', async () => {
+  // Modela una comuna densa (tipo Colina): la banda alta sigue por encima del
+  // tope y hay que partirla otra vez. `probe` devuelve el total por rango.
+  const probe = async ({ minClp, maxClp }) => {
+    // Densidad concentrada en la parte baja: [0, mitad) tiene mucho, arriba poco.
+    const span = maxClp - minClp
+    if (minClp === 0 && maxClp === 10_000_000_000) return 5699 // comuna entera
+    if (span > 2_000_000_000) return 3000 // bandas anchas todavía topan
+    return 1200 // bandas ya estrechas caben
+  }
+  const bands = await subdividePriceBands(probe, 2000)
+  assert.ok(bands.length >= 2, 'debe partir la comuna en varias bandas')
+  // Cubren [0, techo] sin huecos ni solapes (contiguas y ordenadas).
+  const sorted = [...bands].sort((a, b) => a.minClp - b.minClp)
+  assert.equal(sorted[0].minClp, 0)
+  assert.equal(sorted[sorted.length - 1].maxClp, 10_000_000_000)
+  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].minClp, sorted[i - 1].maxClp)
+})
+
+test('subdividePriceBands: comuna bajo el tope → una sola banda, sin bisecar', async () => {
+  const probe = async () => 900
+  const bands = await subdividePriceBands(probe, 2000)
+  assert.equal(bands.length, 1)
+  assert.deepEqual(bands[0], { minClp: 0, maxClp: 10_000_000_000 })
 })
 
 test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna', async () => {
