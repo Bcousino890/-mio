@@ -56,13 +56,21 @@ test('has_video y video_modal_url se persisten en el INSERT', async () => {
   assert.ok(client.inserted.params.includes('https://vm.example/video'));
 });
 
-test('sin video en el parseo → has_video false, video_modal_url null (no revienta)', async () => {
+test('sin video/logo en el parseo → has_video false, video_modal_url/advertiser_logo null (no revienta)', async () => {
   const client = makeClient();
-  const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url
+  const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo
   assert.equal(res.changeType, 'new');
   const idx = client.inserted.params.length;
-  assert.equal(client.inserted.params[idx - 2], false); // has_video
-  assert.equal(client.inserted.params[idx - 1], null); // video_modal_url
+  assert.equal(client.inserted.params[idx - 3], false); // has_video
+  assert.equal(client.inserted.params[idx - 2], null); // video_modal_url
+  assert.equal(client.inserted.params[idx - 1], null); // advertiser_logo
+});
+
+test('advertiser_logo se persiste en el INSERT', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, advertiser_logo: 'https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg' });
+  assert.match(client.inserted.sql, /advertiser_logo/);
+  assert.ok(client.inserted.params.includes('https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg'));
 });
 
 test('re-upsert que agrega video dispara changeType updated', async () => {

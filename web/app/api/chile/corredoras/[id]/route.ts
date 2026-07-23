@@ -23,6 +23,7 @@ export async function GET(
       `SELECT
          id, advertiser_id,
          COALESCE(name_normalized, name_raw) AS name,
+         logo_url,
          phones, web_propia_url, crm_platform,
          active_listings_count, total_listings_seen, comunas_operated,
          avg_days_on_market, exclusivity_ratio, metrics_updated_at,

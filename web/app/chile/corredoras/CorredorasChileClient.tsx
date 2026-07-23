@@ -8,6 +8,7 @@ type Corredora = {
   id: string
   advertiser_id: string | null
   name: string | null
+  logo_url: string | null
   phones: string[] | null
   web_propia_url: string | null
   crm_platform: string
@@ -61,6 +62,28 @@ function avatarColor(name: string | null): string {
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
 }
 
+/** Logo del portal si existe (y carga bien); si no, avatar de iniciales. */
+function Avatar({ name, logoUrl, size = 36 }: { name: string | null; logoUrl: string | null; size?: number }) {
+  const [errored, setErrored] = useState(false)
+  if (logoUrl && !errored) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={logoUrl}
+        alt={name ?? 'Corredora'}
+        onError={() => setErrored(true)}
+        style={{ width: size, height: size }}
+        className="rounded-full object-cover shrink-0 bg-slate-700 border border-slate-600"
+      />
+    )
+  }
+  return (
+    <div style={{ width: size, height: size }} className={`rounded-full flex items-center justify-center text-white font-semibold shrink-0 ${avatarColor(name)}`}>
+      <span style={{ fontSize: size * 0.4 }}>{initials(name)}</span>
+    </div>
+  )
+}
+
 function SummaryTile({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent?: string }) {
   return (
     <div className="flex items-center gap-3 bg-slate-800/60 border border-slate-700/70 rounded-xl px-4 py-3">
@@ -83,6 +106,9 @@ export default function CorredorasChileClient() {
   const [comuna, setComuna] = useState('')
   const [minStock, setMinStock] = useState<number | null>(null)
   const [onlyWithWeb, setOnlyWithWeb] = useState(false)
+  const [onlyWithPhone, setOnlyWithPhone] = useState(false)
+  const [minExclusivity, setMinExclusivity] = useState<number | null>(null)
+  const [includeInactive, setIncludeInactive] = useState(false)
   const [sortBy, setSortBy] = useState<SortKey>('stock')
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [showFilters, setShowFilters] = useState(true)
@@ -96,11 +122,17 @@ export default function CorredorasChileClient() {
 
   useEffect(() => {
     setLoading(true)
-    const params = new URLSearchParams({ sort: sortBy, page_size: '200' })
+    // Directorio: todas las corredoras de una sola vez (sin paginar). El cap
+    // de la API es 5000 — acotado por advertisers únicos, no por anuncios.
+    const params = new URLSearchParams({ sort: sortBy, page_size: '5000' })
     if (search) params.append('q', search)
     if (crm !== 'all') params.append('crm_platform', crm)
     if (comuna.trim()) params.append('comuna', comuna.trim())
     if (onlyWithWeb) params.append('only_with_web', 'true')
+    // Por defecto la API solo trae corredoras con stock activo; para "todas de
+    // verdad" (incluidas las que se quedaron sin anuncios activos) hay que
+    // pedir explícitamente only_active=false.
+    if (includeInactive) params.append('only_active', 'false')
 
     fetch(`/api/chile/corredoras?${params.toString()}`)
       .then(r => r.json())
@@ -110,12 +142,17 @@ export default function CorredorasChileClient() {
       })
       .catch(() => { setRows([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [search, crm, comuna, onlyWithWeb, sortBy])
+  }, [search, crm, comuna, onlyWithWeb, includeInactive, sortBy])
 
-  // minStock se filtra en cliente (el endpoint no lo expone como parámetro).
+  // minStock/minExclusivity/onlyWithPhone se filtran en cliente (el endpoint no
+  // los expone como parámetro; el volumen ya es bajo al traer todas de una vez).
   const visible = useMemo(
-    () => (minStock == null ? rows : rows.filter(r => r.active_listings_count >= minStock)),
-    [rows, minStock]
+    () => rows.filter(r =>
+      (minStock == null || r.active_listings_count >= minStock) &&
+      (minExclusivity == null || (r.exclusivity_ratio ?? 0) * 100 >= minExclusivity) &&
+      (!onlyWithPhone || (r.phones?.length ?? 0) > 0)
+    ),
+    [rows, minStock, minExclusivity, onlyWithPhone]
   )
 
   const summary = useMemo(() => ({
@@ -125,6 +162,7 @@ export default function CorredorasChileClient() {
   }), [visible])
 
   const activeFilterCount = (crm !== 'all' ? 1 : 0) + (comuna.trim() ? 1 : 0) + (minStock != null ? 1 : 0) + (onlyWithWeb ? 1 : 0)
+    + (onlyWithPhone ? 1 : 0) + (minExclusivity != null ? 1 : 0) + (includeInactive ? 1 : 0)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4 lg:p-6">
@@ -205,10 +243,27 @@ export default function CorredorasChileClient() {
               <input type="number" min={0} placeholder="ej. 5" value={minStock ?? ''} onChange={e => setMinStock(e.target.value ? Number(e.target.value) : null)}
                 className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-3 py-1.5 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
             </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Exclusividad mín. (%)</label>
+              <input type="number" min={0} max={100} placeholder="ej. 50" value={minExclusivity ?? ''} onChange={e => setMinExclusivity(e.target.value ? Number(e.target.value) : null)}
+                className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-3 py-1.5 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
+            </div>
             <div className="flex items-end">
               <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer py-1.5">
                 <input type="checkbox" checked={onlyWithWeb} onChange={e => setOnlyWithWeb(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-amber-500" />
                 Solo con web propia
+              </label>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer py-1.5">
+                <input type="checkbox" checked={onlyWithPhone} onChange={e => setOnlyWithPhone(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-amber-500" />
+                Solo con teléfono
+              </label>
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer py-1.5">
+                <input type="checkbox" checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-amber-500" />
+                Incluir sin stock activo
               </label>
             </div>
           </div>
@@ -242,9 +297,7 @@ export default function CorredorasChileClient() {
                   <tr key={c.id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/30 transition-colors group">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full ${avatarColor(c.name)} flex items-center justify-center text-[11px] font-bold text-white shrink-0`}>
-                          {initials(c.name)}
-                        </div>
+                        <Avatar name={c.name} logoUrl={c.logo_url} size={32} />
                         <div className="min-w-0">
                           <Link href={`/chile/corredoras/${c.id}`} className="font-medium text-slate-100 group-hover:text-amber-400 capitalize block truncate">
                             {c.name || '(sin nombre)'}

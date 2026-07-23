@@ -28,6 +28,7 @@ type Ficha = {
   id: string
   advertiser_id: string | null
   name: string | null
+  logo_url: string | null
   phones: string[] | null
   web_propia_url: string | null
   crm_platform: string
@@ -65,6 +66,28 @@ function avatarColor(name: string | null): string {
   const s = name ?? ''; let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
+}
+
+/** Logo del portal si existe (y carga bien); si no, avatar de iniciales. */
+function Avatar({ name, logoUrl, size = 56 }: { name: string | null; logoUrl: string | null; size?: number }) {
+  const [errored, setErrored] = useState(false)
+  if (logoUrl && !errored) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={logoUrl}
+        alt={name ?? 'Corredora'}
+        onError={() => setErrored(true)}
+        style={{ width: size, height: size }}
+        className="rounded-2xl object-cover shrink-0 bg-slate-700 border border-slate-600"
+      />
+    )
+  }
+  return (
+    <div style={{ width: size, height: size }} className={`rounded-2xl ${avatarColor(name)} flex items-center justify-center font-bold text-white shrink-0`}>
+      <span style={{ fontSize: size * 0.35 }}>{initials(name)}</span>
+    </div>
+  )
 }
 
 // Miniatura de portada del anuncio (fallback si no hay foto o falla la carga).
@@ -128,9 +151,7 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
           <>
             {/* Header */}
             <div className="flex items-start gap-4 mb-5">
-              <div className={`w-14 h-14 rounded-2xl ${avatarColor(ficha.name)} flex items-center justify-center text-lg font-bold text-white shrink-0`}>
-                {initials(ficha.name)}
-              </div>
+              <Avatar name={ficha.name} logoUrl={ficha.logo_url} size={56} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-2xl font-bold text-slate-100 capitalize">{ficha.name || '(sin nombre)'}</h1>
