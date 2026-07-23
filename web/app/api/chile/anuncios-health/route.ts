@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/anuncios-health — salud del pipeline de Anuncios CL (plan · H17).
@@ -38,24 +39,55 @@ function comunaSlug(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-/** Consulta el total actual de un objetivo directo contra Portal Inmobiliario. */
-async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<number | null> {
+// Proxy Evomi (residencial CL), mismas variables que usa el worker
+// (scraper/lib/fetch.mjs). El contenedor `app` carga el mismo .env que
+// `worker-cl` (env_file compartido) → estas variables SÍ están disponibles aquí.
+function evomiProxyUrl(): string | null {
+  const { EVOMI_PROXY_HOST, EVOMI_PROXY_PORT, EVOMI_PROXY_USER, EVOMI_PROXY_PASS } = process.env
+  if (!EVOMI_PROXY_USER || !EVOMI_PROXY_HOST || !EVOMI_PROXY_PORT) return null
+  return `http://${EVOMI_PROXY_USER}:${EVOMI_PROXY_PASS}@${EVOMI_PROXY_HOST}:${EVOMI_PROXY_PORT}`
+}
+
+async function fetchWithTimeout(url: string, opts: { dispatcher?: InstanceType<typeof ProxyAgent> } = {}, ms = 10000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
   try {
-    const opSlug = operation === 'rent' ? 'arriendo' : 'venta'
-    const typeSlug = propertyType || 'casa'
-    const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-metropolitana`
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10000)
-    let res: Response
-    try {
-      res = await fetch(url, { headers: PI_HEADERS, redirect: 'follow', signal: controller.signal, cache: 'no-store' })
-    } finally {
-      clearTimeout(timer)
-    }
+    return await undiciFetch(url, { headers: PI_HEADERS, redirect: 'follow', signal: controller.signal, ...opts })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Consulta el total actual de un objetivo contra Portal Inmobiliario. DIRECTO
+ * primero (rápido); si el volumen sostenido del worker hace que la IP de la VPS
+ * quede bloqueada (403 — visto en producción tras horas de backfill), reintenta
+ * por el proxy residencial Evomi, igual que hace el worker (fetchHtmlPi).
+ */
+async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<number | null> {
+  const opSlug = operation === 'rent' ? 'arriendo' : 'venta'
+  const typeSlug = propertyType || 'casa'
+  const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-metropolitana`
+
+  const extractTotal = async (res: Awaited<ReturnType<typeof undiciFetch>>) => {
     if (!res.ok) return null
     const html = await res.text()
     const m = html.match(/"total"\s*:\s*(\d+)/)
     return m ? Number(m[1]) : null
+  }
+
+  try {
+    const direct = await fetchWithTimeout(url)
+    const directTotal = await extractTotal(direct)
+    if (directTotal != null) return directTotal
+  } catch { /* cae a proxy */ }
+
+  const proxyUrl = evomiProxyUrl()
+  if (!proxyUrl) return null
+  try {
+    const agent = new ProxyAgent(proxyUrl)
+    const proxied = await fetchWithTimeout(url, { dispatcher: agent })
+    return await extractTotal(proxied)
   } catch {
     return null
   }
