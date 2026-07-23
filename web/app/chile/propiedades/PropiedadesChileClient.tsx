@@ -270,11 +270,14 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
                   <div className="mt-5">
                     <h3 className="text-sm font-semibold text-slate-300 mb-2 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
                     {geo && (
-                      // Pin declarado por el aviso — SIEMPRE existe con lat/lng, aunque
-                      // location_confidence sea 'none' (no depende de que el Rol SII se
-                      // haya triangulado): mostrar el punto no es lo mismo que confirmarlo.
+                      // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
+                      // la ubicación a propósito y solo se muestra precisa tras resolver el
+                      // Catastro, Portal Inmobiliario (Chile) declara la coordenada real
+                      // directamente (confirmado en Fase 0/research). `location_confidence`
+                      // mide otra cosa — si ya se triangulό contra el Rol SII (Fase 7,
+                      // pendiente) — y no debe gatear si el pin se ve preciso o difuso.
                       <div className="h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
-                        <DetailMap latitude={geo.latitude!} longitude={geo.longitude!} exact={p.location_confidence === 'confirmed'} />
+                        <DetailMap latitude={geo.latitude!} longitude={geo.longitude!} exact />
                       </div>
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
