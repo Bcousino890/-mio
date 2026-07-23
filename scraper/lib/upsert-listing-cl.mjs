@@ -85,6 +85,13 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const priceClp = resolvePriceClp(parsed, ufRate)
   const priceUf = resolvePriceUf(parsed)
 
+  // Antigüedad REAL del aviso según el portal (parsed.posted_days_ago, desde el
+  // subtitle de la ficha) — first_seen_at mide cuándo NOSOTROS lo vimos, que
+  // puede ser mucho más tarde si el discovery recién llegó a esta comuna.
+  const portalFirstSeenAt = Number.isFinite(parsed.posted_days_ago)
+    ? new Date(scrapedAt.getTime() - parsed.posted_days_ago * 86400000)
+    : null
+
   const next = {
     price: priceClp,
     advertiser_name: parsed.advertiser_name ?? null,
@@ -105,11 +112,12 @@ export async function upsertListingCl(client, parsed, options = {}) {
        price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
+       portal_first_seen_at,
        status, is_active, last_seen_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
        $18,$19,$20,$21,$22,$23,$24,$25,
-       $26,$27,$28,$30,$31,$32,$33,
+       $26,$27,$28,$30,$31,$32,$33,$34,
        'active', true, $29, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
@@ -126,6 +134,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
        has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
        advertiser_logo = EXCLUDED.advertiser_logo,
+       -- COALESCE: si esta pasada no pudo parsear "hace N días" (subtitle
+       -- cambió de forma, o vino null), no se pisa un valor ya bueno con null.
+       portal_first_seen_at = COALESCE(EXCLUDED.portal_first_seen_at, listings_cl.portal_first_seen_at),
        status = 'active', is_active = true, last_seen_at = EXCLUDED.last_seen_at, updated_at = now()
      RETURNING id`,
     [
@@ -139,6 +150,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       scrapedAt,
       JSON.stringify(parsed.features ?? []),
       parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
+      portalFirstSeenAt,
     ]
   )
   const listingId = upserted[0].id

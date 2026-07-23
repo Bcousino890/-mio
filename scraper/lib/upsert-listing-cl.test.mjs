@@ -56,14 +56,15 @@ test('has_video y video_modal_url se persisten en el INSERT', async () => {
   assert.ok(client.inserted.params.includes('https://vm.example/video'));
 });
 
-test('sin video/logo en el parseo → has_video false, video_modal_url/advertiser_logo null (no revienta)', async () => {
+test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no revienta)', async () => {
   const client = makeClient();
-  const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo
+  const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo/posted_days_ago
   assert.equal(res.changeType, 'new');
   const idx = client.inserted.params.length;
-  assert.equal(client.inserted.params[idx - 3], false); // has_video
-  assert.equal(client.inserted.params[idx - 2], null); // video_modal_url
-  assert.equal(client.inserted.params[idx - 1], null); // advertiser_logo
+  assert.equal(client.inserted.params[idx - 4], false); // has_video
+  assert.equal(client.inserted.params[idx - 3], null); // video_modal_url
+  assert.equal(client.inserted.params[idx - 2], null); // advertiser_logo
+  assert.equal(client.inserted.params[idx - 1], null); // portal_first_seen_at
 });
 
 test('advertiser_logo se persiste en el INSERT', async () => {
@@ -71,6 +72,24 @@ test('advertiser_logo se persiste en el INSERT', async () => {
   await upsertListingCl(client, { ...BASE_PARSED, advertiser_logo: 'https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg' });
   assert.match(client.inserted.sql, /advertiser_logo/);
   assert.ok(client.inserted.params.includes('https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg'));
+});
+
+test('portal_first_seen_at: se calcula desde posted_days_ago + scrapedAt (antigüedad REAL del portal)', async () => {
+  const client = makeClient();
+  const scrapedAt = new Date('2026-07-24T00:00:00Z');
+  await upsertListingCl(client, { ...BASE_PARSED, posted_days_ago: 28 }, { scrapedAt });
+  assert.match(client.inserted.sql, /portal_first_seen_at/);
+  const expected = new Date(scrapedAt.getTime() - 28 * 86400000);
+  assert.ok(client.inserted.params.some((p) => p instanceof Date && p.getTime() === expected.getTime()));
+});
+
+test('portal_first_seen_at: sin posted_days_ago en el parseo, el UPDATE no pisa el valor ya guardado (COALESCE)', async () => {
+  const client = makeClient({ existing: {
+    id: 'listing-1', price: 500000000, advertiser_name: 'Test Corredora', photos: ['a', 'b'],
+    description: 'desc', square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+  } });
+  await upsertListingCl(client, BASE_PARSED); // sin posted_days_ago esta vez
+  assert.match(client.inserted.sql, /COALESCE\(EXCLUDED\.portal_first_seen_at, listings_cl\.portal_first_seen_at\)/);
 });
 
 test('re-upsert que agrega video dispara changeType updated', async () => {

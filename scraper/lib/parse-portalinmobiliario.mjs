@@ -188,6 +188,24 @@ function extractInitialState(html) {
   return blob?.appProps?.pageProps?.initialState ?? null
 }
 
+// El portal expone la antigüedad real del anuncio SOLO como texto relativo en
+// `components.short_description[0].subtitle` (ej. "Casa en Venta  |  Publicado
+// hace 28 días"), nunca como fecha absoluta. `listings_cl.first_seen_at` mide
+// otra cosa — cuándo NOSOTROS lo vimos por primera vez, que puede ser mucho más
+// tarde si el discovery recién empezó a cubrir la comuna — así que "días en
+// mercado" calculado desde first_seen_at subestima la antigüedad real del
+// aviso. Esta función extrae los días reales que el PORTAL declara.
+const POSTED_UNIT_DAYS = { día: 1, dias: 1, días: 1, semana: 7, semanas: 7, mes: 30, meses: 30, año: 365, años: 365 }
+export function parsePostedDaysAgo(subtitle) {
+  if (!subtitle) return null
+  if (/reci[eé]n\s+public|hoy\b/i.test(subtitle)) return 0
+  const m = subtitle.match(/hace\s+(\d+)\s+(d[ií]as?|semanas?|mes(?:es)?|años?)/i)
+  if (!m) return null
+  const n = Number(m[1])
+  const unit = POSTED_UNIT_DAYS[m[2].toLowerCase()] ?? null
+  return unit != null && Number.isFinite(n) ? n * unit : null
+}
+
 // ─── Parseo del LISTADO (blob Nordic, NO el HTML renderizado) ───────────────
 // CONFIRMADO EN FASE 0 (HTML real de Las Condes, 48 tarjetas): los resultados de
 // una página de listado NO viven en `<li class="ui-search-layout__item">` del
@@ -364,6 +382,14 @@ export async function parseDetailPage(html, external_id) {
 
     const titleM = html.match(/<title>([^<]*)<\/title>/)
     const title = comps.header?.title ?? (titleM ? decode(titleM[1]).replace(/\s*[|-]\s*Portalinmobiliario.*$/i, '') : null)
+
+    // Antigüedad REAL del aviso según el portal (ver parsePostedDaysAgo arriba)
+    // — "días en mercado" calculado solo desde nuestro first_seen_at subestima
+    // avisos que el discovery tardó en alcanzar.
+    const headerSubtitle = comps.header?.subtitle
+      ?? (Array.isArray(comps.short_description) ? comps.short_description.find((c) => c?.subtitle)?.subtitle : null)
+      ?? null
+    const posted_days_ago = parsePostedDaysAgo(headerSubtitle)
 
     // domain_id (ej. "MLC-HOUSES_FOR_RENT" / "MLC-INDIVIDUAL_HOUSES_FOR_SALE")
     // codifica operación + tipo de propiedad de forma inequívoca.
@@ -571,6 +597,7 @@ export async function parseDetailPage(html, external_id) {
       advertiser_id,
       advertiser_logo,
       seller_reference,
+      posted_days_ago,  // antigüedad real declarada por el portal (ver parsePostedDaysAgo)
       photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
       photos_total_count: photosTotalCount,  // total real declarado por el portal (puede ser > 30)
       gallery_url: galleryUrl,  // endpoint del modal con la galería completa (Fase 2: descarga real)

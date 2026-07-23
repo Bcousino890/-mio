@@ -186,7 +186,13 @@ export async function GET(request: NextRequest) {
         l.location_confidence,
         l.rol_matriz_candidate,
         l.identity_score,
-        EXTRACT(DAY FROM (now() - l.last_seen_at))::int as days_on_market,
+        -- Antigüedad REAL del aviso: preferir portal_first_seen_at ("Publicado
+        -- hace N días" que declara el propio portal) sobre first_seen_at
+        -- (cuándo lo vimos nosotros). Antes usaba last_seen_at, que se
+        -- actualiza en cada re-scrape y por eso siempre daba ~0 para
+        -- cualquier anuncio activo — no medía antigüedad, medía frescura del
+        -- scrape.
+        EXTRACT(DAY FROM (now() - COALESCE(l.portal_first_seen_at, l.first_seen_at)))::int as days_on_market,
         l.description,
         l.property_type
       FROM listings_cl l

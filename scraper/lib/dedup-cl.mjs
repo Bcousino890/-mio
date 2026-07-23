@@ -110,6 +110,14 @@ export function consolidateFields(rows) {
     is_active: rows.some((r) => r.is_active),
     first_seen_at: rows.reduce((min, r) => (r.first_seen_at < min ? r.first_seen_at : min), rows[0].first_seen_at),
     last_seen_at: rows.reduce((max, r) => (r.last_seen_at > max ? r.last_seen_at : max), rows[0].last_seen_at),
+    // Antigüedad REAL del inmueble en el mercado: el MÍNIMO entre las
+    // corredoras que lo publican — el mercado lo vio desde que la PRIMERA
+    // corredora lo puso, no desde la última. Ignora nulls (portal_first_seen_at
+    // depende de que el subtitle se haya podido parsear, ver 0076).
+    portal_first_seen_at: rows.reduce((min, r) => {
+      if (r.portal_first_seen_at == null) return min;
+      return min == null || r.portal_first_seen_at < min ? r.portal_first_seen_at : min;
+    }, null),
   };
 }
 
@@ -117,7 +125,7 @@ export const LISTING_FIELDS_FOR_CONSOLIDATION = `
   id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
   square_meters, bedrooms, bathrooms, comuna_id, localidad, latitude, longitude,
   location_confidence, exact_address, portal, source_type, advertiser_type,
-  advertiser_id, is_active, first_seen_at, last_seen_at
+  advertiser_id, is_active, first_seen_at, last_seen_at, portal_first_seen_at
 `;
 
 /**
@@ -140,7 +148,7 @@ export async function refreshPropertyClAggregates(client, propertyClId) {
        comuna_id = $11, localidad = $12, latitude = $13, longitude = $14,
        location_confidence = $15, exact_address = $16, listing_count = $17,
        corredora_count = $18, portals = $19, source_types = $20, advertiser_kinds = $21,
-       is_active = $22, first_seen_at = $23, last_seen_at = $24, updated_at = now()
+       is_active = $22, first_seen_at = $23, last_seen_at = $24, portal_first_seen_at = $25, updated_at = now()
      WHERE id = $1`,
     [
       propertyClId, c.operation, c.property_type, c.canonical_price, c.canonical_price_uf,
@@ -148,7 +156,7 @@ export async function refreshPropertyClAggregates(client, propertyClId) {
       c.comuna_id, c.localidad, c.latitude, c.longitude,
       c.location_confidence, c.exact_address, c.listing_count,
       c.corredora_count, c.portals, c.source_types, c.advertiser_kinds,
-      c.is_active, c.first_seen_at, c.last_seen_at,
+      c.is_active, c.first_seen_at, c.last_seen_at, c.portal_first_seen_at,
     ]
   );
 }
@@ -160,14 +168,14 @@ async function createPropertyCl(client, rows) {
        operation, property_type, canonical_price, canonical_price_uf, uf_rate, uf_rate_date,
        square_meters, bedrooms, bathrooms, comuna_id, localidad, latitude, longitude,
        location_confidence, exact_address, listing_count, corredora_count,
-       portals, source_types, advertiser_kinds, is_active, first_seen_at, last_seen_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+       portals, source_types, advertiser_kinds, is_active, first_seen_at, last_seen_at, portal_first_seen_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
      RETURNING id`,
     [
       c.operation, c.property_type, c.canonical_price, c.canonical_price_uf, c.uf_rate, c.uf_rate_date,
       c.square_meters, c.bedrooms, c.bathrooms, c.comuna_id, c.localidad, c.latitude, c.longitude,
       c.location_confidence, c.exact_address, c.listing_count, c.corredora_count,
-      c.portals, c.source_types, c.advertiser_kinds, c.is_active, c.first_seen_at, c.last_seen_at,
+      c.portals, c.source_types, c.advertiser_kinds, c.is_active, c.first_seen_at, c.last_seen_at, c.portal_first_seen_at,
     ]
   );
   return inserted[0].id;

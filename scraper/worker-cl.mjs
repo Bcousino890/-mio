@@ -52,6 +52,7 @@ import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
+import { getUfRateCl } from './lib/uf-rate-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -67,7 +68,7 @@ export const QUEUES = {
 
 /**
  * Job `detail-cl`: fetch + parse + upsert de una ficha por MLC-id.
- * `deps` inyectables para test: { fetch: fetchHtmlResilient, parse: parseDetailPage, upsert: upsertListingCl, enqueueMediaSync }
+ * `deps` inyectables para test: { fetch: fetchHtmlResilient, parse: parseDetailPage, upsert: upsertListingCl, enqueueMediaSync, getUfRate: getUfRateCl }
  */
 export async function handleDetailJob(dbClient, jobData, deps = {}) {
   const {
@@ -75,6 +76,7 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
     parse = parseDetailPage,
     upsert = upsertListingCl,
     enqueueMediaSync = async () => {},
+    getUfRate = getUfRateCl,
   } = deps
 
   const { externalId, sourceUrl } = jobData
@@ -98,7 +100,18 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
     parsed.source_url = sourceUrl
   }
 
-  const { listingId, changeType } = await upsert(dbClient, parsed)
+  // BUG CRÍTICO cerrado aquí: este handler nunca pasaba ufRate a upsertListingCl,
+  // así que resolvePriceClp() (to-listing.mjs) devolvía null para CUALQUIER
+  // anuncio con currency='UF' sin price_clp propio — la inmensa mayoría de los
+  // anuncios chilenos, que se publican en UF. El precio en CLP quedaba NULL en
+  // toda la base (visible en la ficha como "—"), aunque price_uf sí se guardaba.
+  // getUfRateCl() cachea en memoria por día y dedupe peticiones en vuelo — llamarla
+  // una vez por ficha no dispara un fetch nuevo por anuncio.
+  const uf = await getUfRate()
+  const upsertOptions = uf.ok ? { ufRate: uf.rate, ufRateDate: uf.date } : {}
+  if (!uf.ok) console.warn(`[detail] ${externalId}: sin tasa UF (${uf.reason}) — price CLP quedará null si el anuncio está en UF`)
+
+  const { listingId, changeType } = await upsert(dbClient, parsed, upsertOptions)
   console.log(`[detail] ${externalId} → listing ${listingId} (${changeType ?? 'sin cambios'})`)
 
   if (Array.isArray(parsed.photos) && parsed.photos.length > 0) {
