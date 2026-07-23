@@ -30,9 +30,24 @@ const WHATSAPP_UA = 'WhatsApp/2.23.20.0'
 // sin anti-bot conocido tipo DataDome (ver comentario de cabecera).
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
+// Portalinmobiliario sirve DOS variantes de HTML según los headers de la
+// petición: con solo el UA devuelve una variante "ligera" (polycards
+// renderizadas en servidor, SIN el blob Nordic ni permalinks navegables — el
+// parser saca 0). Con headers de navegador completos (Accept, Accept-Language,
+// Upgrade-Insecure-Requests) + seguir redirects, devuelve la variante con el
+// blob `__NORDIC_RENDERING_CTX__` que trae precio, corredora, m², permalinks —
+// la que parse-portalinmobiliario.mjs entiende. Verificado contra HTML real de
+// Las Condes (48 tarjetas + total=3469). Misma técnica que el scraper de
+// captaciones en producción (smartbc).
+const PI_HEADERS = [
+  'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language: es-CL,es;q=0.9',
+  'Upgrade-Insecure-Requests: 1',
+]
+
 const PROFILES = {
   idealista: { ua: WHATSAPP_UA },
-  portalinmobiliario: { ua: CHROME_UA },
+  portalinmobiliario: { ua: CHROME_UA, headers: PI_HEADERS, followRedirects: true },
 }
 const DEFAULT_PROFILE = 'idealista'
 
@@ -91,7 +106,7 @@ function proxyUrl(profile) {
  * idéntico al comportamiento histórico de esta función.
  */
 export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = {}) {
-  const { ua } = PROFILES[profile] ?? PROFILES[DEFAULT_PROFILE]
+  const { ua, headers = [], followRedirects = false } = PROFILES[profile] ?? PROFILES[DEFAULT_PROFILE]
   return new Promise((resolve) => {
     const args = [
       '-sS', '--compressed',
@@ -99,6 +114,11 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
       '-A', ua,
       '-w', '\n__HTTP_STATUS__:%{http_code}',
     ]
+    // Seguir redirects (-L) y headers extra del perfil. Portalinmobiliario los
+    // necesita para servir la variante con el blob Nordic (ver PI_HEADERS);
+    // Idealista no define ninguno → se comporta EXACTAMENTE igual que antes.
+    if (followRedirects) args.push('-L')
+    for (const h of headers) args.push('-H', h)
     const px = useProxy ? proxyUrl(profile) : null
     if (px) args.push('-x', px)
     args.push(url)
