@@ -227,6 +227,33 @@ test('subdividePriceBands: comuna bajo el tope → una sola banda, sin bisecar',
   assert.deepEqual(bands[0], { minClp: 0, maxClp: 10_000_000_000 })
 })
 
+test('subdividePriceBands: Las Condes casa/venta REAL (verificado en vivo 2026-07-24) — cobertura exacta sin huecos', async () => {
+  // Totales capturados contra el portal real (venta/casa/las-condes-metropolitana,
+  // resultsLimit=2000): confirma que la bisección alcanza el 100% de la comuna —
+  // la suma de las bandas hoja da EXACTO el total sin filtro (3487), sin huecos
+  // ni traslapes. Cierra la duda de si el discovery puede cubrir comunas grandes
+  // por completo (sí puede) — la brecha 1.603 property_cl vs 3.487 anuncios
+  // crudos es dedup (N corredoras → 1 propiedad canónica) y/o ciclos de barrido
+  // aún pendientes en el VPS, no un límite del algoritmo de bisección.
+  const REAL_TOTALS = {
+    '0-10000000000': 3487, '0-5000000000': 3484, '0-2500000000': 3438,
+    '0-1250000000': 3010, '0-625000000': 979, '625000000-1250000000': 2031,
+    '625000000-937500000': 1162, '937500000-1250000000': 869,
+    '1250000000-2500000000': 428, '2500000000-5000000000': 46, '5000000000-10000000000': 3,
+  }
+  const probe = async ({ minClp, maxClp }) => REAL_TOTALS[`${minClp}-${maxClp}`] ?? null
+  const bands = await subdividePriceBands(probe, 2000)
+
+  const sorted = [...bands].sort((a, b) => a.minClp - b.minClp)
+  assert.equal(sorted[0].minClp, 0)
+  assert.equal(sorted[sorted.length - 1].maxClp, 10_000_000_000)
+  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].minClp, sorted[i - 1].maxClp)
+  for (const b of sorted) assert.ok((REAL_TOTALS[`${b.minClp}-${b.maxClp}`] ?? 0) <= 2000, `banda [${b.minClp},${b.maxClp}] no quedó bajo el tope`)
+
+  const sum = sorted.reduce((s, b) => s + (REAL_TOTALS[`${b.minClp}-${b.maxClp}`] ?? 0), 0)
+  assert.equal(sum, 3487) // === total real sin filtro: cobertura exacta, sin huecos
+})
+
 test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna', async () => {
   const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
   const res = await discoverTarget(client, TARGET, {
