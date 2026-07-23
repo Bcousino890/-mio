@@ -182,12 +182,27 @@ function CorredoraThumb({ src }: { src?: string }) {
 
 // ─── Modal / ficha interna ──────────────────────────────────────────────────
 function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () => void; onRefetched: (p: Property) => void }) {
+  const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
+  const cheapest = sortedListings.find(l => l.price != null)?.listing_id
+
+  // Cada corredora trae su propio set de fotos del mismo inmueble — mezclarlas
+  // en una sola galería confundía cuál foto era de qué aviso (y de paso hacía
+  // "Ver original"/"Re-scrapear" ambiguos sobre cuál aviso actuar). Ahora son
+  // fichas clicables por corredora: una pestaña por listing con fotos, cada
+  // una con su propia galería.
+  const photoListings = useMemo(() => sortedListings.filter(l => (l.photos?.length ?? 0) > 0), [sortedListings])
+  const [activeListingId, setActiveListingId] = useState<string | null>(() => photoListings[0]?.listing_id ?? null)
+  useEffect(() => {
+    setActiveListingId(prev => photoListings.some(l => l.listing_id === prev) ? prev : (photoListings[0]?.listing_id ?? null))
+  }, [photoListings])
+  const activeListing = photoListings.find(l => l.listing_id === activeListingId) ?? photoListings[0]
   const gallery = useMemo(() => {
-    const all = [p.cover_photo, ...p.listings.flatMap(l => l.photos || [])].filter((x): x is string => !!x)
-    return Array.from(new Set(all))
-  }, [p])
+    if (activeListing?.photos?.length) return activeListing.photos
+    return p.cover_photo ? [p.cover_photo] : []
+  }, [activeListing, p.cover_photo])
   const [idx, setIdx] = useState(0)
   const [imgError, setImgError] = useState(false)
+  useEffect(() => { setIdx(0); setImgError(false) }, [activeListingId])
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
 
@@ -239,24 +254,21 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       setSavingPin(false)
     }
   }, [p.id])
-  const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
-  const cheapest = sortedListings.find(l => l.price != null)?.listing_id
-  const primaryListing = sortedListings[0] as Listing | undefined
-
-  // Re-scrapea el aviso "principal" de la ficha bajo demanda (en vez de
-  // esperar el próximo barrido programado de esa comuna) y refresca la
-  // propiedad completa para que fotos/precio queden al día en la ficha.
+  // Re-scrapea el aviso de la corredora activa (la pestaña seleccionada en la
+  // galería) bajo demanda, en vez de esperar el próximo barrido programado de
+  // esa comuna, y refresca la propiedad completa para que fotos/precio queden
+  // al día en la ficha.
   const [refetching, setRefetching] = useState(false)
   const [refetchMsg, setRefetchMsg] = useState<string | null>(null)
   const doRefetch = useCallback(async () => {
-    if (!primaryListing || refetching) return
+    if (!activeListing || refetching) return
     setRefetching(true)
     setRefetchMsg(null)
     try {
       const res = await fetch('/api/chile/listings-cl/refetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: primaryListing.listing_id }),
+        body: JSON.stringify({ id: activeListing.listing_id }),
       })
       const data = await res.json()
       if (data.success) {
@@ -272,7 +284,7 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       setRefetching(false)
       setTimeout(() => setRefetchMsg(null), 4000)
     }
-  }, [primaryListing, refetching, p.id, onRefetched])
+  }, [activeListing, refetching, p.id, onRefetched])
 
   const prev = useCallback(() => { setImgError(false); setIdx(i => (i - 1 + gallery.length) % gallery.length) }, [gallery.length])
   const next = useCallback(() => { setImgError(false); setIdx(i => (i + 1) % gallery.length) }, [gallery.length])
@@ -306,12 +318,12 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
             <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageOff size={40} /></div>
           )}
           <div className="absolute top-3 left-3 flex items-center gap-2">
-            <button onClick={doRefetch} disabled={refetching || !primaryListing}
+            <button onClick={doRefetch} disabled={refetching || !activeListing}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-blue-600/90 text-white hover:bg-blue-600 disabled:opacity-50 backdrop-blur-sm shadow">
               <RefreshCw size={13} className={refetching ? 'animate-spin' : ''} /> {refetching ? 'Re-scrapeando…' : 'Re-scrapear'}
             </button>
-            {primaryListing?.source_url && (
-              <a href={primaryListing.source_url} target="_blank" rel="noopener noreferrer"
+            {activeListing?.source_url && (
+              <a href={activeListing.source_url} target="_blank" rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm shadow">
                 <ExternalLink size={13} /> Ver original
               </a>
@@ -329,6 +341,17 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
             </>
           )}
         </div>
+        {/* Fichas por corredora — cada una con su propia galería, sin mezclar fotos */}
+        {photoListings.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto px-4 pt-2.5 bg-slate-900/40">
+            {photoListings.map(l => (
+              <button key={l.listing_id} onClick={() => setActiveListingId(l.listing_id)}
+                className={`shrink-0 text-[11px] px-2.5 py-1 rounded-full border transition-colors capitalize ${l.listing_id === activeListing?.listing_id ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-500'}`}>
+                {l.advertiser_name || 'Corredora'} · {l.photos.length}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Thumbnails */}
         {gallery.length > 1 && (
           <div className="flex gap-1.5 overflow-x-auto px-4 py-2 bg-slate-900/40">
