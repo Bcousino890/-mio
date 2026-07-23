@@ -176,7 +176,12 @@ export async function GET(request: NextRequest) {
         p.is_active,
         p.first_seen_at,
         p.last_seen_at,
-        EXTRACT(DAY FROM (now() - p.first_seen_at))::int AS days_on_market,
+        p.portal_first_seen_at,
+        -- días en mercado REALES: preferir portal_first_seen_at (antigüedad que
+        -- el propio portal declara, "Publicado hace N días") sobre first_seen_at
+        -- (cuándo NOSOTROS lo vimos, que subestima si el discovery llegó tarde
+        -- a la comuna — ver 0076).
+        EXTRACT(DAY FROM (now() - COALESCE(p.portal_first_seen_at, p.first_seen_at)))::int AS days_on_market,
         ${COVER_PHOTO},
         ${LISTINGS_JSON}
       FROM property_cl p
