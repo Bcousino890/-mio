@@ -19,6 +19,11 @@ type Listing = {
   is_active: boolean
   seller_reference: string | null
   photos: string[]
+  description: string | null
+  address: string | null
+  latitude: number | null
+  longitude: number | null
+  features: string[]
 }
 type Property = {
   id: string
@@ -239,6 +244,55 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
             <FieldCell icon={<MapPin size={13} />} label="Comuna" value={p.comuna_name || '—'} />
             <FieldCell icon={<CalendarClock size={13} />} label="En mercado" value={p.days_on_market != null ? `${p.days_on_market} días` : '—'} />
           </div>
+
+          {(() => {
+            // "Ficha canónica": tomamos de los avisos el más completo para
+            // descripción / dirección / características (todos son el mismo
+            // inmueble; distintas corredoras traen textos distintos).
+            const withDesc = p.listings.filter(l => l.description)
+            const primary = withDesc.sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0))[0] ?? p.listings[0]
+            const address = p.listings.map(l => l.address).find(Boolean) ?? null
+            const geo = p.listings.find(l => l.latitude != null && l.longitude != null)
+            const feats = Array.from(new Set(p.listings.flatMap(l => l.features ?? [])))
+            return (
+              <>
+                {/* Ubicación */}
+                {(address || geo) && (
+                  <div className="mt-5">
+                    <h3 className="text-sm font-semibold text-slate-300 mb-2 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
+                    <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
+                      {address && <div>{address}</div>}
+                      <div className="text-slate-500 text-xs mt-0.5">{p.comuna_name}{geo ? ` · ${geo.latitude!.toFixed(5)}, ${geo.longitude!.toFixed(5)}` : ''}</div>
+                      {geo && (
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${geo.latitude},${geo.longitude}`} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Características */}
+                {feats.length > 0 && (
+                  <div className="mt-5">
+                    <h3 className="text-sm font-semibold text-slate-300 mb-2">Características ({feats.length})</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {feats.map((f, i) => (
+                        <span key={i} className="text-[11px] px-2.5 py-1 rounded-full bg-slate-700/60 text-slate-300 border border-slate-600/50">{f}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Descripción */}
+                {primary?.description && (
+                  <div className="mt-5">
+                    <h3 className="text-sm font-semibold text-slate-300 mb-2">Descripción</h3>
+                    <p className="text-sm text-slate-400 whitespace-pre-line leading-relaxed">{primary.description}</p>
+                  </div>
+                )}
+              </>
+            )
+          })()}
 
           {/* Avisos por corredora */}
           <div className="mt-5">

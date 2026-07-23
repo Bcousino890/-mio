@@ -44,6 +44,14 @@ const LISTINGS_JSON = `
       'is_active', l.is_active,
       'seller_reference', l.seller_reference,
       'photos', COALESCE(l.photos, '[]'::jsonb),
+      'description', l.description,
+      'address', l.address,
+      'latitude', l.latitude,
+      'longitude', l.longitude,
+      'features', COALESCE(l.features, '[]'::jsonb),
+      'square_meters', l.square_meters,
+      'bedrooms', l.bedrooms,
+      'bathrooms', l.bathrooms,
       'last_seen_at', l.last_seen_at
     ) ORDER BY l.is_active DESC, l.price ASC NULLS LAST)
     FROM listings_cl l
