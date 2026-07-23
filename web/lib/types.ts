@@ -53,6 +53,10 @@ export type Listing = {
   title: string
   operation: 'sale' | 'rent'
   price: number
+  /** 'CLP' (Chile) o ausente = EUR (España, comportamiento histórico). */
+  currency?: 'EUR' | 'CLP'
+  /** Valor en UF del anuncio chileno, si el portal lo publicó en esa unidad. */
+  price_uf?: number | null
   square_meters: number
   price_sqm: number
   bedrooms: number

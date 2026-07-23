@@ -16,7 +16,14 @@ interface Props {
   activeShape?: GeoShapeFilter | null
 }
 
-function fmtPrice(n: number, op: string) {
+function fmtPrice(n: number, op: string, currency?: Listing['currency']) {
+  if (currency === 'CLP') {
+    // CLP: montos altos (cientos de millones) — abreviar en M sin símbolo €.
+    const k = n >= 1_000_000
+      ? `$${(n / 1_000_000).toLocaleString('es-CL', { maximumFractionDigits: 0 })}M`
+      : `$${n.toLocaleString('es-CL')}`
+    return op === 'rent' ? `${k}/mes` : k
+  }
   if (op === 'rent') return `${n.toLocaleString('es-ES')} €/mes`
   const k = n >= 1_000_000
     ? `${(n / 1_000_000).toLocaleString('es-ES', { minimumFractionDigits: n % 1_000_000 !== 0 ? 1 : 0, maximumFractionDigits: 1 })} M€`
@@ -25,7 +32,7 @@ function fmtPrice(n: number, op: string) {
 }
 
 function markerHtml(l: Listing, isActive: boolean) {
-  const priceStr = fmtPrice(l.price, l.operation)
+  const priceStr = fmtPrice(l.price, l.operation, l.currency)
   const isPartic = l.advertiser_type === 'particular'
   const bg = isActive ? '#3b82f6' : '#ffffff'
   const text = isActive ? '#ffffff' : '#0f172a'
@@ -163,11 +170,21 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
           iconAnchor: [0, 0],
         })
 
+        const isClp = l.currency === 'CLP'
+        const priceFull = isClp
+          ? l.price.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
+          : `${l.price.toLocaleString('es-ES')} €`
+        const priceSqmFull = isClp
+          ? `${l.price_sqm.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })}/m²`
+          : `${l.price_sqm.toLocaleString('es-ES')} €/m²`
+        const ufLine = isClp && l.price_uf != null
+          ? `<div style="color:#64748b;font-size:11px;margin-top:1px">≈ ${l.price_uf.toLocaleString('es-CL')} UF</div>` : ''
         const marker = L.marker([l.latitude, l.longitude], { icon })
           .bindPopup(`
             <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
-              <div style="font-weight:700;font-size:14px;color:#0f172a">${l.price.toLocaleString('es-ES')} €</div>
-              <div style="color:#64748b;font-size:11px;margin-top:1px">${l.price_sqm.toLocaleString('es-ES')} €/m² · ${l.square_meters}m² · ${l.bedrooms > 0 ? l.bedrooms + 'h · ' : ''}${l.bathrooms}b</div>
+              <div style="font-weight:700;font-size:14px;color:#0f172a">${priceFull}</div>
+              ${ufLine}
+              <div style="color:#64748b;font-size:11px;margin-top:1px">${priceSqmFull} · ${l.square_meters}m² · ${l.bedrooms > 0 ? l.bedrooms + 'h · ' : ''}${l.bathrooms}b</div>
               <div style="margin-top:5px;font-size:12px;color:#1e293b;font-weight:500">${l.title}</div>
               <div style="color:#94a3b8;font-size:11px;margin-top:1px">${l.zone_name}</div>
               ${l.listing_count > 1 ? `<div style="color:#3b82f6;font-size:11px;margin-top:3px;font-weight:600">${l.listing_count} fuentes</div>` : ''}

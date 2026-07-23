@@ -18,21 +18,35 @@ function fmt(n: number) {
   return n.toLocaleString('es-ES')
 }
 
+/** Precio formateado según la moneda del listing. CLP (Chile) sin decimales,
+ * con símbolo $; EUR (España, comportamiento histórico) sin cambios. */
+function fmtPrice(n: number, currency: Listing['currency']) {
+  if (currency === 'CLP') return n.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
+  return `${fmt(n)} €`
+}
+
 function daysLabel(d: number) {
   if (d === 0) return 'Hoy'
   if (d === 1) return 'Hace 1 día'
-  return `Hace ${d} días`
+  if (d < 30) return `Hace ${d} días`
+  if (d < 60) return 'Hace 1 mes'
+  return `Hace ${Math.round(d / 30)} meses`
 }
 
 interface Props {
   listing: Listing
   active?: boolean
   onHover?: (id: string | null) => void
+  /** Override de navegación al hacer click (por defecto: /anuncios/{id}, España).
+   * Chile no tiene ficha propia por anuncio todavía: se pasa un callback que
+   * abre el aviso original en vez de un 404 contra la tabla de España. */
+  onOpen?: (listing: Listing) => void
 }
 
-export default function PropertyCard({ listing: l, active, onHover }: Props) {
+export default function PropertyCard({ listing: l, active, onHover, onOpen }: Props) {
   const router = useRouter()
   const [photoIdx, setPhotoIdx] = useState(0)
+  const isClp = l.currency === 'CLP'
 
   const prevPhoto = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -45,7 +59,7 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
 
   return (
     <article
-      onClick={() => router.push(`/anuncios/${l.id}`)}
+      onClick={() => (onOpen ? onOpen(l) : router.push(`/anuncios/${l.id}`))}
       onMouseEnter={() => onHover?.(l.id)}
       onMouseLeave={() => onHover?.(null)}
       className={`group cursor-pointer rounded-2xl overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/40 ${
@@ -107,11 +121,14 @@ export default function PropertyCard({ listing: l, active, onHover }: Props) {
         {/* Bottom-left: price */}
         <div className="absolute bottom-2.5 left-3">
           <span className="text-white font-bold text-base leading-none tracking-tight">
-            {fmt(l.price)}{l.operation === 'sale' ? ' €' : ' €/mes'}
+            {fmtPrice(l.price, l.currency)}{l.operation === 'rent' ? '/mes' : ''}
           </span>
           <span className="text-white/60 text-xs ml-1.5">
-            {fmt(l.price_sqm)} €/m²
+            {isClp ? `${fmtPrice(l.price_sqm, l.currency)}/m²` : `${fmt(l.price_sqm)} €/m²`}
           </span>
+          {isClp && l.price_uf != null && (
+            <div className="text-white/70 text-[11px] mt-0.5">≈ {l.price_uf.toLocaleString('es-CL')} UF</div>
+          )}
         </div>
 
         {/* Operation tag */}
