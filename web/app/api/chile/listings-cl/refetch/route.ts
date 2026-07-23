@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
       const seen = new Set(photos)
       for (const p of galleryPhotos) if (!seen.has(p)) { photos.push(p); seen.add(p) }
     }
-    photos = photos.slice(0, 40)
+    photos = photos.slice(0, 80)  // hay propiedades reales con 50-60 fotos
 
     let price: number | null = null
     let priceUf: number | null = null

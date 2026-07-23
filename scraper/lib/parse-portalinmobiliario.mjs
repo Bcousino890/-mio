@@ -598,7 +598,7 @@ export async function parseDetailPage(html, external_id) {
       advertiser_logo,
       seller_reference,
       posted_days_ago,  // antigüedad real declarada por el portal (ver parsePostedDaysAgo)
-      photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)
+      photos: photos.slice(0, 80),  // Cap a 80 fotos — hay propiedades reales con 50-60
       photos_total_count: photosTotalCount,  // total real declarado por el portal (puede ser > 30)
       gallery_url: galleryUrl,  // endpoint del modal con la galería completa (Fase 2: descarga real)
       has_video: hasVideo,

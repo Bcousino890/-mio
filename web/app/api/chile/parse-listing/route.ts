@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
           address_full: detail.address && detail.comuna ? `${detail.address}, ${detail.comuna}` : detail.address,
           advertiser_name: detail.advertiser_name,
           advertiser_type: detail.advertiser_type,
-          photos: allPhotos.slice(0, 40),
+          photos: allPhotos.slice(0, 80),  // hay propiedades reales con 50-60 fotos
           photos_total_count: detail.photos_total_count,
           description: detail.description,
           comuna_detected: detail.comuna,
