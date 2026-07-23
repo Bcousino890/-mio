@@ -2,10 +2,17 @@
 -- 0072 · property_cl.ref_code: código interno único por propiedad canónica
 --        (plan Anuncios CL · identificación estilo CRM)
 -- ─────────────────────────────────────────────────────────────────────────────
--- Cada inmueble canónico necesita un identificador interno legible y único (como
--- en el CRM de referencia), independiente de los MLC/property_code de Mercado
--- Libre. Formato: BC-<AAMM>-<secuencial de 5 dígitos>, ej. BC-2607-00042
--- (BC = Benjamín Cousiño; AAMM del alta; el secuencial global garantiza unicidad).
+-- Cada inmueble canónico necesita un identificador interno legible y único,
+-- independiente de los MLC/property_code de Mercado Libre. Formato:
+-- PI-<AAMM>-<secuencial de 5 dígitos>, ej. PI-2607-00042 (PI = Portal
+-- Inmobiliario, la fuente; AAMM del alta; el secuencial global da unicidad).
+--
+-- NOTA (ver migración 0073): esta migración originalmente usaba el prefijo
+-- "BC-", pero smartbc (el CRM de captaciones, BD aparte) YA usa ese patrón
+-- para sus propias referencias en producción (BC-XXXX / PART-YYYY-NNNN) —
+-- sin colisión técnica, pero indistinguibles en pantalla. 0073 lo corrige a
+-- "PI-" para toda instalación nueva; el texto de abajo queda con el ejemplo
+-- histórico "BC-" solo como referencia de formato, no como valor real final.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE SEQUENCE IF NOT EXISTS property_cl_ref_seq;
