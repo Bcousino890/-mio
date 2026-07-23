@@ -24,6 +24,7 @@ import {
   Contact,
   Store,
   Home,
+  Activity,
   type LucideIcon,
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -120,6 +121,13 @@ const MODULES_BY_COUNTRY: Record<'es' | 'cl', ModuleItem[]> = {
       label: 'Corredoras',
       icon: Store,
       description: 'Directorio · stock, rotación, exclusividad',
+      badge: 'NEW',
+    },
+    {
+      href: '/chile/anuncios-health',
+      label: 'Salud scraping',
+      icon: Activity,
+      description: 'Estado del pipeline · ingesta, dedup, cobertura',
       badge: 'NEW',
     },
     {
