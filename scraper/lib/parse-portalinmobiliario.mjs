@@ -92,6 +92,37 @@ async function fetchGalleryPhotos(galleryUrl) {
   }
 }
 
+// Galería COMPLETA por item_id (patrón verificado en producción, smartbc): el
+// modal /vis-modals/gallery/{itemId} lista los IDs de TODAS las fotos; la URL
+// full-res se arma con el template D_NQ_NP_{id}-O.webp. Más fiable que depender
+// del media_counters.url del blob (que a veces no viene → solo quedaban 5 fotos).
+async function fetchGalleryByItemId(externalId) {
+  try {
+    const id = String(externalId).replace(/[^A-Z0-9]/gi, '') // "MLC-123" → "MLC123"
+    if (!/^MLC\d+$/i.test(id)) return []
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+    const response = await fetch(`https://www.portalinmobiliario.com/vis-modals/gallery/${id}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'es-CL,es;q=0.9',
+      },
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!response.ok) return []
+    const html = await response.text()
+    const ids = []
+    for (const m of html.matchAll(/\d{6}-MLC\d+(?:_\d{6})?/g)) {
+      if (!ids.includes(m[0])) ids.push(m[0])
+    }
+    return ids.map((pid) => `https://http2.mlstatic.com/D_NQ_NP_${pid}-O.webp`)
+  } catch (e) {
+    console.warn('Error fetching gallery by item id:', e.message)
+    return []
+  }
+}
+
 const decode = (s) =>
   (s ?? '')
     .replace(/<[^>]+>/g, '')
@@ -418,6 +449,14 @@ export async function parseDetailPage(html, external_id) {
       } catch (e) {
         console.warn(`Error fetching gallery photos from ${galleryUrl}:`, e.message)
       }
+    }
+
+    // Galería completa por item_id (más fiable): el blob suele traer solo 5
+    // fotos y no siempre el media_counters.url. Si seguimos con pocas, pedimos
+    // el modal /vis-modals/gallery/{itemId} y sumamos TODAS las que falten.
+    if (external_id && photos.length < (photosTotalCount ?? 6)) {
+      const byId = await fetchGalleryByItemId(external_id)
+      for (const photo of byId) addPhoto(photo)
     }
 
     // Video: confirmado que el archivo real NUNCA aparece como URL directa en

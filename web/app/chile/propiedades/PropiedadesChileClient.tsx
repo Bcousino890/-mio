@@ -174,7 +174,15 @@ function PropertyModal({ p, onClose }: { p: Property; onClose: () => void }) {
       else if (e.key === 'ArrowRight') next()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // Bloquea el scroll del fondo mientras el modal está abierto: sin esto, con
+    // el backdrop-blur sobre la grilla de imágenes el navegador re-pinta todo el
+    // fondo en cada scroll y la página se siente "pegada".
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
   }, [onClose, prev, next])
 
   return (
