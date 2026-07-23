@@ -177,6 +177,9 @@ export async function GET(request: NextRequest) {
         p.first_seen_at,
         p.last_seen_at,
         p.portal_first_seen_at,
+        p.manual_latitude,
+        p.manual_longitude,
+        p.manual_pin_set_at,
         -- días en mercado REALES: preferir portal_first_seen_at (antigüedad que
         -- el propio portal declara, "Publicado hace N días") sobre first_seen_at
         -- (cuándo NOSOTROS lo vimos, que subestima si el discovery llegó tarde
@@ -213,6 +216,49 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error('Error fetching property_cl:', error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    )
+  }
+}
+
+// PATCH — pin manual (corrección del equipo, pedido explícito del usuario:
+// "el pin que puse yo"). NO reemplaza latitude/longitude (el declarado por el
+// anuncio, ver 0064/0077) — es un segundo pin aparte para poder comparar en la
+// ficha. Guardarlo marca location_confidence='confirmed' (reusa el enum: un
+// humano confirmando la ubicación a mano es el caso de máxima confianza).
+// Body: { id: string, latitude: number, longitude: number } — o
+// { id, latitude: null, longitude: null } para borrar el pin manual.
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const { id, latitude, longitude } = body ?? {}
+
+    if (!id || typeof id !== 'string') {
+      return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
+    }
+    const clearing = latitude == null && longitude == null
+    if (!clearing && (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude))) {
+      return NextResponse.json({ success: false, error: 'latitude/longitude deben ser números (o ambos null para borrar)' }, { status: 400 })
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE property_cl SET
+         manual_latitude = $2, manual_longitude = $3,
+         manual_pin_set_at = CASE WHEN $2 IS NULL THEN NULL ELSE now() END,
+         location_confidence = CASE WHEN $2 IS NULL THEN location_confidence ELSE 'confirmed' END,
+         updated_at = now()
+       WHERE id = $1
+       RETURNING id, manual_latitude, manual_longitude, manual_pin_set_at, location_confidence`,
+      [id, clearing ? null : latitude, clearing ? null : longitude]
+    )
+    if (rows.length === 0) {
+      return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
+    }
+    return NextResponse.json({ success: true, data: rows[0] })
+  } catch (error) {
+    console.error('Error guardando pin manual de property_cl:', error)
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
