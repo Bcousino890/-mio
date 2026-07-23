@@ -52,6 +52,8 @@ export default function AnunciosHealthClient() {
   const [data, setData] = useState<Health | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [rerunning, setRerunning] = useState(false)
+  const [rerunMsg, setRerunMsg] = useState<string | null>(null)
 
   const load = useCallback(() => {
     fetch('/api/chile/anuncios-health')
@@ -60,6 +62,15 @@ export default function AnunciosHealthClient() {
       .catch(e => setError(e instanceof Error ? e.message : 'Error'))
       .finally(() => setLoading(false))
   }, [])
+
+  const rerun = useCallback(() => {
+    setRerunning(true); setRerunMsg(null)
+    fetch('/api/chile/anuncios-health', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => setRerunMsg(d.success ? d.message : (d.error || 'Error')))
+      .catch(e => setRerunMsg(e instanceof Error ? e.message : 'Error'))
+      .finally(() => { setRerunning(false); load() })
+  }, [load])
 
   useEffect(() => {
     load()
@@ -82,10 +93,17 @@ export default function AnunciosHealthClient() {
               <p className="text-[11px] text-slate-500 mt-1">Estado del pipeline en vivo · última lectura {data ? ago(data.generated_at) : '—'}</p>
             </div>
           </div>
-          <button onClick={load} className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
-            <RefreshCw size={13} /> Refrescar
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={rerun} disabled={rerunning}
+              className="inline-flex items-center gap-1.5 text-xs text-white bg-cyan-600 border border-cyan-600 px-3 py-2 rounded-lg hover:bg-cyan-500 disabled:opacity-50">
+              <RefreshCw size={13} className={rerunning ? 'animate-spin' : ''} /> {rerunning ? 'Encolando…' : 'Forzar re-barrido'}
+            </button>
+            <button onClick={load} className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
+              <RefreshCw size={13} /> Refrescar
+            </button>
+          </div>
         </div>
+        {rerunMsg && <div className="text-xs text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 rounded-lg px-3 py-2 mb-3">{rerunMsg}</div>}
 
         {error && <div className="text-red-300 bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-sm mb-4">{error}</div>}
         {loading && !data && <div className="text-slate-400 p-8 text-center">Cargando…</div>}

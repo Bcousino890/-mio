@@ -12,6 +12,30 @@ import { pool } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// POST → fuerza un re-barrido: pone last_run_at=NULL en los objetivos activos,
+// así el discovery-scheduler del worker (que corre cada 15 min y encola los
+// objetivos "vencidos") los re-toma en la próxima pasada, sin esperar las 8h de
+// cadencia. Útil en la puesta en marcha y para forzar una actualización a mano
+// desde el panel, sin comandos en la VPS.
+export async function POST() {
+  try {
+    const { rowCount } = await pool.query(
+      `UPDATE scrape_targets_cl SET last_run_at = NULL, updated_at = now() WHERE enabled = true`
+    )
+    return NextResponse.json({
+      success: true,
+      requeued: rowCount ?? 0,
+      message: `${rowCount ?? 0} objetivo(s) marcados para re-barrido en el próximo ciclo (≤15 min).`,
+    })
+  } catch (error) {
+    console.error('Error forzando re-barrido:', error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    )
+  }
+}
+
 export async function GET() {
   try {
     const [counts, targets, versionPulse] = await Promise.all([
