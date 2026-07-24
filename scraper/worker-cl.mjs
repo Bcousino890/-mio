@@ -49,6 +49,7 @@ import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
+import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
 import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
@@ -294,8 +295,15 @@ async function main() {
   await boss.work(QUEUES.MATCH_FEEDER, async () => { await handleMatchFeederJob(dbClient) })
   await boss.schedule(QUEUES.MATCH_FEEDER, '13,43 * * * *')
 
-  // Pipeline de dedup completo (Nivel 1 → Nivel 2 → corredoras) cada 15min.
-  await boss.work(QUEUES.DEDUP_CLUSTER, async () => { await handleDedupClusterJob(dbClient) })
+  // Pipeline de dedup completo (Nivel 1 → Nivel 2 → corredoras) cada 15min. Se
+  // salta la corrida si una reconstrucción de property_cl (runStartupFixesCl /
+  // rebuild manual) tiene tomado el lock consultivo, para no interbloquearse.
+  await boss.work(QUEUES.DEDUP_CLUSTER, async () => {
+    const { rows } = await dbClient.query('SELECT pg_try_advisory_lock($1) AS ok', [DEDUP_ADVISORY_LOCK_KEY])
+    if (!rows[0].ok) { console.log('[dedup-cluster] omitido: reconstrucción de property_cl en curso'); return }
+    try { await handleDedupClusterJob(dbClient) }
+    finally { await dbClient.query('SELECT pg_advisory_unlock($1)', [DEDUP_ADVISORY_LOCK_KEY]) }
+  })
   await boss.schedule(QUEUES.DEDUP_CLUSTER, '*/15 * * * *')
 
   // broker-enrich queda como cola on-demand (boss.send), sin schedule propio: el
@@ -341,6 +349,13 @@ async function main() {
   await boss.schedule(QUEUES.CORREDORA_WEB_SCHEDULER, '7 * * * *')
 
   console.log(`[worker-cl] arrancado. Colas: ${Object.values(QUEUES).join(', ')}`)
+
+  // Correcciones de datos puntuales (una sola vez, marcadas en data_fixes_cl):
+  // des-fusionar property_cl agrupados de más (falso positivo del dedup ya
+  // corregido) y re-scrapear fichas con superficie/fotos viejas. En segundo plano
+  // y con su PROPIA conexión (no envolver las colas en su transacción); nunca
+  // tumba el worker si algo falla.
+  runStartupFixesCl().catch((e) => console.error('[startup-fix] error:', e))
 
   const shutdown = async () => {
     console.log('[worker-cl] apagando...')
