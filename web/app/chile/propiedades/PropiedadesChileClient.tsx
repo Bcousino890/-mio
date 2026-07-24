@@ -9,7 +9,13 @@ import {
   Maximize2, Minimize2,
 } from 'lucide-react'
 
+import { normalizeClRol } from '@/lib/rol-format'
+
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
+
+// Un término de búsqueda "manzana-predio" (ej. "2452-14") se trata como Rol SII
+// y busca por property_cl.rol_matriz; cualquier otra cosa busca por comuna.
+const ROL_PATTERN = /^\d+-\d+$/
 
 type Listing = {
   listing_id: string
@@ -44,7 +50,9 @@ type Property = {
   bedrooms: number | null
   bathrooms: number | null
   comuna_name: string | null
+  sii_comuna_code: string | null
   location_confidence: string
+  rol_matriz: string | null
   listing_count: number
   corredora_count: number
   cover_photo: string | null
@@ -239,6 +247,10 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
   )
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
+  // Rol SII canónico del inmueble (property_cl.rol_matriz). El pin lo fija y
+  // queda PERMANENTE en la ficha — es la identidad que comunica esta propiedad
+  // con Catastro/Dealer/TGR. Estado local para reflejar el guardado sin recargar.
+  const [rolMatriz, setRolMatriz] = useState<string | null>(p.rol_matriz)
   // Feedback del rol SII resuelto bajo el pin + su guardado en captación
   // (best-effort, ver PATCH /api/chile/property-cl). `captacionId` habilita el
   // link a /chile/captacion?id=<id> para abrir esa captación puntual.
@@ -269,8 +281,13 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       })
       const data = await res.json()
       setManualPinDirty(false)
+      // El rol queda fijado en la ficha (property_cl.rol_matriz) — reflejarlo al
+      // toque para que el chip permanente y los enlaces cruzados aparezcan.
+      if (data.rol) setRolMatriz(data.rol)
       if (data.captacion?.sii_rol) {
-        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación`, captacionId: data.captacion.id })
+        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} fijado en la ficha y en Captación`, captacionId: data.captacion.id })
+      } else if (data.rol) {
+        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.rol} fijado en la ficha` })
       } else if (data.captacion_error) {
         setCaptacionMsg({ ok: false, text: data.captacion_error })
       }
@@ -289,6 +306,9 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       })
       setManualPin(null)
       setManualPinDirty(false)
+      // Al retirar el pin, el backend también retira el rol_matriz: reflejarlo.
+      setRolMatriz(null)
+      setCaptacionMsg(null)
     } finally {
       setSavingPin(false)
     }
@@ -538,6 +558,31 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                           className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
                       )}
                     </div>
+                    {/* Rol SII canónico (property_cl.rol_matriz): identidad PERMANENTE
+                        del inmueble que fija el pin. Es lo que comunica esta ficha con
+                        el resto del sistema — Catastro/Dealer/TGR se resuelven por el
+                        mismo rol. Los enlaces usan zona = sii_comuna_code (Catastro y
+                        el informe del predio ya aceptan ese formato). */}
+                    {rolMatriz && (
+                      <div className="mt-2 bg-emerald-500/5 border border-emerald-500/25 rounded-xl px-4 py-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-2">
+                            <BadgeCheck size={15} className="text-emerald-400 shrink-0" />
+                            <span className="text-sm text-slate-200">Rol SII</span>
+                            <span className="text-sm font-semibold text-emerald-300 tabular-nums">{rolMatriz}</span>
+                          </span>
+                          <span className="text-[11px] text-emerald-400/80">Identidad fijada · comunica toda la ficha</span>
+                        </div>
+                        {p.sii_comuna_code && (
+                          <div className="flex items-center gap-3 mt-2 flex-wrap">
+                            <a href={`/chile/informe-predio?comuna=${p.sii_comuna_code}&rol=${encodeURIComponent(rolMatriz)}`} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300">Informe del predio (dueño · TGR · CBR) <ExternalLink size={12} /></a>
+                            <a href={`/chile/catastro?zona=${p.sii_comuna_code}&rol=${encodeURIComponent(rolMatriz)}`} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300">Ver en Catastro <ExternalLink size={12} /></a>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -718,7 +763,13 @@ export default function PropiedadesChileClient() {
     setLoading(true)
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), sort: sortBy })
     if (operation !== 'all') params.append('operation', operation)
-    if (comuna) params.append('comuna', comuna)
+    if (comuna) {
+      // El buscador es dual: si el término parece un rol, filtra por rol_matriz
+      // (encuentra el anuncio por su identidad SII); si no, por comuna.
+      const asRol = normalizeClRol(comuna)
+      if (ROL_PATTERN.test(asRol)) params.append('rol', asRol)
+      else params.append('comuna', comuna)
+    }
     if (priceMin != null) params.append('price_min', String(priceMin))
     if (priceMax != null) params.append('price_max', String(priceMax))
     if (sqmMin != null) params.append('sqm_min', String(sqmMin))
@@ -766,7 +817,7 @@ export default function PropiedadesChileClient() {
         <div className="flex items-center gap-2 mb-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input type="text" placeholder="Buscar por comuna…" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+            <input type="text" placeholder="Buscar por comuna o rol (ej. 2452-14)…" value={searchInput} onChange={e => setSearchInput(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 pl-9 pr-8 py-2 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
             {searchInput && <button onClick={() => setSearchInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X size={14} /></button>}
           </div>

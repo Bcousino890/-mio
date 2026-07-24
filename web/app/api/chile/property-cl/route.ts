@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { extractListing, findRolAtPoint, setRolFromPin } from '@/lib/captar-pipeline'
+import { normalizeClRol } from '@/lib/rol-format'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/property-cl — propiedades CANÓNICAS deduplicadas (plan Anuncios CL
@@ -81,6 +82,10 @@ export async function GET(request: NextRequest) {
   const operation = sp.get('operation')
   const comunaName = sp.get('comuna')?.trim()
   const comunaCode = sp.get('comuna_code')?.trim()
+  // Búsqueda por Rol SII (rol_matriz): el rol es la identidad canónica que
+  // comunica la ficha con Catastro/Dealer/TGR. Se normaliza al mismo formato
+  // (sin padding de ceros) con que se guarda en property_cl.rol_matriz.
+  const rol = sp.get('rol')?.trim()
   const priceMin = sp.get('price_min') ? Number(sp.get('price_min')) : null
   const priceMax = sp.get('price_max') ? Number(sp.get('price_max')) : null
   const sqmMin = sp.get('sqm_min') ? Number(sp.get('sqm_min')) : null
@@ -114,6 +119,7 @@ export async function GET(request: NextRequest) {
     if (operation && operation !== 'all') conditions.push(`p.operation = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
     if (comunaCode) conditions.push(`c.sii_comuna_code = ${addParam(comunaCode)}`)
+    if (rol) conditions.push(`p.rol_matriz = ${addParam(normalizeClRol(rol))}`)
     if (priceMin !== null) conditions.push(`p.canonical_price >= ${addParam(priceMin)}`)
     if (priceMax !== null) conditions.push(`p.canonical_price <= ${addParam(priceMax)}`)
     if (sqmMin !== null) conditions.push(`p.square_meters >= ${addParam(sqmMin)}`)
@@ -232,15 +238,19 @@ export async function GET(request: NextRequest) {
 // Body: { id: string, latitude: number, longitude: number, source_url?: string }
 // — o { id, latitude: null, longitude: null } para borrar el pin manual.
 //
-// Si viene `source_url` (el aviso cuya ubicación declarada se está
-// corrigiendo) y se está guardando un pin (no borrando), además:
-//   1. busca la parcela SII que contiene ese punto (findRolAtPoint — mismo
-//      point-in-polygon que el visor de catastro), y
-//   2. crea/actualiza la captación de ese aviso en captaciones_cl con ese rol
-//      ya resuelto (setRolFromPin) — así el pin corregido a mano entra solo
-//      al pipeline de captación (dueño vía TGR, contacto vía DealerNet) sin
-//      que el equipo tenga que volver a pegar la URL en /chile/captar-url.
-// Es best-effort: si falla, el pin igual queda guardado.
+// Al guardar un pin (no borrar) se resuelve la parcela SII que contiene ese
+// punto (findRolAtPoint — mismo point-in-polygon que el visor de catastro) y su
+// rol se graba como rol_matriz canónico de la propiedad. Ese rol es la IDENTIDAD
+// que comunica la ficha con el resto del sistema: queda permanente en property_cl
+// (indexado) y hace que Propiedades / Catastro / Dealer / TGR hablen del mismo
+// inmueble por el mismo rol. Al borrar el pin se retira ese rol.
+//
+// Además, si viene `source_url` (el aviso cuya ubicación declarada se está
+// corrigiendo), crea/actualiza la captación de ese aviso en captaciones_cl con el
+// rol ya resuelto (setRolFromPin) — así el pin corregido a mano entra solo al
+// pipeline de captación (dueño vía TGR, contacto vía DealerNet) sin que el equipo
+// tenga que volver a pegar la URL en /chile/captar-url.
+// Todo lo del rol es best-effort: si falla, el pin igual queda guardado.
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
@@ -268,25 +278,65 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
     }
 
+    // Rol SII bajo el pin (identidad canónica del inmueble). Se escribe en
+    // property_cl.rol_matriz para que quede PERMANENTE en la ficha y para que el
+    // resto del sistema (Catastro/Dealer/TGR) se comunique por el mismo rol.
+    let rolMatriz: string | null = null
+    let rolComunaCode: string | null = null
+    let rolHit: Awaited<ReturnType<typeof findRolAtPoint>> = null
     let captacion: { id: string; sii_rol: string | null; comuna_name: string | null } | null = null
     let captacionError: string | null = null
-    if (!clearing && typeof source_url === 'string' && source_url) {
+
+    if (clearing) {
+      // Retirar el pin retira también el rol que ese pin fijó: rol_matriz /
+      // rol_confidence / matched_parcel_id sólo los escribe este flujo del pin.
+      await pool.query(
+        `UPDATE property_cl SET rol_matriz = NULL, rol_confidence = NULL, matched_parcel_id = NULL, updated_at = now() WHERE id = $1`,
+        [id]
+      )
+    } else {
       try {
-        const rolHit = await findRolAtPoint(latitude, longitude)
-        const { captacion: c } = await extractListing(source_url)
-        if (rolHit) {
-          const updated = await setRolFromPin(c.id, rolHit.rol, rolHit.sii_comuna_code)
-          captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rolHit.comuna_name }
-        } else {
-          captacion = { id: c.id, sii_rol: null, comuna_name: null }
-          captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
-        }
+        rolHit = await findRolAtPoint(latitude, longitude)
       } catch (e) {
-        captacionError = e instanceof Error ? e.message : 'Error al buscar el rol / guardar en captación'
+        captacionError = e instanceof Error ? e.message : 'Error al resolver el rol bajo el pin'
+      }
+      if (rolHit) {
+        // El pin arrastrado a mano cruzado contra el polígono catastral es la
+        // evidencia más directa de identidad ⇒ rol_confidence = 1.
+        rolMatriz = normalizeClRol(rolHit.rol)
+        rolComunaCode = rolHit.sii_comuna_code
+        await pool.query(
+          `UPDATE property_cl SET rol_matriz = $2, rol_confidence = 1, matched_parcel_id = $3, updated_at = now() WHERE id = $1`,
+          [id, rolMatriz, rolHit.parcel_id]
+        )
+      } else if (!captacionError) {
+        captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
+      }
+
+      // Si viene la URL del aviso, engancha/actualiza la captación con ese rol.
+      if (typeof source_url === 'string' && source_url) {
+        try {
+          const { captacion: c } = await extractListing(source_url)
+          if (rolHit) {
+            const updated = await setRolFromPin(c.id, rolHit.rol, rolHit.sii_comuna_code)
+            captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rolHit.comuna_name }
+          } else {
+            captacion = { id: c.id, sii_rol: null, comuna_name: null }
+          }
+        } catch (e) {
+          captacionError = e instanceof Error ? e.message : 'Error al guardar en captación'
+        }
       }
     }
 
-    return NextResponse.json({ success: true, data: rows[0], captacion, captacion_error: captacionError })
+    return NextResponse.json({
+      success: true,
+      data: rows[0],
+      rol: rolMatriz,
+      sii_comuna_code: rolComunaCode,
+      captacion,
+      captacion_error: captacionError,
+    })
   } catch (error) {
     console.error('Error guardando pin manual de property_cl:', error)
     return NextResponse.json(

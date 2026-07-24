@@ -873,7 +873,7 @@ export async function selectRolManual(captacionId: string, rol: string): Promise
 
 // ─── Rol SII a partir de un punto (pin corregido a mano en la ficha) ────────
 
-export interface RolAtPoint { rol: string; comuna_name: string; sii_comuna_code: string }
+export interface RolAtPoint { rol: string; comuna_name: string; sii_comuna_code: string; parcel_id: string }
 
 /** Parcela SII que contiene el punto dado (point-in-polygon sobre el catastro
  * ya cargado, mismo criterio que /api/chile/parcels-bbox). Se usa cuando el
@@ -882,7 +882,7 @@ export interface RolAtPoint { rol: string; comuna_name: string; sii_comuna_code:
  * depender del matching de texto/candidatos de matchRol(). */
 export async function findRolAtPoint(lat: number, lng: number): Promise<RolAtPoint | null> {
   const { rows } = await pool.query(
-    `SELECT p.rol, cc.name AS comuna_name, cc.sii_comuna_code
+    `SELECT p.id AS parcel_id, p.rol, cc.name AS comuna_name, cc.sii_comuna_code
      FROM cadastre_parcels_cl p
      JOIN chile_comunas cc ON cc.id = p.comuna_id
      WHERE p.rol IS NOT NULL
