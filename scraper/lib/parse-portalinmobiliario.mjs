@@ -151,6 +151,34 @@ const toInt = (s) => {
   return Number.isFinite(n) ? n : null
 }
 
+// Superficie en m² con formato chileno ("232,33 m²" = 232; "23.056 m²" = 23056):
+// el punto es separador de miles y la coma es decimal, así que se descartan los
+// decimales y se quitan los puntos antes de parsear. `toInt` (que solo elimina
+// puntos y espacios) convertía "232,33" en 232 pero "23.056" en 23056 — correcto
+// para ambos, pero aquí lo hacemos explícito para no depender de ese detalle.
+const toSqm = (s) => {
+  if (!s) return null
+  const m = String(s).match(/[\d.,]+/)
+  if (!m) return null
+  const intPart = m[0].split(',')[0].replace(/\./g, '')
+  const n = parseInt(intPart, 10)
+  return Number.isFinite(n) ? n : null
+}
+
+// Clave de identidad de una foto de Mercado Libre para deduplicar entre fuentes.
+// La MISMA foto aparece con plantillas de URL distintas según de dónde salga:
+//   - mosaico del blob:  https://http2.mlstatic.com/D_NQ_NP_2X_{id}-F.webp
+//   - modal por item_id: https://http2.mlstatic.com/D_NQ_NP_{id}-O.webp
+// Deduplicar por URL completa las contaba como fotos diferentes (bug "21 fotos
+// cuando el original tiene 16": las 5 del mosaico se re-sumaban con otra
+// plantilla). El id real de la foto es `{secuencia}-MLC{item}` (el sufijo de
+// fecha `_NNNNNN` y el código de tamaño `-O`/`-F` son variantes de la misma
+// imagen). Sin id de ML reconocible, se cae a la URL completa.
+const photoIdKey = (url) => {
+  const m = String(url ?? '').match(/\d+-MLC\d+/)
+  return m ? m[0] : String(url ?? '')
+}
+
 // ─── Helper: extracción del blob "Nordic" de Mercado Libre ──────────────────
 // `<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={...};self.__LOADABLE...`
 // El objeto puede contener strings con `{`/`}` (descripciones, JSON anidado
@@ -436,7 +464,8 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // con `icon.id` ∈ {BED, BATHROOM, SCALE_UP} y `label.text` (ej. "5 dorm.",
     // "3 baños", "374 m² totales"). La clase CSS usada antes
     // (poly-component__attributes-item) solo existe en el listado.
-    let bedrooms = null, bathrooms = null, square_meters = null
+    let bedrooms = null, bathrooms = null
+    let sqmHighlightedBuilt = null, sqmHighlightedTerreno = null
     const specAttrs = comps.highlighted_specs_res?.attributes ?? comps.fixed?.highlighted_specs_res?.attributes ?? []
     for (const a of specAttrs) {
       const iconId = a?.icon?.id
@@ -444,7 +473,15 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       if (!text) continue
       if (iconId === 'BED') bedrooms = toInt(text)
       else if (iconId === 'BATHROOM') bathrooms = toInt(text)
-      else if (iconId === 'SCALE_UP') square_meters = toInt(text)
+      else if (iconId === 'SCALE_UP') {
+        // La ficha puede traer DOS specs de m²: la superficie construida/total
+        // ("232 m² totales") y la del terreno ("23.056 m² de terreno", típico de
+        // parcelas de Las Condes). El terreno NO es la superficie del inmueble:
+        // hay que separarlo para que no pise el valor construido (bug reportado
+        // "23056 m²" en vez de "232 m²"). El último SCALE_UP ganaba sin distinguir.
+        if (/terreno|lote|parcela|predio|sitio/i.test(text)) sqmHighlightedTerreno = toSqm(text)
+        else sqmHighlightedBuilt = toSqm(text)
+      }
     }
 
     // Comuna/dirección: `event_data.city` es la comuna ya limpia; respaldo en
@@ -463,7 +500,16 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     const gallery = comps.gallery_mosaic ?? comps.fixed?.gallery_mosaic ?? null
     const photos = []
     const seenPhotos = new Set()
-    const addPhoto = (url) => { if (url && !seenPhotos.has(url)) { seenPhotos.add(url); photos.push(url) } }
+    // Dedup por id de foto de ML (no por URL completa): la misma imagen llega con
+    // plantillas de URL distintas del mosaico y del modal, y contarlas por URL
+    // inflaba el total (bug "21 fotos cuando el original tiene 16"). Ver photoIdKey.
+    const addPhoto = (url) => {
+      if (!url) return
+      const key = photoIdKey(url)
+      if (seenPhotos.has(key)) return
+      seenPhotos.add(key)
+      photos.push(url)
+    }
     if (gallery?.primary?.src) addPhoto(gallery.primary.src)
     for (const p of gallery?.secondary ?? []) addPhoto(p?.src)
     if (photos.length === 0) {
@@ -575,6 +621,11 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // las ~5 "destacadas" del blob. Mismo criterio que smartbc: valor "Sí" →
     // solo la etiqueta; si no, "Etiqueta: valor". Se omiten las que ya se ven en
     // la grilla de specs (dormitorios/baños/superficie total) para no repetir.
+    // Superficies TIPADAS desde la tabla rayada (fuente más fiable que el bloque
+    // destacado, que a veces mezcla construido y terreno en dos SCALE_UP): la
+    // tabla etiqueta cada valor sin ambigüedad ("Superficie total", "Superficie
+    // útil", "Superficie del terreno").
+    let sqmTotal = null, sqmUtil = null, sqmConstruida = null, sqmTerreno = null
     const features = []
     const seenFeat = new Set()
     const SKIP_FEAT = /^(dormitorios?|ba[ñn]os?|superficie total)$/i
@@ -583,12 +634,28 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       $$('.ui-vpp-striped-specs__row').each((_, el) => {
         const key = decode($$(el).find('th').first().text()).replace(/:\s*$/, '').trim()
         const value = decode($$(el).find('td').first().text()).trim()
-        if (!key || SKIP_FEAT.test(key)) return
+        if (!key) return
+        const kl = key.toLowerCase()
+        if (/superficie/.test(kl)) {
+          if (/terreno|lote|parcela|predio|sitio/.test(kl)) sqmTerreno = toSqm(value)
+          else if (/[úu]til/.test(kl)) sqmUtil = toSqm(value)
+          else if (/construid|edificad/.test(kl)) sqmConstruida = toSqm(value)
+          else if (/total/.test(kl)) sqmTotal = toSqm(value)
+        }
+        if (SKIP_FEAT.test(key)) return
         const label = /^s[ií]$/i.test(value) ? key : (value ? `${key}: ${value}` : key)
         const k = label.toLowerCase()
         if (!seenFeat.has(k)) { seenFeat.add(k); features.push(label) }
       })
     } catch { /* HTML raro: features queda vacío, no rompe la ficha */ }
+
+    // Superficie del inmueble = superficie CONSTRUIDA, nunca el terreno. En PI la
+    // "Superficie total" de una casa es la construida (todas las plantas), que es
+    // el titular que muestra el portal ("232 m² totales"); "Superficie útil" es la
+    // usable. Preferimos la tabla rayada (tipada) y caemos al spec destacado.
+    const sqm_terreno = sqmTerreno ?? sqmHighlightedTerreno ?? null
+    const sqm_construida = sqmConstruida ?? sqmTotal ?? sqmUtil ?? sqmHighlightedBuilt ?? null
+    const square_meters = sqmTotal ?? sqmConstruida ?? sqmUtil ?? sqmHighlightedBuilt ?? null
 
     return {
       external_id,
@@ -600,7 +667,11 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       property_type,
       title,
       price, currency,
-      square_meters,
+      square_meters,       // superficie CONSTRUIDA del inmueble (nunca el terreno)
+      sqm_construida: sqm_construida,  // alias explícito para el pipeline de captación (Ficha técnica V4)
+      sqm_util: sqmUtil ?? null,       // superficie útil declarada, si el portal la trae
+      sqm_total: sqmTotal ?? null,     // superficie total (construida) declarada
+      sqm_terreno,         // superficie del terreno/parcela — dato aparte, usado por el match SII
       bedrooms,
       bathrooms,
       latitude, longitude,
