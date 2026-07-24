@@ -312,6 +312,12 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
   const next = useCallback(() => { setImgError(false); setIdx(i => (i + 1) % gallery.length) }, [gallery.length])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Con el mapa agrandado, Escape solo lo achica (no cierra toda la ficha) y
+      // las flechas no cambian de foto: el foco del usuario está en el mapa.
+      if (mapExpanded) {
+        if (e.key === 'Escape') setMapExpanded(false)
+        return
+      }
       if (e.key === 'Escape') onClose()
       else if (e.key === 'ArrowLeft') prev()
       else if (e.key === 'ArrowRight') next()
@@ -326,7 +332,7 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [onClose, prev, next])
+  }, [onClose, prev, next, mapExpanded])
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm animate-[fadeIn_.12s_ease-out]" onClick={onClose}>
@@ -465,37 +471,36 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                       // Satélite (mismo tile de Google sin API key que /chile/catastro) +
                       // segundo pin manual arrastrable: "el pin que puse yo" — corrección
                       // del equipo, aparte del declarado por el anuncio, para comparar.
-                      // Botón "agrandar": el recuadro chico no alcanza para ubicar un pin
-                      // con precisión en zonas densas — abre el mismo mapa en overlay
-                      // de pantalla completa (mismo DetailMap, ResizeObserver interno
-                      // se encarga de que Leaflet redibuje al tamaño nuevo).
-                      <div className="relative h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
-                        <DetailMap
-                          latitude={geo.latitude!} longitude={geo.longitude!} exact
-                          tileStyle="satellite"
-                          secondPin={manualPin}
-                          onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
-                        />
-                        <button onClick={() => setMapExpanded(true)}
-                          title="Agrandar mapa"
-                          className="absolute top-2 right-2 z-[1000] p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80">
-                          <Maximize2 size={14} />
-                        </button>
-                      </div>
-                    )}
-                    {mapExpanded && geo && (
-                      <div className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-4 sm:p-8" onClick={() => setMapExpanded(false)}>
-                        <div className="relative w-full h-full max-w-6xl rounded-2xl overflow-hidden border border-slate-700" onClick={e => e.stopPropagation()}>
+                      // Botón "agrandar": el recuadro chico no alcanza para ubicar
+                      // un pin con precisión en zonas densas. Agrandamos el MISMO
+                      // contenedor del ÚNICO mapa (no montamos un segundo DetailMap
+                      // en el overlay: ese arrancaba con un tamaño transitorio y
+                      // Leaflet lo dibujaba cortado — bug "solo agranda una parte").
+                      // Al alternar las clases, el contenedor del mapa que ya está
+                      // montado cambia de tamaño y su ResizeObserver interno redibuja
+                      // Leaflet al tamaño nuevo, conservando el centro.
+                      <div
+                        className={mapExpanded
+                          ? 'fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-4 sm:p-8'
+                          : 'relative h-56 rounded-xl overflow-hidden border border-slate-700 mb-2'}
+                        onClick={mapExpanded ? () => setMapExpanded(false) : undefined}
+                      >
+                        <div
+                          className={mapExpanded
+                            ? 'relative w-full h-full max-w-6xl rounded-2xl overflow-hidden border border-slate-700'
+                            : 'relative w-full h-full'}
+                          onClick={mapExpanded ? (e) => e.stopPropagation() : undefined}
+                        >
                           <DetailMap
                             latitude={geo.latitude!} longitude={geo.longitude!} exact
                             tileStyle="satellite"
                             secondPin={manualPin}
                             onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
                           />
-                          <button onClick={() => setMapExpanded(false)}
-                            title="Achicar mapa"
-                            className="absolute top-3 right-3 z-[1000] p-2 rounded-lg bg-black/60 text-white hover:bg-black/80">
-                            <Minimize2 size={16} />
+                          <button onClick={(e) => { e.stopPropagation(); setMapExpanded((v) => !v) }}
+                            title={mapExpanded ? 'Achicar mapa' : 'Agrandar mapa'}
+                            className="absolute top-2 right-2 z-[1000] p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80">
+                            {mapExpanded ? <Minimize2 size={16} /> : <Maximize2 size={14} />}
                           </button>
                         </div>
                       </div>

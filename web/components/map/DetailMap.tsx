@@ -122,8 +122,14 @@ export default function DetailMap({
       // "agrandar" en la ficha, que alterna entre el recuadro chico y overlay
       // de pantalla completa) — sin invalidateSize() Leaflet sigue creyendo
       // que tiene el tamaño viejo y el mapa queda cortado/mal centrado.
+      // El invalidateSize se difiere a requestAnimationFrame para que corra
+      // DESPUÉS del relayout del navegador (si no, Leaflet lee un tamaño
+      // intermedio y vuelve a quedar cortado) y para evitar el warning
+      // "ResizeObserver loop completed with undelivered notifications".
       if (containerRef.current) {
-        const ro = new ResizeObserver(() => map.invalidateSize())
+        const ro = new ResizeObserver(() => {
+          requestAnimationFrame(() => mapRef.current?.invalidateSize())
+        })
         ro.observe(containerRef.current)
         resizeObserverRef.current = ro
       }
