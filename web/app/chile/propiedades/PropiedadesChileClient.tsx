@@ -103,6 +103,9 @@ function priceSpread(p: Property) {
 // ─── Card ───────────────────────────────────────────────────────────────────
 function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => void }) {
   const [imgError, setImgError] = useState(false)
+  // Si la portada cambia (re-scrape que trajo otra foto), reintentar la carga:
+  // sin esto, un error previo dejaba el placeholder pegado con la foto nueva.
+  useEffect(() => { setImgError(false) }, [p.cover_photo])
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
   const multi = p.corredora_count > 1
@@ -169,11 +172,13 @@ function FieldCell({ icon, label, value }: { icon: React.ReactNode; label: strin
 // Miniatura del aviso de una corredora (con fallback si no hay foto o falla).
 function CorredoraThumb({ src }: { src?: string }) {
   const [err, setErr] = useState(false)
+  // Reintentar cuando el aviso trae una miniatura distinta tras re-scrapear.
+  useEffect(() => { setErr(false) }, [src])
   return (
     <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center text-slate-600">
       {src && !err ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" onError={() => setErr(true)} loading="lazy" className="w-full h-full object-cover" />
+        <img key={src} src={src} alt="" onError={() => setErr(true)} loading="lazy" className="w-full h-full object-cover" />
       ) : (
         <ImageOff size={20} />
       )}
@@ -206,8 +211,20 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
     return p.cover_photo ? [p.cover_photo] : []
   }, [activeListing, p.cover_photo])
   const [idx, setIdx] = useState(0)
-  const [imgError, setImgError] = useState(false)
-  useEffect(() => { setIdx(0); setImgError(false) }, [activeListingId])
+  // Fotos que fallaron al cargar, rastreadas POR URL. Antes era un único
+  // booleano `imgError` que solo se reseteaba al cambiar de corredora
+  // (activeListingId). Al "Re-scrapear" la MISMA corredora, el listing_id no
+  // cambia, así que el flag quedaba pegado en true y la galería seguía
+  // mostrando el placeholder aunque ya hubieran llegado fotos nuevas y válidas
+  // ("dice actualizado pero no cargan las fotos"). Con un Set por URL, cada
+  // foto nueva se intenta cargar de cero y solo se marca fallida la que de
+  // verdad no carga.
+  const [failedSrc, setFailedSrc] = useState<Set<string>>(() => new Set())
+  const markFailed = useCallback((src: string) => setFailedSrc(prev => {
+    const next = new Set(prev); next.add(src); return next
+  }), [])
+  // Al cambiar de corredora (pestaña), volver a la primera foto.
+  useEffect(() => { setIdx(0) }, [activeListingId])
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
 
@@ -308,8 +325,11 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
     }
   }, [activeListing, refetching, p.id, onRefetched])
 
-  const prev = useCallback(() => { setImgError(false); setIdx(i => (i - 1 + gallery.length) % gallery.length) }, [gallery.length])
-  const next = useCallback(() => { setImgError(false); setIdx(i => (i + 1) % gallery.length) }, [gallery.length])
+  // Si la galería cambió (re-scrape con más/menos fotos) y el índice quedó fuera
+  // de rango, volver a una foto válida en vez de apuntar a un hueco.
+  useEffect(() => { setIdx(i => (i < gallery.length ? i : 0)) }, [gallery.length])
+  const prev = useCallback(() => setIdx(i => (i - 1 + gallery.length) % gallery.length), [gallery.length])
+  const next = useCallback(() => setIdx(i => (i + 1) % gallery.length), [gallery.length])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Con el mapa agrandado, Escape solo lo achica (no cierra toda la ficha) y
@@ -339,9 +359,11 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-3xl max-h-[92vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
         {/* Galería */}
         <div className="relative aspect-[16/9] bg-slate-900 rounded-t-2xl overflow-hidden">
-          {gallery.length > 0 && !imgError ? (
+          {gallery[idx] && !failedSrc.has(gallery[idx]) ? (
+            // key={src}: remonta el <img> al cambiar de foto/actualizar la
+            // galería, forzando un nuevo intento de carga (onError es por-imagen).
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={gallery[idx]} alt="" onError={() => setImgError(true)} className="w-full h-full object-cover" />
+            <img key={gallery[idx]} src={gallery[idx]} alt="" onError={() => markFailed(gallery[idx])} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageOff size={40} /></div>
           )}
@@ -385,7 +407,7 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
           <div className="flex gap-1.5 overflow-x-auto px-4 py-2 bg-slate-900/40">
             {gallery.map((g, i) => (
               // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={g} alt="" onClick={() => { setImgError(false); setIdx(i) }} loading="lazy"
+              <img key={i} src={g} alt="" onClick={() => setIdx(i)} loading="lazy"
                 className={`h-12 w-16 object-cover rounded cursor-pointer shrink-0 border-2 transition-colors ${i === idx ? 'border-amber-500' : 'border-transparent opacity-60 hover:opacity-100'}`} />
             ))}
           </div>
