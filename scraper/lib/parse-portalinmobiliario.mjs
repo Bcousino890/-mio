@@ -1,4 +1,5 @@
 import { load as cheerioLoad } from 'cheerio'
+import { fetchHtml } from './fetch.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Parsers del HTML de Portalinmobiliario.com (vertical inmobiliario de
@@ -61,17 +62,37 @@ const NAMED = {
 }
 
 // ─── Fetch de la galería completa (Fase 2 del modal de Portal Inmobiliario) ───
-async function fetchGalleryPhotos(galleryUrl) {
+//
+// BUG cerrado aquí: ambas funciones de abajo hacían solo un `fetch()` directo
+// y se rendían en silencio (catch mudo → []) ante cualquier bloqueo/timeout —
+// a diferencia del fetch de la ficha principal (fetchHtmlResilient/fetchHtmlPi
+// en fetch.mjs), que YA tiene fallback a proxy residencial. Un bloqueo pasajero
+// en CUALQUIERA de estos dos endpoints dejaba la ficha pegada para siempre en
+// las 5 fotos del HTML estático (gallery_mosaic), sin reintentar ni avisar —
+// exactamente el síntoma reportado ("solo scrapea 5 fotos"). `fetchGalleryHtml`
+// replica el mismo criterio directo-primero + proxy-fallback ya validado para
+// la ficha principal.
+async function fetchGalleryHtml(url) {
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
-    const response = await fetch(galleryUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' },
       signal: controller.signal,
     })
     clearTimeout(timeout)
-    if (!response.ok) return []
-    const html = await response.text()
+    if (response.ok) return await response.text()
+  } catch {
+    // sigue al proxy abajo
+  }
+  const proxied = await fetchHtml(url, { useProxy: true, profile: 'portalinmobiliario' })
+  return proxied.ok ? proxied.html : null
+}
+
+async function fetchGalleryPhotos(galleryUrl) {
+  try {
+    const html = await fetchGalleryHtml(galleryUrl)
+    if (!html) return []
 
     const photos = new Set()
     // Patrón 1: data-zoom
@@ -102,18 +123,8 @@ async function fetchGalleryByItemId(externalId) {
   try {
     const id = String(externalId).replace(/[^A-Z0-9]/gi, '') // "MLC-123" → "MLC123"
     if (!/^MLC\d+$/i.test(id)) return []
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000)
-    const response = await fetch(`https://www.portalinmobiliario.com/vis-modals/gallery/${id}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'es-CL,es;q=0.9',
-      },
-      signal: controller.signal,
-    })
-    clearTimeout(timeout)
-    if (!response.ok) return []
-    const html = await response.text()
+    const html = await fetchGalleryHtml(`https://www.portalinmobiliario.com/vis-modals/gallery/${id}`)
+    if (!html) return []
     const ids = []
     for (const m of html.matchAll(/\d{6}-MLC\d+(?:_\d{6})?/g)) {
       if (!ids.includes(m[0])) ids.push(m[0])
@@ -370,7 +381,8 @@ export function parseListMeta(html) {
  * Prioriza el blob "Nordic" embebido (ver extractNordicBlob/extractInitialState)
  * si existe; de lo contrario cae a selectores DOM con regex.
  */
-export async function parseDetailPage(html, external_id) {
+export async function parseDetailPage(html, external_id, deps = {}) {
+  const { fetchGallery = fetchGalleryPhotos, fetchGalleryById = fetchGalleryByItemId } = deps
   try {
     if (!html) return null
 
@@ -470,7 +482,7 @@ export async function parseDetailPage(html, external_id) {
     // Fetch del modal de galería (si existe) para obtener TODAS las fotos
     if (galleryUrl) {
       try {
-        const galleryPhotos = await fetchGalleryPhotos(galleryUrl)
+        const galleryPhotos = await fetchGallery(galleryUrl)
         for (const photo of galleryPhotos) {
           addPhoto(photo)
         }
@@ -483,7 +495,7 @@ export async function parseDetailPage(html, external_id) {
     // fotos y no siempre el media_counters.url. Si seguimos con pocas, pedimos
     // el modal /vis-modals/gallery/{itemId} y sumamos TODAS las que falten.
     if (external_id && photos.length < (photosTotalCount ?? 6)) {
-      const byId = await fetchGalleryByItemId(external_id)
+      const byId = await fetchGalleryById(external_id)
       for (const photo of byId) addPhoto(photo)
     }
 
