@@ -84,6 +84,25 @@ test('la ausencia de señal dura NO penaliza (foto faltante ≠ evidencia en con
   assert.notEqual(r.status, 'rejected');
 });
 
+test('MISMA corredora + huella parecida pero SIN foto/teléfono/dirección → NO confirmed', () => {
+  // Bug real: 5 casas DISTINTAS de "Home Hunters" (misma comuna, 4 dorm, 400 m²,
+  // pin genérico, precios con 170% de diferencia) se fusionaban en un inmueble.
+  // Sin evidencia dura de misma propiedad, jamás debe auto-confirmarse.
+  const a = { latitude: -33.40, longitude: -70.58, square_meters: 400, bedrooms: 4, bathrooms: 3, price: 649432161, property_type: 'casa', operation: 'sale', address: null, advertiser_name: 'Home Hunters Asesoría Y Gestión Inmobiliaria' }
+  const b = { ...a, price: 1756325970 } // otra casa, mismo formato, precio muy distinto
+  const r = scorePairCl(a, b)
+  assert.notEqual(r.status, 'confirmed')
+})
+
+test('MISMA corredora PERO con foto reutilizada (misma propiedad) → sí confirmed', () => {
+  // El guardarraíl no debe romper el caso legítimo: si comparten foto, es la
+  // misma propiedad aunque sea la misma corredora (re-publicación que Nivel 1 no cazó).
+  const a = { latitude: -33.40, longitude: -70.58, square_meters: 400, bedrooms: 4, bathrooms: 3, price: 649432161, property_type: 'casa', operation: 'sale', address: null, advertiser_name: 'Home Hunters', cover_phash: 'ffff0000ffff0000' }
+  const b = { ...a, price: 650000000, cover_phash: 'ffff0000ffff0001' }
+  const r = scorePairCl(a, b)
+  assert.equal(r.status, 'confirmed')
+})
+
 test('scorePairCl es simétrico: score(a,b) == score(b,a)', () => {
   const a = { ...BASE, phone: '569 22222222' };
   const b = { ...BASE, price: 490000000, square_meters: 118, address: 'Apoquindo 1234 Las Condes' };

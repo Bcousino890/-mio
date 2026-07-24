@@ -161,7 +161,7 @@ export async function refreshPropertyClAggregates(client, propertyClId) {
   );
 }
 
-async function createPropertyCl(client, rows) {
+export async function createPropertyCl(client, rows) {
   const c = consolidateFields(rows);
   const { rows: inserted } = await client.query(
     `INSERT INTO property_cl (

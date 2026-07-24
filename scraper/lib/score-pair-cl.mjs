@@ -58,6 +58,10 @@ export const CL_HARD_SIGNALS = {
 // Hamming ≤ este umbral (de 64 bits) ⇒ "misma foto" (recompresión/recorte leve).
 export const PHASH_MATCH_THRESHOLD = 8;
 
+// Similitud de dirección (Jaccard de trigramas) a partir de la cual se acepta
+// como evidencia de MISMA propiedad para confirmar automáticamente.
+export const CONFIRM_MIN_ADDR_SIM = 0.5;
+
 // Mismo sigmoid que matching.mjs (factor 2) para mantener la misma escala de score.
 function sigmoid(x) {
   return 1 / (1 + Math.exp(-x * 2));
@@ -191,9 +195,25 @@ export function scorePairCl(a, b, opts = {}) {
   }
 
   const score = sigmoid(raw);
-  const status = score >= thresholds.confirmed ? 'confirmed'
+  let status = score >= thresholds.confirmed ? 'confirmed'
     : score >= thresholds.candidate ? 'candidate'
     : 'rejected';
+
+  // GUARDARRAÍL anti-falsos-positivos (bug: 5 casas DISTINTAS de una misma
+  // corredora fusionadas en un solo inmueble). Auto-confirmar (→ fusión Nivel 2)
+  // EXIGE una señal dura de MISMA propiedad física: foto reutilizada (pHash),
+  // mismo teléfono, o dirección coincidente. "Misma corredora" NO alcanza: Nivel
+  // 1 ya fusiona las re-publicaciones de una corredora por property_code, así que
+  // dos anuncios de la MISMA corredora que Nivel 1 no unió son casi siempre
+  // inmuebles DISTINTOS (aunque compartan comuna, m², dormitorios y un pin
+  // genérico). Sin esa evidencia, el par baja a 'candidate' (revisión manual), no
+  // se fusiona solo. Concuerda con el plan: huella compatible sin señal dura ⇒
+  // zona de revisión, nunca confirmación automática.
+  const hasIdentityEvidence =
+    sig.hard.photos_match ||
+    sig.hard.same_phone ||
+    (sig.footprint.text_similarity != null && sig.footprint.text_similarity >= CONFIRM_MIN_ADDR_SIM);
+  if (status === 'confirmed' && !hasIdentityEvidence) status = 'candidate';
 
   const top = Object.entries(components).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])).slice(0, 3)
     .map(([k, v]) => `${v >= 0 ? '+' : ''}${k}(${v.toFixed(2)})`).join(' ');
