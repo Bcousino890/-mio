@@ -46,12 +46,22 @@ export default function CaptacionChilePage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [resuming, setResuming] = useState<string | null>(null)
-  // Link directo desde la ficha de /chile/propiedades al guardar un pin manual
-  // (?id=<captacionId>, ver PATCH /api/chile/property-cl): antes esa captación
-  // recién creada quedaba enterrada en la lista sin forma de encontrarla — acá
-  // la resaltamos y la llevamos a la vista al cargar.
-  const highlightId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('id') : null
+  // Mensaje por-fila del resultado de "Continuar" (antes se tragaba en silencio:
+  // si TGR/DealerNet fallaba o pedía revisión, no cambiaba nada y parecía roto).
+  const [resumeMsg, setResumeMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
+  // Deep-link ?id=<id> desde la ficha de Propiedades ("Rol SII guardado en
+  // Captación →", ver PATCH /api/chile/property-cl). Antes la página lo ignoraba
+  // y la captación recién creada quedaba enterrada en la lista sin forma de
+  // encontrarla — acá la resaltamos, la llevamos a la vista, y si no entra en la
+  // página/filtro actual la pedimos puntualmente por id.
+  const [highlightId, setHighlightId] = useState<string | null>(null)
   const highlightRef = useRef<HTMLTableRowElement | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const id = new URLSearchParams(window.location.search).get('id')
+    if (id) setHighlightId(id)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -77,25 +87,51 @@ export default function CaptacionChilePage() {
 
   useEffect(() => { load() }, [load])
 
-  // Al llegar con ?id=, una vez cargadas las filas, hace scroll a la
-  // captación puntual y la resalta unos segundos para que no se pierda entre
-  // el resto de la lista.
+  // Si la captación enlazada por ?id no entra en la página/filtro actual, se
+  // pide puntualmente y se antepone, para que el deep-link siempre la muestre.
   useEffect(() => {
-    if (!highlightId || rows.length === 0) return
-    highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!highlightId || rows.some((r) => r.id === highlightId)) return
+    let cancelled = false
+    fetch(`/api/chile/captar?id=${encodeURIComponent(highlightId)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled || !d.success || !d.captaciones?.length) return
+        setRows((prev) => (prev.some((r) => r.id === highlightId) ? prev : [d.captaciones[0], ...prev]))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [highlightId, rows])
+
+  // Llevar la fila resaltada a la vista cuando aparece en la lista.
+  useEffect(() => {
+    if (highlightId && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
   }, [highlightId, rows])
 
   // Reanudar la siguiente etapa pendiente de una captación
   const resume = async (row: CaptacionRow) => {
     setResuming(row.id)
+    setResumeMsg((m) => { const n = { ...m }; delete n[row.id]; return n })
     try {
+      let res: Response | null = null
       if (row.sii_rol && !row.owner_name) {
-        await fetch(`/api/chile/captar/${row.id}/tgr`, { method: 'POST' })
+        res = await fetch(`/api/chile/captar/${row.id}/tgr`, { method: 'POST' })
       } else if (row.owner_name && row.dealernet_status !== 'ok') {
-        await fetch(`/api/chile/captar/${row.id}/dealernet`, { method: 'POST' })
+        res = await fetch(`/api/chile/captar/${row.id}/dealernet`, { method: 'POST' })
+      }
+      if (res) {
+        const data = await res.json().catch(() => null)
+        if (data && data.success === false) {
+          setResumeMsg((m) => ({ ...m, [row.id]: { ok: false, text: data.error ?? 'La etapa no pudo completarse' } }))
+        } else if (data?.error) {
+          // success=true pero con nota (p. ej. TGR "sin deuda" / cooldown).
+          setResumeMsg((m) => ({ ...m, [row.id]: { ok: true, text: String(data.error) } }))
+        }
       }
       await load()
+    } catch {
+      setResumeMsg((m) => ({ ...m, [row.id]: { ok: false, text: 'Error de red al reanudar' } }))
     } finally {
       setResuming(null)
     }
@@ -168,6 +204,21 @@ export default function CaptacionChilePage() {
         </div>
       )}
 
+      {highlightId && (
+        <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-blue-900/50 bg-blue-950/20 text-blue-300 text-xs mb-4">
+          <span className="flex items-center gap-2"><Link2 size={13} /> Mostrando la captación vinculada desde Propiedades.</span>
+          <button
+            onClick={() => {
+              setHighlightId(null)
+              if (typeof window !== 'undefined') window.history.replaceState(null, '', '/chile/captacion')
+            }}
+            className="text-blue-400 hover:text-blue-200 underline shrink-0"
+          >
+            Ver todas
+          </button>
+        </div>
+      )}
+
       {!loading && rows.length === 0 && !error ? (
         <div className="rounded-xl border border-dashed border-[var(--c-border-strong)] bg-[var(--c-card)] p-12 text-center">
           <Users size={32} className="mx-auto text-slate-700 mb-3" />
@@ -195,8 +246,13 @@ export default function CaptacionChilePage() {
                   || (r.owner_name && r.dealernet_status !== 'ok' && r.dealernet_status !== 'ambiguous')
                 const isHighlighted = r.id === highlightId
                 return (
-                  <tr key={r.id} ref={isHighlighted ? highlightRef : undefined}
-                    className={`border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] ${isHighlighted ? 'bg-emerald-900/20 ring-1 ring-inset ring-emerald-500/50' : ''}`}>
+                  <tr
+                    key={r.id}
+                    ref={isHighlighted ? highlightRef : undefined}
+                    className={`border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] ${
+                      isHighlighted ? 'bg-blue-950/30 ring-1 ring-inset ring-blue-500/40' : ''
+                    }`}
+                  >
                     <td className="px-4 py-3 max-w-[220px]">
                       <p className="text-slate-200 text-xs font-medium truncate">{r.title ?? '—'}</p>
                       <p className="text-slate-600 text-[11px]">
@@ -270,6 +326,11 @@ export default function CaptacionChilePage() {
                           <ExternalLink size={12} />
                         </a>
                       </div>
+                      {resumeMsg[r.id] && (
+                        <p className={`text-[10px] mt-1 text-right ${resumeMsg[r.id].ok ? 'text-slate-400' : 'text-amber-400'}`}>
+                          {resumeMsg[r.id].text}
+                        </p>
+                      )}
                     </td>
                   </tr>
                 )

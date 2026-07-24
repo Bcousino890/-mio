@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
 /** GET /api/chile/captar — lista de captaciones (para /chile/captacion). */
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
+  const id = sp.get('id')?.trim()
   const stage = sp.get('stage')
   const review = sp.get('needs_review')
   const comuna = sp.get('sii_comuna_code')
@@ -52,6 +53,10 @@ export async function GET(request: NextRequest) {
   const params: unknown[] = []
   const add = (v: unknown) => { params.push(v); return `$${params.length}` }
 
+  // Detalle por id (deep-link desde la ficha de Propiedades: al guardar el pin
+  // manual se crea/actualiza una captación y se enlaza a ?id=<id>). Ignora el
+  // resto de filtros — se pide UNA captación puntual.
+  if (id) conditions.push(`id = ${add(id)}`)
   if (stage) conditions.push(`stage = ${add(stage)}`)
   if (review === 'true') conditions.push(`needs_review = true`)
   if (comuna) conditions.push(`sii_comuna_code = ${add(comuna)}`)
