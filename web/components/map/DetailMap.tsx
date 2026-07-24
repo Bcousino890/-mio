@@ -53,6 +53,7 @@ export default function DetailMap({
   const mapRef = useRef<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const secondMarkerRef = useRef<any>(null)
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const onSecondPinDragRef = useRef(onSecondPinDrag)
   onSecondPinDragRef.current = onSecondPinDrag
 
@@ -116,9 +117,21 @@ export default function DetailMap({
       }
 
       mapRef.current = map
+
+      // El contenedor puede cambiar de tamaño después de montado (botón
+      // "agrandar" en la ficha, que alterna entre el recuadro chico y overlay
+      // de pantalla completa) — sin invalidateSize() Leaflet sigue creyendo
+      // que tiene el tamaño viejo y el mapa queda cortado/mal centrado.
+      if (containerRef.current) {
+        const ro = new ResizeObserver(() => map.invalidateSize())
+        ro.observe(containerRef.current)
+        resizeObserverRef.current = ro
+      }
     })
 
     return () => {
+      resizeObserverRef.current?.disconnect()
+      resizeObserverRef.current = null
       if (mapRef.current) {
         mapRef.current.remove()
         mapRef.current = null
