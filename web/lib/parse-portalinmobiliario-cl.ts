@@ -32,6 +32,27 @@ const toInt = (s: unknown): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
+// Superficie en m² con formato chileno ("232,33 m²" = 232; "23.056 m²" = 23056):
+// el punto es separador de miles y la coma decimal, así que se descartan los
+// decimales y se quitan los puntos antes de parsear.
+const toSqm = (s: unknown): number | null => {
+  if (!s) return null
+  const m = String(s).match(/[\d.,]+/)
+  if (!m) return null
+  const n = parseInt(m[0].split(',')[0].replace(/\./g, ''), 10)
+  return Number.isFinite(n) ? n : null
+}
+
+// Id ESTABLE de una foto de Mercado Libre, para deduplicar la MISMA imagen que
+// llega con plantillas de URL distintas (mosaico `D_NQ_NP_2X_<id>-F.webp` vs
+// modal `D_NQ_NP_<id>-O.webp` vs `srcset`). Deduplicar por URL completa las
+// contaba como fotos distintas e inflaba el total ("21 fotos" cuando eran 16).
+// Devuelve la URL tal cual si no reconoce un id de ML (logos/avatares, etc.).
+export function photoIdKey(url: string): string {
+  const m = url.match(/\d+-MLC\d+/)
+  return m ? m[0] : url
+}
+
 // El blob puede contener strings con `{`/`}` (descripciones, JSON escapado),
 // así que se balancea por profundidad de llaves en vez de usar un regex
 // no-greedy que puede truncar antes del cierre real.
@@ -128,14 +149,21 @@ export function extractTechSpecs(html: string, title: string | null, description
 
   const m = (re: RegExp) => text.match(re)?.[1] ?? null
 
-  let sqm_terreno = toNum(m(/superficie (?:total|de terreno|terreno)\s*:?\s*([\d.]+)\s*m/i))
-  let sqm_construida = toNum(m(/superficie (?:construida|útil|util)\s*:?\s*([\d.]+)\s*m/i))
+  // Superficies TIPADAS y separadas: "Superficie total" en una casa es la
+  // CONSTRUIDA (todas las plantas), NO el terreno. Confundir "total" con terreno
+  // (bug anterior) hacía que square_meters mostrara la parcela ("23056 m²") en
+  // vez de la construida ("232 m²"). El terreno solo sale de "de/del terreno".
+  const sqm_total = toSqm(m(/superficie total\s*:?\s*([\d.,]+)\s*m/i))
+  const sqm_util = toSqm(m(/superficie [úu]til\s*:?\s*([\d.,]+)\s*m/i))
+  const sqm_construida_raw = toSqm(m(/superficie (?:construida|edificada)\s*:?\s*([\d.,]+)\s*m/i))
+  let sqm_terreno = toSqm(m(/superficie (?:del?\s+)?terreno\s*:?\s*([\d.,]+)\s*m/i))
+  let sqm_construida = sqm_construida_raw ?? sqm_total ?? sqm_util
 
   // Patrón de título muy común en casas: "4.022/258 Mt2" = terreno/construida
   const dual = (title ?? '').match(/([\d.]{3,7})\s*\/\s*([\d.]{2,6})\s*(?:m|mt)2?/i)
   if (dual) {
-    const a = toNum(dual[1])
-    const b = toNum(dual[2])
+    const a = toSqm(dual[1])
+    const b = toSqm(dual[2])
     if (a && b) {
       sqm_terreno = sqm_terreno ?? Math.max(a, b)
       sqm_construida = sqm_construida ?? Math.min(a, b)
@@ -201,7 +229,8 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
     const latitude = loc?.latitude != null ? parseFloat(loc.latitude) : null
     const longitude = loc?.longitude != null ? parseFloat(loc.longitude) : null
 
-    let bedrooms: number | null = null, bathrooms: number | null = null, square_meters: number | null = null
+    let bedrooms: number | null = null, bathrooms: number | null = null
+    let sqmHighlightedBuilt: number | null = null, sqmHighlightedTerreno: number | null = null
     const specAttrs = comps.highlighted_specs_res?.attributes ?? comps.fixed?.highlighted_specs_res?.attributes ?? []
     for (const a of specAttrs) {
       const iconId = a?.icon?.id
@@ -209,7 +238,13 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       if (!text) continue
       if (iconId === 'BED') bedrooms = toInt(text)
       else if (iconId === 'BATHROOM') bathrooms = toInt(text)
-      else if (iconId === 'SCALE_UP') square_meters = toInt(text)
+      else if (iconId === 'SCALE_UP') {
+        // La ficha puede traer DOS specs de m² (construida/total + terreno). El
+        // terreno de una parcela (miles de m²) NO es la superficie del inmueble:
+        // separarlo para que no pise el valor construido.
+        if (/terreno|lote|parcela|predio|sitio/i.test(text)) sqmHighlightedTerreno = toSqm(text)
+        else sqmHighlightedBuilt = toSqm(text)
+      }
     }
 
     const itemLocation = mapInfo?.item_location ?? null
@@ -263,11 +298,10 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
     const photosTotalCount = gallery?.total_count ?? (photos.length || null)
 
     const specs = extractTechSpecs(html, title, description)
-    // El "m²" destacado suele ser la superficie total; si la ficha técnica
-    // trae terreno/construida por separado, esos valores son la verdad.
-    if (specs.sqm_terreno == null && square_meters != null && specs.sqm_construida != null && square_meters > specs.sqm_construida) {
-      specs.sqm_terreno = square_meters
-    }
+    // Superficie del inmueble = superficie CONSTRUIDA, nunca el terreno.
+    // Preferencia: ficha técnica (tipada) → spec destacado construido.
+    const square_meters = specs.sqm_construida ?? sqmHighlightedBuilt ?? null
+    const sqm_terreno = specs.sqm_terreno ?? sqmHighlightedTerreno ?? null
 
     return {
       portal: 'portalinmobiliario',
@@ -286,6 +320,7 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       gallery_url: galleryUrl,
       photos_total_count: photosTotalCount,
       ...specs,
+      sqm_terreno,  // override: solo terreno real (nunca la superficie total/construida)
     }
   } catch {
     return null

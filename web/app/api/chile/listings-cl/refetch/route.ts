@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { fetchListingPage } from '@/lib/captar-pipeline'
-import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
+import { parsePortalListingDetail, photoIdKey } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import { getUfRateCl } from '@/lib/uf-rate-cl'
 
@@ -50,8 +50,13 @@ export async function POST(request: NextRequest) {
     let photos = detail.photos
     if (detail.gallery_url) {
       const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
-      const seen = new Set(photos)
-      for (const p of galleryPhotos) if (!seen.has(p)) { photos.push(p); seen.add(p) }
+      // Dedup por id de foto de ML, no por URL: el modal devuelve la misma
+      // imagen en otra plantilla/tamaño y por URL completa se contaba doble.
+      const seen = new Set(photos.map(photoIdKey))
+      for (const p of galleryPhotos) {
+        const k = photoIdKey(p)
+        if (!seen.has(k)) { photos.push(p); seen.add(k) }
+      }
     }
     photos = photos.slice(0, 40)
 
