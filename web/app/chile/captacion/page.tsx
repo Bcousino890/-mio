@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import PageShell from '@/components/PageShell'
 import {
@@ -46,6 +46,12 @@ export default function CaptacionChilePage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [resuming, setResuming] = useState<string | null>(null)
+  // Link directo desde la ficha de /chile/propiedades al guardar un pin manual
+  // (?id=<captacionId>, ver PATCH /api/chile/property-cl): antes esa captación
+  // recién creada quedaba enterrada en la lista sin forma de encontrarla — acá
+  // la resaltamos y la llevamos a la vista al cargar.
+  const highlightId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('id') : null
+  const highlightRef = useRef<HTMLTableRowElement | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -70,6 +76,15 @@ export default function CaptacionChilePage() {
   }, [filter])
 
   useEffect(() => { load() }, [load])
+
+  // Al llegar con ?id=, una vez cargadas las filas, hace scroll a la
+  // captación puntual y la resalta unos segundos para que no se pierda entre
+  // el resto de la lista.
+  useEffect(() => {
+    if (!highlightId || rows.length === 0) return
+    highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, rows])
 
   // Reanudar la siguiente etapa pendiente de una captación
   const resume = async (row: CaptacionRow) => {
@@ -178,8 +193,10 @@ export default function CaptacionChilePage() {
                 const phones = r.phones ?? []
                 const canResume = (r.sii_rol && !r.owner_name && r.tgr_status !== 'error')
                   || (r.owner_name && r.dealernet_status !== 'ok' && r.dealernet_status !== 'ambiguous')
+                const isHighlighted = r.id === highlightId
                 return (
-                  <tr key={r.id} className="border-b border-[var(--c-border)] hover:bg-[var(--c-hover)]">
+                  <tr key={r.id} ref={isHighlighted ? highlightRef : undefined}
+                    className={`border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] ${isHighlighted ? 'bg-emerald-900/20 ring-1 ring-inset ring-emerald-500/50' : ''}`}>
                     <td className="px-4 py-3 max-w-[220px]">
                       <p className="text-slate-200 text-xs font-medium truncate">{r.title ?? '—'}</p>
                       <p className="text-slate-600 text-[11px]">

@@ -6,6 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
+  Maximize2, Minimize2,
 } from 'lucide-react'
 
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -222,8 +223,12 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
   // Feedback del rol SII resuelto bajo el pin + su guardado en captación
-  // (best-effort, ver PATCH /api/chile/property-cl).
-  const [captacionMsg, setCaptacionMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // (best-effort, ver PATCH /api/chile/property-cl). `captacionId` habilita el
+  // link a /chile/captacion?id=<id> para abrir esa captación puntual.
+  const [captacionMsg, setCaptacionMsg] = useState<{ ok: boolean; text: string; captacionId?: string } | null>(null)
+  // Mapa en overlay de pantalla completa ("agrandar") — el recuadro chico de
+  // la ficha no alcanza para ubicar bien un pin en una zona densa.
+  const [mapExpanded, setMapExpanded] = useState(false)
 
   const addManualPin = useCallback((baseLat: number, baseLng: number) => {
     // Offset pequeño para que el pin nuevo no quede exactamente encima del
@@ -248,7 +253,7 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       const data = await res.json()
       setManualPinDirty(false)
       if (data.captacion?.sii_rol) {
-        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación` })
+        setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación`, captacionId: data.captacion.id })
       } else if (data.captacion_error) {
         setCaptacionMsg({ ok: false, text: data.captacion_error })
       }
@@ -440,7 +445,14 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                       )}
                     </div>
                     {captacionMsg && (
-                      <div className={`text-xs mb-2 ${captacionMsg.ok ? 'text-emerald-400' : 'text-slate-500'}`}>{captacionMsg.text}</div>
+                      captacionMsg.captacionId ? (
+                        <a href={`/chile/captacion?id=${captacionMsg.captacionId}`} target="_blank" rel="noopener noreferrer"
+                          className="text-xs mb-2 block text-emerald-400 hover:text-emerald-300 hover:underline">
+                          {captacionMsg.text} →
+                        </a>
+                      ) : (
+                        <div className={`text-xs mb-2 ${captacionMsg.ok ? 'text-emerald-400' : 'text-slate-500'}`}>{captacionMsg.text}</div>
+                      )
                     )}
                     {geo && (
                       // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
@@ -453,13 +465,39 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                       // Satélite (mismo tile de Google sin API key que /chile/catastro) +
                       // segundo pin manual arrastrable: "el pin que puse yo" — corrección
                       // del equipo, aparte del declarado por el anuncio, para comparar.
-                      <div className="h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
+                      // Botón "agrandar": el recuadro chico no alcanza para ubicar un pin
+                      // con precisión en zonas densas — abre el mismo mapa en overlay
+                      // de pantalla completa (mismo DetailMap, ResizeObserver interno
+                      // se encarga de que Leaflet redibuje al tamaño nuevo).
+                      <div className="relative h-56 rounded-xl overflow-hidden border border-slate-700 mb-2">
                         <DetailMap
                           latitude={geo.latitude!} longitude={geo.longitude!} exact
                           tileStyle="satellite"
                           secondPin={manualPin}
                           onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
                         />
+                        <button onClick={() => setMapExpanded(true)}
+                          title="Agrandar mapa"
+                          className="absolute top-2 right-2 z-[1000] p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80">
+                          <Maximize2 size={14} />
+                        </button>
+                      </div>
+                    )}
+                    {mapExpanded && geo && (
+                      <div className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-4 sm:p-8" onClick={() => setMapExpanded(false)}>
+                        <div className="relative w-full h-full max-w-6xl rounded-2xl overflow-hidden border border-slate-700" onClick={e => e.stopPropagation()}>
+                          <DetailMap
+                            latitude={geo.latitude!} longitude={geo.longitude!} exact
+                            tileStyle="satellite"
+                            secondPin={manualPin}
+                            onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
+                          />
+                          <button onClick={() => setMapExpanded(false)}
+                            title="Achicar mapa"
+                            className="absolute top-3 right-3 z-[1000] p-2 rounded-lg bg-black/60 text-white hover:bg-black/80">
+                            <Minimize2 size={16} />
+                          </button>
+                        </div>
                       </div>
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
