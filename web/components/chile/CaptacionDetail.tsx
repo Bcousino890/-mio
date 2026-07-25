@@ -7,7 +7,10 @@ import {
   RefreshCw, Phone, User, FileCheck2, Landmark, ShieldCheck, Copy,
   MessageCircle, ChevronRight, Clock, ChevronLeft, Sparkles, Waves,
   Building, Compass, Calendar, Car, Archive, Home, Check, Plus,
+  X, Search, FileText, Store, Images, Tag,
 } from 'lucide-react'
+
+import type { ParcelPick } from '@/components/map/ListingMatchMap'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
 
@@ -86,6 +89,44 @@ export function fmtCLP(n: number | null) {
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`
   if (n >= 1_000_000) return `$${Math.round(n / 1_000_000)}M`
   return `$${n.toLocaleString('es-CL')}`
+}
+
+/** Etiquetas legibles del payload del parser (`raw_extracted`). Las claves que
+ *  no estén acá se muestran tal cual: es preferible enseñar un campo nuevo con
+ *  su nombre técnico a esconderlo. */
+const FIELD_LABELS: Record<string, string> = {
+  title: 'Título', operation: 'Operación', property_type: 'Tipo',
+  price_raw: 'Precio', currency: 'Moneda', sqm: 'Superficie útil (m²)',
+  sqm_terreno: 'Terreno (m²)', sqm_construida: 'Construida (m²)',
+  bedrooms: 'Dormitorios', bathrooms: 'Baños', floors: 'Pisos',
+  year_built: 'Año de construcción', orientation: 'Orientación',
+  parking: 'Estacionamientos', storage: 'Bodegas', has_pool: 'Piscina',
+  is_condo: 'Condominio', address: 'Dirección', address_full: 'Dirección completa',
+  comuna_detected: 'Comuna detectada', comuna_label: 'Comuna', comuna_slug: 'Comuna (slug)',
+  sii_code: 'Código comuna SII', lat: 'Latitud', lng: 'Longitud',
+  advertiser_name: 'Anunciante', advertiser_type: 'Tipo de anunciante',
+  photos_total_count: 'Fotos en el portal', photos_from_html: 'Fotos del HTML',
+  photos_from_gallery: 'Fotos de la galería', gallery_error: 'Error de galería',
+  fetch_error: 'Error de descarga', raw_slug: 'Slug de la URL',
+}
+
+/** Claves que ya tienen su propia sección en la ficha (o que son ruido). */
+const HIDDEN_FIELDS = new Set(['photos', 'description'])
+
+/** Campos numéricos que NO son cantidades: agruparlos por miles o redondear
+ *  sus decimales los falsea (un año "1.985", una coordenada -33,405 en vez de
+ *  -33.4045). Se muestran crudos. */
+const VERBATIM_NUMBERS = /^(lat|lng|latitude|longitude|year_built|sii_code|.*_id)$/
+
+function formatFieldValue(key: string, v: unknown): string | null {
+  if (v == null || v === '') return null
+  if (typeof v === 'boolean') return v ? 'Sí' : 'No'
+  if (typeof v === 'number') {
+    return VERBATIM_NUMBERS.test(key) || !Number.isInteger(v) ? String(v) : v.toLocaleString('es-CL')
+  }
+  if (Array.isArray(v)) return v.length ? v.map((x) => String(x)).join(', ') : null
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
 }
 
 function probColor(p: number | null | undefined): string {
@@ -197,6 +238,14 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   const [visualError, setVisualError] = useState<string | null>(null)
   const [selectedPhotos, setSelectedPhotos] = useState<string[]>([])
   const [visualUsage, setVisualUsage] = useState<VisualUsageInfo | null>(null)
+  // Parcela del catastro clicada en el mapa (puede no estar entre los candidatos).
+  const [pickedParcel, setPickedParcel] = useState<ParcelPick | null>(null)
+  const [rolInput, setRolInput] = useState('')
+  const [applyingRol, setApplyingRol] = useState<string | null>(null)
+  const [rolError, setRolError] = useState<string | null>(null)
+  const [refetching, setRefetching] = useState(false)
+  const [refetchMsg, setRefetchMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [showDescription, setShowDescription] = useState(false)
 
   // Al cargar una captación nueva, restaurar la selección de fotos guardada en DB
   useEffect(() => {
@@ -204,6 +253,11 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
     setVisualUsage(null)
     setPhotoIdx(0)
     setSelectedRol(null)
+    setPickedParcel(null)
+    setRolInput('')
+    setRolError(null)
+    setRefetchMsg(null)
+    setShowDescription(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captacion?.id])
 
@@ -260,21 +314,63 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAdvance, captacion.id, captacion.sii_rol, captacion.needs_review, captacion.owner_name])
 
-  const handleSelectRol = async (rol: string) => {
+  /**
+   * Fija el rol de la captación y encadena TGR. Sirve para las tres vías:
+   * candidato de la lista, parcela clicada en el mapa (aunque no sea candidata)
+   * y rol tecleado a mano. El error del backend ya no se traga en silencio —
+   * antes, si el rol no pasaba la validación, no ocurría nada visible.
+   */
+  const applyRol = async (rol: string, siiComunaCode?: string | null) => {
     setSelectedRol(rol)
+    setApplyingRol(rol)
+    setRolError(null)
     try {
       const res = await fetch(`/api/chile/captar/${captacion.id}/select-rol`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rol }),
+        body: JSON.stringify({ rol, sii_comuna_code: siiComunaCode ?? undefined }),
       })
       const data = await res.json()
       if (data.success && data.captacion) {
+        setPickedParcel(null)
+        setRolInput('')
         onChange(data.captacion)
         await runTgr(data.captacion.id)
+      } else {
+        setRolError(data.error ?? 'No se pudo fijar el rol')
       }
     } catch {
-      // el candidato queda seleccionado visualmente; reintentable
+      setRolError('Error de red al fijar el rol')
+    } finally {
+      setApplyingRol(null)
+    }
+  }
+
+  const handleSelectRol = (rol: string) => applyRol(rol)
+
+  /** Vuelve a extraer el anuncio para completar la ficha (fotos de la galería,
+   *  descripción, ficha técnica) cuando la primera pasada quedó corta. */
+  const refetchListing = async () => {
+    setRefetching(true)
+    setRefetchMsg(null)
+    try {
+      const res = await fetch(`/api/chile/captar/${captacion.id}/refetch`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success && data.captacion) {
+        onChange(data.captacion)
+        const added = (data.photos_after ?? 0) - (data.photos_before ?? 0)
+        setRefetchMsg(
+          data.fetch_error
+            ? { ok: false, text: `El portal no dejó recargar la ficha: ${data.fetch_error}` }
+            : { ok: true, text: added > 0 ? `Ficha recargada · +${added} fotos` : 'Ficha recargada · sin fotos nuevas' },
+        )
+      } else {
+        setRefetchMsg({ ok: false, text: data.error ?? 'No se pudo recargar la ficha' })
+      }
+    } catch {
+      setRefetchMsg({ ok: false, text: 'Error de red al recargar la ficha' })
+    } finally {
+      setRefetching(false)
     }
   }
 
@@ -332,6 +428,19 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   const ext = (captacion.raw_extracted ?? {}) as Record<string, any>
   const candidates = captacion.candidates ?? []
   const matchPct = captacion.match_score != null ? Math.round(Number(captacion.match_score) * 100) : null
+
+  // Todo el payload del parser, listo para pintar (sin nulos ni duplicados de
+  // secciones propias).
+  const dataRows = Object.entries(ext)
+    .filter(([k]) => !HIDDEN_FIELDS.has(k))
+    .map(([k, v]) => [k, formatFieldValue(k, v)] as const)
+    .filter((entry): entry is readonly [string, string] => entry[1] != null)
+
+  // Fotos: cuántas tenemos vs. cuántas declara el portal. La diferencia es la
+  // señal de que la galería quedó a medias y hay que recargar.
+  const photoCount = captacion.photos?.length ?? 0
+  const photosTotal = Number.isFinite(Number(ext.photos_total_count)) ? Number(ext.photos_total_count) : null
+  const photosIncomplete = photosTotal != null && photosTotal > photoCount
 
   const s2: StepState = captacion.sii_rol ? 'done'
     : captacion.needs_review ? 'review'
@@ -512,6 +621,8 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
               candidates={candidates}
               selectedRol={selectedRol ?? captacion.sii_rol}
               onSelectCandidate={(rol: string) => setSelectedRol(rol)}
+              comunaCode={captacion.sii_comuna_code}
+              onSelectParcel={(p) => { setPickedParcel(p); setRolError(null) }}
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-slate-700 text-sm bg-gradient-to-br from-slate-900 to-slate-800">
@@ -539,6 +650,55 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
             </div>
           )}
         </div>
+
+        {/* Parcela elegida en el mapa — la salida cuando la recomendación
+            automática está equivocada: el rol no tiene por qué estar entre los
+            candidatos scoreados. */}
+        {pickedParcel && (
+          <div className="px-4 pt-3">
+            <div className={`flex items-center gap-3 flex-wrap p-3 rounded-xl border ${
+              pickedParcel.rol === captacion.sii_rol
+                ? 'border-emerald-800/60 bg-emerald-950/20'
+                : 'border-cyan-800/60 bg-cyan-950/20'
+            }`}>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-slate-200 flex items-center gap-1.5 flex-wrap">
+                  <Layers size={12} className="text-cyan-400 flex-shrink-0" />
+                  <span className="font-mono text-cyan-300">{pickedParcel.rol}</span>
+                  {pickedParcel.comuna_name && <span className="text-slate-500">· {pickedParcel.comuna_name}</span>}
+                  {pickedParcel.is_candidate
+                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/70 text-slate-400">candidato #{candidates.findIndex((c) => c.rol === pickedParcel.rol) + 1}</span>
+                    : <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300">fuera de los candidatos</span>}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {pickedParcel.superficie_terreno_m2 != null && `Terreno ${Number(pickedParcel.superficie_terreno_m2).toLocaleString('es-CL')} m²`}
+                  {pickedParcel.avaluo_fiscal_total != null && ` · Avalúo ${fmtCLP(Number(pickedParcel.avaluo_fiscal_total))}`}
+                </p>
+              </div>
+              {pickedParcel.rol === captacion.sii_rol ? (
+                <span className="text-[11px] text-emerald-300 flex items-center gap-1.5">
+                  <CheckCircle2 size={12} /> Ya es el rol de esta captación
+                </span>
+              ) : (
+                <button
+                  onClick={() => applyRol(pickedParcel.rol, pickedParcel.sii_comuna_code)}
+                  disabled={applyingRol != null}
+                  className="flex items-center gap-1.5 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
+                >
+                  {applyingRol === pickedParcel.rol ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                  Usar este rol
+                </button>
+              )}
+              <button
+                onClick={() => setPickedParcel(null)}
+                className="text-slate-500 hover:text-slate-300 flex-shrink-0"
+                title="Descartar"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="px-4 py-4 space-y-3">
           {captacion.comuna_label && (
@@ -581,7 +741,99 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
             {ext.has_pool === true && <TechChip icon={Waves} label="Piscina" highlight />}
             {ext.is_condo === true && <TechChip icon={Building} label="Condominio" />}
           </div>
+
+          {/* Quién publica — antes solo vivía en raw_extracted */}
+          {(ext.advertiser_name || ext.advertiser_type) && (
+            <p className="text-xs text-slate-400 flex items-center gap-2 pt-1">
+              <Store size={12} className="text-slate-600 flex-shrink-0" />
+              <span className="truncate">{String(ext.advertiser_name ?? 'Anunciante')}</span>
+              {ext.advertiser_type && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                  ext.advertiser_type === 'particular' ? 'bg-emerald-900/40 text-emerald-300' : 'bg-slate-800/70 text-slate-400'
+                }`}>
+                  {ext.advertiser_type === 'particular' ? 'Particular' : ext.advertiser_type === 'professional' ? 'Corredora' : String(ext.advertiser_type)}
+                </span>
+              )}
+            </p>
+          )}
+
+          {/* Descripción completa del anuncio */}
+          {typeof ext.description === 'string' && ext.description.trim().length > 0 && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowDescription((v) => !v)}
+                className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1.5"
+              >
+                <FileText size={11} />
+                {showDescription ? 'Ocultar descripción' : 'Ver descripción del anuncio'}
+                <ChevronRight size={11} className={`transition-transform ${showDescription ? 'rotate-90' : ''}`} />
+              </button>
+              {showDescription && (
+                <p className="mt-2 text-xs text-slate-400 leading-relaxed whitespace-pre-line max-h-64 overflow-y-auto pr-1">
+                  {String(ext.description)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Todos los datos extraídos, sin recortar: la ficha es la fuente de
+              verdad del anuncio y hasta ahora escondía la mitad del payload. */}
+          {dataRows.length > 0 && (
+            <details className="pt-1 group">
+              <summary className="text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer list-none flex items-center gap-1.5">
+                <Tag size={11} />
+                Ver todos los datos extraídos ({dataRows.length})
+                <ChevronRight size={11} className="transition-transform group-open:rotate-90" />
+              </summary>
+              <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                {dataRows.map(([k, v]) => (
+                  <div key={k} className="flex items-start justify-between gap-3 py-1 border-b border-[var(--c-border)]">
+                    <dt className="text-[10px] text-slate-600 flex-shrink-0">{FIELD_LABELS[k] ?? k}</dt>
+                    <dd className="text-[11px] text-slate-300 text-right break-words min-w-0">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </details>
+          )}
         </div>
+      </div>
+
+      {/* ── Estado de la extracción: fotos que faltan y recarga de la ficha ──
+          La primera pasada puede quedarse con las 5 fotos del HTML estático si
+          el portal bloquea el modal de galería; sin este aviso la ficha decía
+          "Fotos del anuncio (5)" de una publicación con 20 y no había forma de
+          reintentarlo. */}
+      <div className={`flex items-center gap-3 flex-wrap p-3 rounded-xl border ${
+        photosIncomplete || ext.gallery_error || ext.fetch_error
+          ? 'border-amber-900/50 bg-amber-950/10'
+          : 'border-[var(--c-border-card)] bg-[var(--c-card)]'
+      }`}>
+        <Images size={13} className={photosIncomplete ? 'text-amber-400' : 'text-slate-500'} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-slate-300">
+            {photosTotal != null
+              ? `${photoCount} de ${photosTotal} fotos publicadas en el portal`
+              : `${photoCount} foto${photoCount !== 1 ? 's' : ''} extraída${photoCount !== 1 ? 's' : ''}`}
+          </p>
+          {(photosIncomplete || ext.gallery_error) && (
+            <p className="text-[11px] text-amber-400/90 mt-0.5">
+              {String(ext.gallery_error ?? 'Faltan fotos de la galería del anuncio')} — recarga la ficha para completarla.
+            </p>
+          )}
+          {refetchMsg && (
+            <p className={`text-[11px] mt-0.5 ${refetchMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{refetchMsg.text}</p>
+          )}
+        </div>
+        <button
+          onClick={refetchListing}
+          disabled={refetching}
+          title="Vuelve a leer el anuncio en el portal: fotos, descripción y ficha técnica. No toca el rol ni las etapas TGR/DealerNet."
+          className="flex items-center gap-1.5 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 px-2.5 py-1.5 rounded-lg transition-colors flex-shrink-0"
+        >
+          <RefreshCw size={11} className={refetching ? 'animate-spin' : ''} />
+          {refetching ? 'Recargando…' : 'Recargar ficha del anuncio'}
+        </button>
       </div>
 
       {/* ── Galería de fotos del anuncio + selector para IA ── */}
@@ -592,7 +844,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         <div>
           <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
             <p className="text-[11px] text-slate-600 uppercase tracking-widest font-semibold">
-              Fotos del anuncio ({captacion.photos!.length}) — marca las que mejor identifican la propiedad desde el aire
+              Fotos del anuncio ({captacion.photos!.length}{photosTotal != null ? ` de ${photosTotal}` : ''}) — marca las que mejor identifican la propiedad desde el aire
             </p>
             <div className="flex items-center gap-2">
               <span className={`text-[11px] px-2 py-1 rounded-lg border ${
@@ -729,6 +981,37 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         {visualError && (
           <p className="text-[11px] text-red-400 mb-2 flex items-center gap-1.5"><AlertCircle size={11} /> {visualError}</p>
         )}
+        {rolError && (
+          <p className="text-[11px] text-red-400 mb-2 flex items-center gap-1.5"><AlertCircle size={11} /> {rolError}</p>
+        )}
+
+        {/* Rol fuera de la lista: cuando la recomendación automática está mal
+            (el rol correcto ni siquiera aparece entre los candidatos), se fija
+            a mano — señalando la parcela en el mapa o tecleando el rol. */}
+        {captacion.sii_comuna_code && (
+          <form
+            onSubmit={(e) => { e.preventDefault(); const r = rolInput.trim(); if (r) applyRol(r) }}
+            className="flex items-center gap-2 mb-3 flex-wrap"
+          >
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-600" />
+              <input
+                value={rolInput}
+                onChange={(e) => setRolInput(e.target.value)}
+                placeholder="¿Ninguno es el correcto? Escribe el rol (ej. 2922-31) o haz clic en su parcela en el mapa"
+                className="w-full text-xs bg-[var(--c-card)] border border-[var(--c-border-card)] focus:border-cyan-700 outline-none rounded-lg pl-7 pr-2.5 py-2 text-slate-200 placeholder:text-slate-600"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!rolInput.trim() || applyingRol != null}
+              className="flex items-center gap-1.5 text-[11px] font-medium bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white px-2.5 py-2 rounded-lg transition-colors"
+            >
+              {applyingRol === rolInput.trim() ? <RefreshCw size={11} className="animate-spin" /> : <Check size={11} />}
+              Fijar este rol
+            </button>
+          </form>
+        )}
         {visualUsage && !visualError && (
           <p className="text-[11px] text-slate-500 mb-2 flex items-center gap-1.5">
             <Sparkles size={11} className="text-violet-400" />
@@ -830,8 +1113,8 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
             <p className="text-[11px] text-slate-600 flex items-center gap-1.5 px-1">
               <User size={11} />
               {captacion.needs_review
-                ? 'Haz clic en el candidato correcto para confirmarlo manualmente y continuar con TGR + DealerNet.'
-                : 'Rol confirmado automáticamente. Si no es el correcto, haz clic en el candidato correcto para corregirlo.'}
+                ? 'Haz clic en el candidato correcto para confirmarlo manualmente y continuar con TGR + DealerNet. Si el correcto no está en la lista, señala su parcela en el mapa o escribe su rol arriba.'
+                : 'Rol confirmado automáticamente. Si no es el correcto, elige otro candidato, señala la parcela en el mapa o escribe su rol arriba.'}
             </p>
           </div>
         )}
