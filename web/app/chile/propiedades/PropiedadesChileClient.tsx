@@ -276,29 +276,38 @@ export default function PropiedadesChileClient() {
   // "Unir", marcar varias y unirlas. El dedup automático deja pasar casos que a
   // ojo son obvios; esto los cierra sin esperar al score.
   const [mergeMode, setMergeMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Se guarda la FICHA completa, no solo el id: la selección sobrevive al
+  // cambio de página y al refresco del listado. Antes se guardaban ids y se
+  // resolvían contra `items` (SOLO la página visible), así que al marcar fichas
+  // en páginas distintas el botón "Unir" no hacía nada — las de las otras
+  // páginas se perdían y no llegaba al mínimo de 2.
+  const [selectedById, setSelectedById] = useState<Map<string, Property>>(() => new Map())
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [mergeDialog, setMergeDialog] = useState<{ properties: Property[]; defaultSurvivorId?: string } | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null)
   // Fuerza el refetch del listado tras unir/separar (el conteo y las fichas
   // cambian, y la propiedad absorbida ya no existe).
   const [reloadKey, setReloadKey] = useState(0)
 
-  const showToast = useCallback((message: string) => {
-    setToast(message)
+  const showToast = useCallback((text: string, ok = true) => {
+    setToast({ text, ok })
     setTimeout(() => setToast(null), 5000)
   }, [])
 
+  const selectedIds = useMemo(() => [...selectedById.keys()], [selectedById])
+
   const toggleSelect = useCallback((p: Property) => {
-    setSelectedIds(prev => (prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]))
+    setSelectedById(prev => {
+      const next = new Map(prev)
+      if (next.has(p.id)) next.delete(p.id)
+      else next.set(p.id, p)
+      return next
+    })
   }, [])
 
-  const exitMergeMode = useCallback(() => { setMergeMode(false); setSelectedIds([]) }, [])
-
-  const pickProperties = useCallback((ids: string[]) => (
-    ids.map(id => items.find(i => i.id === id)).filter((p): p is Property => !!p)
-  ), [items])
+  const clearSelection = useCallback(() => setSelectedById(new Map()), [])
+  const exitMergeMode = useCallback(() => { setMergeMode(false); clearSelection() }, [clearSelection])
 
   // Soltar la ficha arrastrada sobre otra = unirlas. Si venía de una selección
   // múltiple, se arrastra el grupo entero sobre el destino (que además queda
@@ -308,24 +317,33 @@ export default function PropiedadesChileClient() {
     setDropTargetId(null)
     setDragId(null)
     if (!sourceId || sourceId === targetId) return
-    const ids = selectedIds.includes(sourceId)
-      ? [...new Set([...selectedIds, targetId])]
-      : [sourceId, targetId]
-    const properties = pickProperties(ids)
+    const target = items.find(i => i.id === targetId)
+    if (!target) return
+    // Arrastrar una ficha marcada arrastra TODO el grupo seleccionado sobre el
+    // destino; si no estaba marcada, es la unión simple de esas dos.
+    const group = selectedById.has(sourceId)
+      ? [...selectedById.values()]
+      : [selectedById.get(sourceId) ?? items.find(i => i.id === sourceId)].filter((p): p is Property => !!p)
+    const properties = [...new Map([...group, target].map(p => [p.id, p])).values()]
     if (properties.length < 2) return
     setMergeDialog({ properties, defaultSurvivorId: targetId })
-  }, [dragId, selectedIds, pickProperties])
+  }, [dragId, selectedById, items])
 
   const openMergeFromSelection = useCallback(() => {
-    const properties = pickProperties(selectedIds)
-    if (properties.length < 2) return
+    const properties = [...selectedById.values()]
+    // Nunca fallar en silencio: si el botón se pudo pulsar y aun así no hay
+    // material para unir, decirlo.
+    if (properties.length < 2) {
+      showToast('Marca al menos 2 fichas para unirlas', false)
+      return
+    }
     setMergeDialog({ properties })
-  }, [pickProperties, selectedIds])
+  }, [selectedById, showToast])
 
   const handleMerged = useCallback(async (survivorId: string, message: string) => {
     const mergedIds = mergeDialog?.properties.map(p => p.id) ?? []
     setMergeDialog(null)
-    setSelectedIds([])
+    clearSelection()
     setMergeMode(false)
     setReloadKey(k => k + 1)
     showToast(message)
@@ -335,7 +353,7 @@ export default function PropiedadesChileClient() {
       const refreshed = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(survivorId)}`).then(r => r.json()).catch(() => null)
       setSelected(refreshed?.success ? refreshed.data : null)
     }
-  }, [mergeDialog, selected, showToast])
+  }, [mergeDialog, selected, showToast, clearSelection])
 
   const handleSplit = useCallback((message: string) => {
     setReloadKey(k => k + 1)
@@ -577,7 +595,7 @@ export default function PropiedadesChileClient() {
                 : `${selectedIds.length} ficha${selectedIds.length === 1 ? '' : 's'} seleccionada${selectedIds.length === 1 ? '' : 's'}`}
             </span>
             {selectedIds.length > 0 && (
-              <button onClick={() => setSelectedIds([])} className="text-xs text-slate-400 hover:text-slate-200">Limpiar</button>
+              <button onClick={clearSelection} className="text-xs text-slate-400 hover:text-slate-200">Limpiar</button>
             )}
             <button onClick={openMergeFromSelection} disabled={selectedIds.length < 2}
               className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-1.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600">
@@ -590,8 +608,8 @@ export default function PropiedadesChileClient() {
 
       {toast && (
         <div className="fixed bottom-20 inset-x-0 z-[1350] flex justify-center px-4 pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-2 text-sm bg-emerald-600 text-white px-4 py-2 rounded-full shadow-xl">
-            <BadgeCheck size={15} /> {toast}
+          <div className={`pointer-events-auto flex items-center gap-2 text-sm text-white px-4 py-2 rounded-full shadow-xl ${toast.ok ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+            {toast.ok ? <BadgeCheck size={15} /> : <AlertTriangle size={15} />} {toast.text}
           </div>
         </div>
       )}

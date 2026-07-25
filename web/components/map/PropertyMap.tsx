@@ -3,7 +3,7 @@
 import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Listing } from '@/lib/types'
 import type { GeoShapeFilter } from '@/components/filters/FilterPanel'
 
@@ -118,6 +118,10 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const drawnItemsRef = useRef<any>(null)
   const initializingRef = useRef(false)
+  // El mapa se crea una sola vez (async: Leaflet se carga bajo demanda). Los
+  // marcadores, en cambio, se rehacen cada vez que cambian los anuncios — por
+  // eso hace falta saber cuándo el mapa ya existe.
+  const [mapReady, setMapReady] = useState(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -130,6 +134,10 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
       if (cancelled || !containerRef.current) return
 
       const map = L.map(containerRef.current, {
+        // Centro provisional (Madrid) solo hasta que haya anuncios: en cuanto
+        // llegan, el efecto de marcadores encuadra el mapa sobre ELLOS. Sin
+        // eso, /chile/anuncios abría el mapa en Madrid con los pines de
+        // Santiago fuera de pantalla.
         center: [40.4300, -3.6900],
         zoom: 13,
         zoomControl: false,
@@ -163,47 +171,10 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         },
       })
 
-      listings.forEach((l) => {
-        const icon = L.divIcon({
-          className: '',
-          html: markerHtml(l, false),
-          iconAnchor: [0, 0],
-        })
-
-        const isClp = l.currency === 'CLP'
-        const priceFull = isClp
-          ? l.price.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
-          : `${l.price.toLocaleString('es-ES')} €`
-        const priceSqmFull = isClp
-          ? `${l.price_sqm.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })}/m²`
-          : `${l.price_sqm.toLocaleString('es-ES')} €/m²`
-        const ufLine = isClp && l.price_uf != null
-          ? `<div style="color:#64748b;font-size:11px;margin-top:1px">≈ ${l.price_uf.toLocaleString('es-CL')} UF</div>` : ''
-        const marker = L.marker([l.latitude, l.longitude], { icon })
-          .bindPopup(`
-            <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
-              <div style="font-weight:700;font-size:14px;color:#0f172a">${priceFull}</div>
-              ${ufLine}
-              <div style="color:#64748b;font-size:11px;margin-top:1px">${priceSqmFull} · ${l.square_meters}m² · ${l.bedrooms > 0 ? l.bedrooms + 'h · ' : ''}${l.bathrooms}b</div>
-              <div style="margin-top:5px;font-size:12px;color:#1e293b;font-weight:500">${l.title}</div>
-              <div style="color:#94a3b8;font-size:11px;margin-top:1px">${l.zone_name}</div>
-              ${l.listing_count > 1 ? `<div style="color:#3b82f6;font-size:11px;margin-top:3px;font-weight:600">${l.listing_count} fuentes</div>` : ''}
-            </div>
-          `, { maxWidth: 240, offset: [0, 4] })
-
-        marker.on('click', () => {
-          onMarkerClick?.(l.id)
-        })
-        marker.on('mouseover', () => onMarkerHover?.(l.id))
-        marker.on('mouseout', () => onMarkerHover?.(null))
-
-        markersRef.current[l.id] = marker
-        clusterGroup.addLayer(marker)
-      })
-
       map.addLayer(clusterGroup)
       clusterGroupRef.current = clusterGroup
       mapRef.current = map
+      setMapReady(true)
 
       // Draw feature group to hold drawn shapes
       const drawnItems = new (L as any).FeatureGroup()
@@ -293,6 +264,76 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Marcadores: se rehacen cada vez que cambia la lista (búsqueda, filtros,
+  // página). Antes se creaban DENTRO del efecto de inicialización, que corre una
+  // sola vez al montar: si los anuncios llegaban después —el caso normal, la
+  // lista se pide por fetch— el mapa se quedaba para siempre sin un solo pin.
+  // Al terminar se encuadra el mapa sobre los pines, así queda sobre la ciudad
+  // de los resultados (Santiago en Chile) en vez del centro fijo de arranque.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !clusterGroupRef.current) return
+    let cancelled = false
+
+    loadLeaflet().then((L) => {
+      if (cancelled || !mapRef.current || !clusterGroupRef.current) return
+      const map = mapRef.current
+      const clusterGroup = clusterGroupRef.current
+
+      clusterGroup.clearLayers()
+      markersRef.current = {}
+
+      const points: [number, number][] = []
+
+        listings.forEach((l) => {
+          const icon = L.divIcon({
+            className: '',
+            html: markerHtml(l, false),
+            iconAnchor: [0, 0],
+          })
+
+          const isClp = l.currency === 'CLP'
+          const priceFull = isClp
+            ? l.price.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
+            : `${l.price.toLocaleString('es-ES')} €`
+          const priceSqmFull = isClp
+            ? `${l.price_sqm.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })}/m²`
+            : `${l.price_sqm.toLocaleString('es-ES')} €/m²`
+          const ufLine = isClp && l.price_uf != null
+            ? `<div style="color:#64748b;font-size:11px;margin-top:1px">≈ ${l.price_uf.toLocaleString('es-CL')} UF</div>` : ''
+          const marker = L.marker([l.latitude, l.longitude], { icon })
+            .bindPopup(`
+              <div style="min-width:200px;font-family:system-ui;font-size:13px;line-height:1.5;padding:2px">
+                <div style="font-weight:700;font-size:14px;color:#0f172a">${priceFull}</div>
+                ${ufLine}
+                <div style="color:#64748b;font-size:11px;margin-top:1px">${priceSqmFull} · ${l.square_meters}m² · ${l.bedrooms > 0 ? l.bedrooms + 'h · ' : ''}${l.bathrooms}b</div>
+                <div style="margin-top:5px;font-size:12px;color:#1e293b;font-weight:500">${l.title}</div>
+                <div style="color:#94a3b8;font-size:11px;margin-top:1px">${l.zone_name}</div>
+                ${l.listing_count > 1 ? `<div style="color:#3b82f6;font-size:11px;margin-top:3px;font-weight:600">${l.listing_count} fuentes</div>` : ''}
+              </div>
+            `, { maxWidth: 240, offset: [0, 4] })
+
+          marker.on('click', () => {
+            onMarkerClick?.(l.id)
+          })
+          marker.on('mouseover', () => onMarkerHover?.(l.id))
+          marker.on('mouseout', () => onMarkerHover?.(null))
+
+          markersRef.current[l.id] = marker
+          clusterGroup.addLayer(marker)
+          points.push([l.latitude, l.longitude])
+        })
+
+      if (points.length > 0) {
+        // maxZoom: con un solo resultado, fitBounds se iría al zoom máximo y se
+        // perdería el contexto del barrio.
+        map.fitBounds(L.latLngBounds(points), { padding: [48, 48], maxZoom: 15 })
+      }
+    })
+
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listings, mapReady])
 
   // Update active marker style
   useEffect(() => {
