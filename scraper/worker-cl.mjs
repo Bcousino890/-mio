@@ -151,16 +151,22 @@ export async function handleMediaSyncJob(dbClient, jobData, deps = {}) {
 export async function handleDedupClusterJob(dbClient, deps = {}) {
   const {
     nivel1 = runNivel1DedupCl,
-    nivel2 = runNivel2ClusteringCl,
+    // Clustering probabilístico DESACTIVADO por decisión del usuario: la única
+    // regla de deduplicación válida es corredora (advertiser_id) + código interno
+    // (seller_reference). Corredoras distintas nunca comparten código interno, así
+    // que el matching difuso (geo/m²/pHash) solo podía producir fusiones falsas —
+    // fichas de propiedades distintas mostradas como una sola. Se pasa explícito
+    // (fuzzyClustering: runNivel2ClusteringCl) para reactivarlo si algún día se
+    // decide lo contrario; el código de clustering-cl.mjs queda intacto.
+    nivel2 = null,
     link15 = runInternalCodeLinkCl,
     broker = runCorredoraConsolidationCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
-    nivel2: await nivel2(dbClient),
+    nivel2: nivel2 ? await nivel2(dbClient) : { skipped: 'dedup solo por corredora + código interno' },
     // Nivel 1.5 (H21): engancha las fichas de webs propias (agency_web) al
     // property_cl del anuncio de PI de la misma corredora por código interno.
-    // Va tras Nivel 1/2 (los portales ya tienen property_cl) y antes de broker.
     link15: await link15(dbClient),
     broker: await broker(dbClient),
   }
