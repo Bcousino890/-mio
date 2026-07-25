@@ -194,7 +194,10 @@ export async function GET(request: NextRequest) {
         -- scrape.
         EXTRACT(DAY FROM (now() - COALESCE(l.portal_first_seen_at, l.first_seen_at)))::int as days_on_market,
         l.description,
-        l.property_type
+        l.property_type,
+        -- Ficha canónica del inmueble: la lista de anuncios abre la MISMA ficha
+        -- que /chile/propiedades (ver components/chile/PropertyClModal).
+        l.property_cl_id
       FROM listings_cl l
       LEFT JOIN chile_comunas c ON c.id = l.comuna_id
       ${mediansJoin}
