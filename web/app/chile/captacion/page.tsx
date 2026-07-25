@@ -5,8 +5,9 @@ import Link from 'next/link'
 import PageShell from '@/components/PageShell'
 import {
   Users, Phone, RefreshCw, AlertCircle, CheckCircle2, ExternalLink,
-  Link2, ShieldCheck, Clock, MessageCircle,
+  Link2, ShieldCheck, Clock, MessageCircle, X,
 } from 'lucide-react'
+import CaptacionDetail, { type Captacion } from '@/components/chile/CaptacionDetail'
 
 interface CaptacionRow {
   id: string
@@ -56,12 +57,10 @@ export default function CaptacionChilePage() {
   // página/filtro actual la pedimos puntualmente por id.
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const highlightRef = useRef<HTMLTableRowElement | null>(null)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const id = new URLSearchParams(window.location.search).get('id')
-    if (id) setHighlightId(id)
-  }, [])
+  // Ficha abierta. Es el detalle COMPLETO (candidatos, fotos, raw_extracted),
+  // que la lista no trae — se pide por id al abrir.
+  const [selected, setSelected] = useState<Captacion | null>(null)
+  const [openingId, setOpeningId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -87,6 +86,32 @@ export default function CaptacionChilePage() {
 
   useEffect(() => { load() }, [load])
 
+  // Abre la ficha completa de una captación (pide el detalle por id) — es donde
+  // vive el trabajo manual real: elegir el rol entre candidatos, reintentar
+  // TGR/DealerNet, lanzar la verificación visual con IA.
+  const openCaptacion = useCallback(async (id: string) => {
+    setOpeningId(id)
+    try {
+      const res = await fetch(`/api/chile/captar/${id}`)
+      const data = await res.json()
+      if (data.success && data.captacion) setSelected(data.captacion)
+      else setError(data.error ?? 'No se pudo abrir la captación')
+    } catch {
+      setError('Error de red al abrir la captación')
+    } finally {
+      setOpeningId(null)
+    }
+  }, [])
+
+  // Al llegar por deep-link: resaltar la fila en la lista Y abrir su ficha.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const id = new URLSearchParams(window.location.search).get('id')
+    if (!id) return
+    setHighlightId(id)
+    openCaptacion(id)
+  }, [openCaptacion])
+
   // Si la captación enlazada por ?id no entra en la página/filtro actual, se
   // pide puntualmente y se antepone, para que el deep-link siempre la muestre.
   useEffect(() => {
@@ -109,7 +134,28 @@ export default function CaptacionChilePage() {
     }
   }, [highlightId, rows])
 
-  // Reanudar la siguiente etapa pendiente de una captación
+  // Cerrar la ficha con Escape y bloquear el scroll del fondo mientras está abierta.
+  useEffect(() => {
+    if (!selected) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelected(null) }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [selected])
+
+  // Cuando el pipeline avanza dentro de la ficha, refleja el cambio en la fila
+  // de la tabla sin recargar toda la lista.
+  const handleDetailChange = useCallback((c: Captacion) => {
+    setSelected(c)
+    setRows((prev) => prev.map((r) => (r.id === c.id ? { ...r, ...c } as CaptacionRow : r)))
+  }, [])
+
+  // Reanudar la siguiente etapa pendiente de una captación (acción rápida desde
+  // la lista, sin abrir la ficha).
   const resume = async (row: CaptacionRow) => {
     setResuming(row.id)
     setResumeMsg((m) => { const n = { ...m }; delete n[row.id]; return n })
@@ -249,12 +295,16 @@ export default function CaptacionChilePage() {
                   <tr
                     key={r.id}
                     ref={isHighlighted ? highlightRef : undefined}
-                    className={`border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] ${
+                    onClick={() => openCaptacion(r.id)}
+                    className={`border-b border-[var(--c-border)] hover:bg-[var(--c-hover)] cursor-pointer ${
                       isHighlighted ? 'bg-blue-950/30 ring-1 ring-inset ring-blue-500/40' : ''
                     }`}
                   >
                     <td className="px-4 py-3 max-w-[220px]">
-                      <p className="text-slate-200 text-xs font-medium truncate">{r.title ?? '—'}</p>
+                      <p className="text-slate-200 text-xs font-medium truncate flex items-center gap-1.5">
+                        {openingId === r.id && <RefreshCw size={10} className="animate-spin text-blue-400 flex-shrink-0" />}
+                        {r.title ?? '—'}
+                      </p>
                       <p className="text-slate-600 text-[11px]">
                         {r.comuna_label ?? ''}{r.price_raw ? ` · ${Number(r.price_raw).toLocaleString('es-CL')} ${r.currency ?? ''}` : ''}
                       </p>
@@ -313,7 +363,7 @@ export default function CaptacionChilePage() {
                       <div className="flex items-center gap-1.5 justify-end">
                         {canResume && (
                           <button
-                            onClick={() => resume(r)}
+                            onClick={(e) => { e.stopPropagation(); resume(r) }}
                             disabled={resuming === r.id}
                             title="Reanudar siguiente etapa"
                             className="text-[10px] font-medium bg-blue-600/80 hover:bg-blue-500 disabled:opacity-40 text-white px-2 py-1 rounded transition-colors flex items-center gap-1"
@@ -322,7 +372,12 @@ export default function CaptacionChilePage() {
                             Continuar
                           </button>
                         )}
-                        <a href={r.source_url} target="_blank" rel="noopener noreferrer" className="text-slate-600 hover:text-slate-300">
+                        <a
+                          href={r.source_url}
+                          target="_blank" rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-slate-600 hover:text-slate-300"
+                        >
                           <ExternalLink size={12} />
                         </a>
                       </div>
@@ -343,9 +398,44 @@ export default function CaptacionChilePage() {
       <div className="mt-4 flex items-center gap-2 text-xs text-slate-600">
         <CheckCircle2 size={12} className="text-slate-700" />
         <span>
+          Haz clic en cualquier fila para abrir la ficha: elegir el rol correcto entre los candidatos, reintentar TGR/DealerNet o lanzar la verificación visual con IA.
           El rol solo se confirma automáticamente con probabilidad ≥92% y se marca <ShieldCheck size={10} className="inline text-emerald-500" /> cuando la dirección del certificado TGR coincide con la del SII.
         </span>
       </div>
+
+      {/* ── Ficha completa de la captación ── */}
+      {selected && (
+        <div
+          className="fixed inset-0 z-[100] flex items-start justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setSelected(null)}
+        >
+          <div
+            className="bg-[var(--c-bg)] border border-[var(--c-border-card)] rounded-2xl w-full max-w-4xl my-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 p-5 pb-0">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-slate-100 truncate">
+                  {selected.title ?? 'Captación'}
+                </h2>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  {selected.comuna_label ?? ''}
+                  {selected.needs_review && selected.review_reason ? ` · ${selected.review_reason}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-100 flex-shrink-0"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5">
+              <CaptacionDetail captacion={selected} onChange={handleDetailChange} />
+            </div>
+          </div>
+        </div>
+      )}
     </PageShell>
   )
 }
