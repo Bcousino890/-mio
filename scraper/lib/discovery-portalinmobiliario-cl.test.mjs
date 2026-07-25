@@ -30,19 +30,31 @@ test('operationSlug / comunaSlug / regionSlug', () => {
   assert.equal(regionSlug('Región Metropolitana de Santiago'), 'metropolitana')
 })
 
-test('buildListUrl: página 1 sin sufijo, resto con _Desde_N', () => {
+test('buildListUrl: ordena por más recientes y pagina con _Desde_N', () => {
   const base = { comunaSlug: 'las-condes', regionSlug: 'metropolitana', operation: 'sale', propertyType: 'casa' }
+  const PI = 'https://www.portalinmobiliario.com'
+  // Orden "más recientes" por defecto (estabiliza la paginación, ver buildListUrl).
   assert.equal(
     buildListUrl({ ...base, offset: 0 }),
-    'https://www.portalinmobiliario.com/venta/casa/propiedades-usadas/las-condes-metropolitana'
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_OrderId_BEGINS*DESC_NoIndex_True`
   )
   assert.equal(
     buildListUrl({ ...base, offset: 48 }),
-    'https://www.portalinmobiliario.com/venta/casa/propiedades-usadas/las-condes-metropolitana/_Desde_49_NoIndex_True'
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_Desde_49_OrderId_BEGINS*DESC_NoIndex_True`
   )
   assert.equal(
     buildListUrl({ ...base, operation: 'rent', offset: 96 }),
-    'https://www.portalinmobiliario.com/arriendo/casa/propiedades-usadas/las-condes-metropolitana/_Desde_97_NoIndex_True'
+    `${PI}/arriendo/casa/propiedades-usadas/las-condes-metropolitana/_Desde_97_OrderId_BEGINS*DESC_NoIndex_True`
+  )
+  // Banda de precio + paginación + orden, todo combinado (verificado contra el portal).
+  assert.equal(
+    buildListUrl({ ...base, offset: 48, priceRange: { minClp: 0, maxClp: 650000000 } }),
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLP-650000000CLP/_Desde_49_OrderId_BEGINS*DESC_NoIndex_True`
+  )
+  // Sin orden (sortRecent:false) mantiene el formato clásico.
+  assert.equal(
+    buildListUrl({ ...base, offset: 0, sortRecent: false }),
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana`
   )
 })
 
@@ -50,12 +62,28 @@ test('decideContinue: página vacía → completa', () => {
   assert.deepEqual(decideContinue({ page: 3, pageItems: 0, pageCount: 42, maxPages: 60 }), { stop: true, completed: true, reason: null })
 })
 
-test('decideContinue: alcanza pageCount → completa', () => {
-  assert.deepEqual(decideContinue({ page: 42, pageItems: 48, pageCount: 42, maxPages: 60 }), { stop: true, completed: true, reason: null })
+// El portal reporta `pageCount` INESTABLE dentro de un mismo barrido (visto en
+// real: 22 → 21 → 42 en la misma banda). Cortar por ese número perdía anuncios
+// en silencio (~70% de cobertura) — ahora se pagina hasta que no haya más.
+test('decideContinue: alcanzar pageCount NO corta (el portal lo reporta inestable)', () => {
+  const d = decideContinue({ page: 42, pageItems: 48, newInPage: 48, zeroNewStreak: 0, pageCount: 42, maxPages: 60 })
+  assert.equal(d.stop, false)
 })
 
 test('decideContinue: sigue si hay más páginas', () => {
-  assert.deepEqual(decideContinue({ page: 2, pageItems: 48, pageCount: 42, maxPages: 60 }), { stop: false, completed: false, reason: null })
+  assert.deepEqual(decideContinue({ page: 2, pageItems: 48, newInPage: 48, zeroNewStreak: 0, pageCount: 42, maxPages: 60 }), { stop: false, completed: false, reason: null })
+})
+
+test('decideContinue: dos páginas seguidas sin nada nuevo → agotado', () => {
+  assert.deepEqual(
+    decideContinue({ page: 10, pageItems: 48, newInPage: 0, zeroNewStreak: 2, pageCount: null, maxPages: 60 }),
+    { stop: true, completed: true, reason: null }
+  )
+})
+
+test('decideContinue: UNA página repetida no corta (el portal reordena entre peticiones)', () => {
+  const d = decideContinue({ page: 10, pageItems: 48, newInPage: 0, zeroNewStreak: 1, pageCount: null, maxPages: 60 })
+  assert.equal(d.stop, false)
 })
 
 test('decideContinue: tope maxPages por debajo de pageCount → INCOMPLETO', () => {
@@ -122,15 +150,17 @@ test('discoverTarget: pagina, filtra proyectos, encola solo lo nuevo, marca baja
 
   const enqueued = []
   const res = await discoverTarget(client, TARGET, {
-    fetch: async (url) => ({ ok: true, html: url.includes('_Desde_49') ? 'P2' : 'P1' }),
-    parseList: (html) => (html === 'P2' ? pages[48].listings : pages[0].listings),
+    // Ya no se corta por pageCount: se pagina hasta que el portal deja de
+    // devolver resultados (p3 vacía), como en producción.
+    fetch: async (url) => ({ ok: true, html: url.includes('_Desde_97') ? 'P3' : url.includes('_Desde_49') ? 'P2' : 'P1' }),
+    parseList: (html) => (html === 'P3' ? [] : html === 'P2' ? pages[48].listings : pages[0].listings),
     parseMeta: (html) => (html === 'P2' ? pages[48].meta : pages[0].meta),
     enqueueDetail: async (id, url) => enqueued.push(id),
     sleep: async () => {},
   })
 
   assert.equal(res.completed, true)
-  assert.equal(res.pages, 2)
+  assert.equal(res.pages, 3) // p1, p2 con datos + p3 vacía que confirma el fin
   assert.equal(res.seen, 3) // A, B, C (el proyecto P se filtró)
   // Encola solo NUEVOS y no-proyecto: B y C (A ya conocido, P filtrado)
   assert.deepEqual(enqueued.sort(), ['MLC-B', 'MLC-C'])

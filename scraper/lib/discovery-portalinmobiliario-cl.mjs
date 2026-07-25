@@ -83,11 +83,19 @@ export function priceRangeSegment(priceRange) {
  * `priceRange` opcional ({minClp,maxClp}) añade el filtro de banda de precio, que
  * PI apila ANTES del sufijo de paginación.
  */
-export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0, priceRange = null }) {
+export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0, priceRange = null, sortRecent = true }) {
   const type = fold(String(propertyType ?? 'casa')) || 'casa'
   let url = `https://www.portalinmobiliario.com/${operationSlug(operation)}/${type}/propiedades-usadas/${slug}-${rslug}`
   url += priceRangeSegment(priceRange)
-  if (offset > 0) url += `/_Desde_${offset + 1}_NoIndex_True`
+  // Orden "Más recientes" (_OrderId_BEGINS*DESC). Dos motivos:
+  //  1) Los anuncios nuevos aparecen primero → el barrido los ve de inmediato.
+  //  2) ESTABILIZA la paginación: el orden por relevancia (el de por defecto)
+  //     reordena los resultados entre peticiones, y por eso aparecían páginas
+  //     con anuncios repetidos y se perdían otros al paginar.
+  const parts = []
+  if (offset > 0) parts.push(`_Desde_${offset + 1}`)
+  if (sortRecent) parts.push('_OrderId_BEGINS*DESC')
+  if (parts.length > 0) url += `/${parts.join('')}_NoIndex_True`
   return url
 }
 
@@ -100,9 +108,11 @@ export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, p
  *
  * @returns {{ stop: boolean, completed: boolean, reason: string|null }}
  */
-export function decideContinue({ page, pageItems, pageCount, maxPages }) {
+export function decideContinue({ page, pageItems, newInPage, zeroNewStreak = 0, pageCount, maxPages }) {
+  // Fin REAL: el portal dejó de devolver resultados.
   if (pageItems === 0) return { stop: true, completed: true, reason: null }
-  if (pageCount != null && page >= pageCount) return { stop: true, completed: true, reason: null }
+
+  // Tope de seguridad (evita un bucle infinito si el portal nunca vacía).
   if (page >= maxPages) {
     const capBelowTotal = pageCount != null && page < pageCount
     return {
@@ -111,6 +121,17 @@ export function decideContinue({ page, pageItems, pageCount, maxPages }) {
       reason: capBelowTotal ? `tope maxPages=${maxPages} < pageCount=${pageCount}` : null,
     }
   }
+
+  // Agotado: dos páginas SEGUIDAS sin ningún anuncio nuevo. Se exige racha de 2
+  // porque el portal reordena resultados entre peticiones y una página puede
+  // venir toda repetida sin que sea el final (visto en real: una página con 48
+  // items pero solo 31 nuevos).
+  if (newInPage === 0 && zeroNewStreak >= 2) return { stop: true, completed: true, reason: null }
+
+  // NO se corta por `pageCount`: el portal lo reporta INESTABLE dentro de un
+  // mismo barrido (visto 22 → 21 → 42 en la misma banda). Confiar en él cortaba
+  // el barrido antes de tiempo y perdía anuncios en silencio — era la causa de
+  // quedarse en ~70% de cobertura pese a que las bandas suman el 100%.
   return { stop: false, completed: false, reason: null }
 }
 
@@ -186,6 +207,11 @@ async function updateTargetStats(client, targetId, { scrapedAt, completed, listi
 async function sweepBand(client, ctx, priceRange, seen) {
   const { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, completed = false, reason = null
+  // IDs vistos EN ESTA banda. Se cuenta aparte del `seen` global porque las
+  // bandas solapan con el barrido base: contra el global, la primera página de
+  // una banda daría "0 nuevos" y cortaría el barrido de inmediato.
+  const bandSeen = new Set()
+  let zeroNewStreak = 0
 
   for (let page = 1; page <= maxPages; page++) {
     const offset = (page - 1) * PAGE_SIZE
@@ -193,8 +219,16 @@ async function sweepBand(client, ctx, priceRange, seen) {
 
     const res = await fetch(url, { profile: 'portalinmobiliario' })
     if (!res.ok) {
-      if (page === 1 && (res.status === 404 || /\b404\b/.test(res.reason ?? ''))) {
-        completed = true; reason = 'sin inventario (404)'
+      // 404 = el portal se quedó SIN MÁS PÁGINAS. Es la señal natural de fin al
+      // paginar (verificado en real: tras la última página con resultados, la
+      // siguiente devuelve 404), no un fallo. En la página 1 significa que la
+      // comuna no tiene inventario para ese tipo/operación. En ambos casos el
+      // barrido está COMPLETO — tratarlo como fallo dejaba todas las bandas en
+      // `completed=false` y desactivaba la detección de bajas.
+      const is404 = res.status === 404 || /\b404\b/.test(res.reason ?? '')
+      if (is404) {
+        completed = true
+        reason = page === 1 ? 'sin inventario (404)' : null
       } else {
         reason = `fetch p${page}: ${res.reason ?? 'fallo'}`
       }
@@ -207,7 +241,12 @@ async function sweepBand(client, ctx, priceRange, seen) {
     if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
 
     const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
-    for (const l of usable) seen.add(l.external_id)
+    let newInPage = 0
+    for (const l of usable) {
+      seen.add(l.external_id)
+      if (!bandSeen.has(l.external_id)) { bandSeen.add(l.external_id); newInPage++ }
+    }
+    zeroNewStreak = newInPage === 0 ? zeroNewStreak + 1 : 0
 
     // Normal: encolar detalle SOLO de los avisos nuevos. force_refetch (backfill):
     // encolar TODOS con su permalink fresco, para re-bajar la ficha completa.
@@ -217,7 +256,7 @@ async function sweepBand(client, ctx, priceRange, seen) {
       if (!known.has(l.external_id)) { await enqueueDetail(l.external_id, l.source_url); enqueued++ }
     }
 
-    const d = decideContinue({ page, pageItems: listings.length, pageCount: meta.pageCount, maxPages })
+    const d = decideContinue({ page, pageItems: listings.length, newInPage, zeroNewStreak, pageCount: meta.pageCount, maxPages })
     if (d.stop) { completed = d.completed; reason = reason ?? d.reason; break }
     await sleep(politenessMs)
   }
