@@ -72,6 +72,17 @@ const clpShort = (v: number | null) => {
   return clp(v)
 }
 
+// Precio TAL COMO LO PUBLICA el portal: en el barrio alto casi todo se publica
+// en UF, y mostrar la conversión al peso exacto ($571.827.060) daba una
+// precisión falsa con pinta de dato de debug. Se muestra "UF 14.000" (lo que
+// realmente dice el aviso) y el equivalente en CLP redondeado como referencia.
+const priceMain = (p: Property) =>
+  p.canonical_price_uf != null
+    ? `UF ${Math.round(Number(p.canonical_price_uf)).toLocaleString('es-CL')}`
+    : clp(p.canonical_price)
+const priceAlt = (p: Property) =>
+  p.canonical_price_uf != null && p.canonical_price ? `≈ ${clpShort(p.canonical_price)}` : null
+
 const CONF: Record<string, { t: string; dot: string; badge: string }> = {
   confirmed: { t: 'Ubicación confirmada', dot: 'bg-emerald-400', badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
   candidate: { t: 'Ubicación probable', dot: 'bg-blue-400', badge: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
@@ -137,9 +148,10 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
       <div className="p-3">
         {p.ref_code && <div className="text-[10px] font-mono text-amber-400/80 mb-0.5">{p.ref_code}</div>}
         <div className="flex items-baseline justify-between gap-2">
-          <div className="text-lg font-bold text-slate-100">{clp(p.canonical_price)}</div>
+          <div className="text-lg font-bold text-slate-100">{priceMain(p)}</div>
           {p.price_sqm ? <div className="text-[11px] text-slate-500 shrink-0">{clpShort(p.price_sqm)}/m²</div> : null}
         </div>
+        {priceAlt(p) && <div className="text-[11px] text-slate-500">{priceAlt(p)}</div>}
         {multi && sp && sp.spread > 0 && (
           <div className="text-[11px] text-amber-400/90 mt-0.5">rango {clpShort(sp.min)}–{clpShort(sp.max)} · {Math.round(sp.spreadPct * 100)}% dif.</div>
         )}
@@ -418,8 +430,10 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
             <div>
               {p.ref_code && <div className="text-[11px] font-mono font-semibold text-amber-400 mb-1">{p.ref_code}</div>}
               <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-0.5">{p.operation === 'rent' ? 'Precio arriendo' : 'Precio venta'}</div>
-              <div className="text-2xl font-bold text-slate-100">{clp(p.canonical_price)}</div>
-              {p.canonical_price_uf && <div className="text-xs text-slate-500">≈ {Number(p.canonical_price_uf).toLocaleString('es-CL')} UF{p.price_sqm ? ` · ${clp(p.price_sqm)}/m²` : ''}</div>}
+              <div className="text-2xl font-bold text-slate-100">{priceMain(p)}</div>
+              <div className="text-xs text-slate-500">
+                {[priceAlt(p), p.price_sqm ? `${clpShort(p.price_sqm)}/m²` : null].filter(Boolean).join(' · ')}
+              </div>
             </div>
             <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border ${conf.badge}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {conf.t}
