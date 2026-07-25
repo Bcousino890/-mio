@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
+import PropertyClModal, { type Property as PropertyCl } from '@/components/chile/PropertyClModal'
 import { SlidersHorizontal, Map, ChevronDown, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
 import type { Listing } from '@/lib/types'
 
@@ -63,6 +64,7 @@ function transformChileRow(row: any): Listing {
     description: row.description,
     features: Array.isArray(row.features) ? row.features.filter((f: any) => typeof f === 'string') : [],
     videos: row.has_video && row.video_modal_url ? [row.video_modal_url] : [],
+    property_cl_id: row.property_cl_id ?? null,
     priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
     sources: [{
       id: row.external_id,
@@ -104,9 +106,35 @@ export default function AnunciosChileClient() {
   // SSR-safe desktop detection: window is not available during server render,
   // so we resolve isDesktop after mount and keep it updated on resize.
   const [isDesktop, setIsDesktop] = useState(false)
+  // Ficha del inmueble (property_cl) abierta desde la lista — la MISMA que en
+  // /chile/propiedades, en vez de mandar al portal original en otra pestaña.
+  const [ficha, setFicha] = useState<PropertyCl | null>(null)
+  const [fichaLoading, setFichaLoading] = useState<string | null>(null)
 
   const combinedActive = hoverId ?? activeId
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Abre la ficha canónica del inmueble al que pertenece el aviso. Todo anuncio
+  // tiene su property_cl desde el dedup por corredora + código interno (0078);
+  // si por lo que sea faltara, se cae al comportamiento anterior (abrir el
+  // aviso original) en vez de dejar el clic sin respuesta.
+  const openFicha = useCallback(async (l: Listing) => {
+    if (!l.property_cl_id) {
+      if (l.source_url) window.open(l.source_url, '_blank', 'noopener,noreferrer')
+      return
+    }
+    setFichaLoading(l.id)
+    try {
+      const res = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(l.property_cl_id)}`)
+      const data = await res.json()
+      if (data.success && data.data) setFicha(data.data)
+      else if (l.source_url) window.open(l.source_url, '_blank', 'noopener,noreferrer')
+    } catch {
+      if (l.source_url) window.open(l.source_url, '_blank', 'noopener,noreferrer')
+    } finally {
+      setFichaLoading(null)
+    }
+  }, [])
 
   useEffect(() => {
     const update = () => setIsDesktop(window.innerWidth >= 1024)
@@ -383,17 +411,16 @@ export default function AnunciosChileClient() {
               <div
                 key={listing.id}
                 onClick={() => setActiveId(listing.id)}
-                className="border-b border-slate-700 last:border-b-0 cursor-pointer hover:bg-slate-700/50 transition-colors p-3"
+                className={`relative border-b border-slate-700 last:border-b-0 cursor-pointer hover:bg-slate-700/50 transition-colors p-3 ${fichaLoading === listing.id ? 'opacity-60' : ''}`}
               >
+                {fichaLoading === listing.id && (
+                  <span className="absolute z-10 top-4 right-4 text-[11px] px-2 py-1 rounded-full bg-black/70 text-slate-200">Abriendo ficha…</span>
+                )}
                 <PropertyCard
                   listing={listing}
                   active={combinedActive === listing.id}
                   onHover={setHoverId}
-                  onOpen={(l) => {
-                    // Chile no tiene ficha propia por anuncio todavía (/anuncios/[id]
-                    // es la tabla de España): abrir el aviso original en vez de un 404.
-                    if (l.source_url) window.open(l.source_url, '_blank', 'noopener,noreferrer')
-                  }}
+                  onOpen={openFicha}
                 />
               </div>
             ))}
@@ -437,6 +464,17 @@ export default function AnunciosChileClient() {
           </div>
         )}
       </div>
+
+      {/* Ficha del inmueble — la misma de /chile/propiedades (galería por
+          corredora, mapa con pin manual, unir/separar). */}
+      {ficha && (
+        <PropertyClModal
+          p={ficha}
+          onClose={() => setFicha(null)}
+          onRefetched={setFicha}
+          onSplit={() => { /* separar fichas no cambia la lista de anuncios */ }}
+        />
+      )}
     </div>
   )
 }

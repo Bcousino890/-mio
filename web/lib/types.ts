@@ -101,6 +101,12 @@ export type Listing = {
   tenant_profile?: string
   condition?: string
   exterior?: boolean
+  /**
+   * Chile: propiedad canónica (`property_cl`) a la que pertenece este anuncio.
+   * Permite abrir la MISMA ficha del inmueble desde /chile/anuncios que desde
+   * /chile/propiedades, en vez de mandar al portal original.
+   */
+  property_cl_id?: string | null
 }
 
 export type EnergyCert = {
