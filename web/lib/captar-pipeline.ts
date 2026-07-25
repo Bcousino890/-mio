@@ -16,6 +16,7 @@ import { pool } from '@/lib/db'
 import { ProxyAgent, type Dispatcher } from 'undici'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
+import { normalizeClRol } from '@/lib/rol-format'
 import {
   scoreCandidatesV3,
   type MatchResultV3,
@@ -50,6 +51,11 @@ export const AUTO_CONFIRM_LOG_ODDS_MARGIN = 2.2 // ≈ 9× más probable que el 
 export const REVIEW_PROBABILITY = 0.65       // debajo de esto ni siquiera es candidato
 const TGR_CACHE_DAYS = 90
 const OWNER_NAME_MATCH_THRESHOLD = 0.85
+
+/** Tope de fotos que se persisten por captación. Portal Inmobiliario admite
+ *  hasta 50 imágenes por publicación; el tope anterior (40) recortaba fichas
+ *  completas. */
+export const MAX_PHOTOS = 60
 
 // ─── Comunas Portal Inmobiliario → código SII ────────────────────────────────
 // Fallback estático, alineado con chile_comunas (los códigos reales confirmados
@@ -509,14 +515,17 @@ export async function extractListing(url: string): Promise<ExtractResult> {
 
   let parsed: Record<string, unknown> = {}
   let fetchError: string | null = null
+  let galleryError: string | null = null
   try {
     const html = await fetchListingPage(cleanUrl)
     const detail = parsePortalListingDetail(html)
     if (detail) {
       // Si hay URL de galería, fetch todas las fotos del modal
-      let allPhotos = detail.photos
+      const allPhotos = detail.photos
+      const fromHtml = allPhotos.length
       if (detail.gallery_url) {
         const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+        if (galleryPhotos.length === 0) galleryError = 'El modal de galería no devolvió fotos (bloqueo del portal)'
         // Combina fotos del HTML estático con las del modal (deduplicado)
         const seenPhotos = new Set(allPhotos)
         for (const photo of galleryPhotos) {
@@ -542,8 +551,13 @@ export async function extractListing(url: string): Promise<ExtractResult> {
         address_full: detail.address && detail.comuna ? `${detail.address}, ${detail.comuna}` : detail.address,
         advertiser_name: detail.advertiser_name,
         advertiser_type: detail.advertiser_type,
-        photos: allPhotos.slice(0, 40),
+        photos: allPhotos.slice(0, MAX_PHOTOS),
         photos_total_count: detail.photos_total_count,
+        // Trazabilidad de la galería: cuántas trajo el HTML estático, cuántas
+        // el modal, y por qué faltan si el total del portal es mayor. Sin esto
+        // la ficha se quedaba en 5 fotos sin decir que faltaban.
+        photos_from_html: fromHtml,
+        photos_from_gallery: Math.max(0, allPhotos.length - fromHtml),
         description: detail.description,
         comuna_detected: detail.comuna,
         // Ficha técnica V4
@@ -577,6 +591,10 @@ export async function extractListing(url: string): Promise<ExtractResult> {
     comuna_slug: comunaMatch?.slug ?? null,
     comuna_label: comunaMatch?.label ?? null,
     fetch_error: fetchError,
+    // Explícitos (fuera del filtro de nulos) para que un re-fetch exitoso
+    // limpie el error del intento anterior en vez de arrastrarlo por el
+    // merge de `raw_extracted`.
+    gallery_error: galleryError,
   }
 
   // Registrar el anuncio también en listings_cl (capa cruda) — así la captación
@@ -645,8 +663,18 @@ export async function extractListing(url: string): Promise<ExtractResult> {
        sii_comuna_code = COALESCE(EXCLUDED.sii_comuna_code, captaciones_cl.sii_comuna_code),
        latitude = COALESCE(EXCLUDED.latitude, captaciones_cl.latitude),
        longitude = COALESCE(EXCLUDED.longitude, captaciones_cl.longitude),
-       photos = COALESCE(EXCLUDED.photos, captaciones_cl.photos),
-       raw_extracted = EXCLUDED.raw_extracted,
+       photos = CASE
+         WHEN EXCLUDED.photos IS NULL THEN captaciones_cl.photos
+         WHEN jsonb_array_length(EXCLUDED.photos)
+              >= jsonb_array_length(COALESCE(captaciones_cl.photos, '[]'::jsonb)) THEN EXCLUDED.photos
+         ELSE captaciones_cl.photos
+       END,
+       -- Merge, no reemplazo: si el re-fetch cae en un bloqueo del portal
+       -- (403 / IP de datacenter) el payload nuevo trae poco más que el
+       -- fetch_error, y un reemplazo plano borraba la ficha técnica ya
+       -- extraída (terreno, año, piscina, descripción). Las claves nuevas
+       -- pisan a las viejas; las que faltan se conservan.
+       raw_extracted = COALESCE(captaciones_cl.raw_extracted, '{}'::jsonb) || EXCLUDED.raw_extracted,
        updated_at = now()
      RETURNING *`,
     [
@@ -850,22 +878,87 @@ export async function verifyVisual(captacionId: string, selectedPhotoUrls?: stri
   return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored, visual_usage: usage }
 }
 
-/** Selección manual de rol entre los candidatos guardados. */
-export async function selectRolManual(captacionId: string, rol: string): Promise<CaptacionRow> {
+/**
+ * Selección manual de rol.
+ *
+ * Acepta tanto un rol de la lista de candidatos como CUALQUIER rol del
+ * catastro de la comuna: la lista de candidatos sale del scoring por
+ * texto/distancia y a veces el rol correcto ni siquiera aparece en ella (pin
+ * corrido varias cuadras, dirección publicada con otro nombre de calle,
+ * loteo nuevo). Antes eso era un callejón sin salida — la ficha solo dejaba
+ * elegir entre candidatos malos. Ahora el equipo puede señalar la parcela
+ * correcta en el mapa (o teclear su rol) y esa decisión humana manda.
+ *
+ * Prioridad de la evidencia guardada:
+ *   1. candidato ya scoreado → conserva su score y señales (match_method 'manual')
+ *   2. rol del catastro SII de la comuna → score 1 (match_method 'manual_rol')
+ *   3. rol presente solo en cadastre_parcels_cl → score 1, sin dirección SII
+ */
+export async function selectRolManual(
+  captacionId: string,
+  rolRaw: string,
+  siiComunaCode?: string | null,
+): Promise<CaptacionRow> {
   const c = await getCaptacion(captacionId)
   if (!c) throw new Error('Captación no encontrada')
+
+  const rol = normalizeClRol(rolRaw)
+  const comuna = siiComunaCode ?? c.sii_comuna_code
   const candidates = (c.candidates ?? []) as ScoredCandidate[]
-  const chosen = candidates.find((x) => x.rol === rol)
-  if (!chosen) throw new Error(`El rol ${rol} no está entre los candidatos de esta captación`)
+  const chosen = candidates.find((x) => normalizeClRol(x.rol) === rol)
+
+  let siiRol = chosen?.rol ?? rol
+  let direccion = chosen?.direccion ?? null
+  let score: number = chosen?.match_score ?? 1
+  let signals: unknown = chosen ? chosen.match_result_v3.signals : null
+  let method = 'manual'
+
+  if (!chosen) {
+    if (!comuna) throw new Error('La captación no tiene comuna SII para resolver el rol')
+    method = 'manual_rol'
+    // Misma preferencia de fila que /api/chile/sii-rol-detail: un rol puede
+    // tener duplicados de ingesta y queremos el que trae datos.
+    const { rows: siiRows } = await pool.query(
+      `SELECT rol, direccion FROM sii_roles_cl
+       WHERE sii_comuna_code = $1 AND rol = $2
+       ORDER BY superficie_construida_m2 DESC NULLS LAST,
+                (nombre_propietario IS NOT NULL) DESC,
+                (lat IS NOT NULL) DESC,
+                avaluo_fiscal_total DESC NULLS LAST
+       LIMIT 1`,
+      [comuna, rol],
+    )
+    if (siiRows[0]) {
+      siiRol = siiRows[0].rol
+      direccion = siiRows[0].direccion ?? null
+    } else {
+      // Sin fila en el catastro SII: se acepta igual si la parcela existe en
+      // el catastro gráfico (es lo que el usuario acaba de ver en el mapa).
+      const { rows: parcelRows } = await pool.query(
+        `SELECT p.rol FROM cadastre_parcels_cl p
+         JOIN chile_comunas cc ON cc.id = p.comuna_id
+         WHERE cc.sii_comuna_code = $1 AND p.rol = $2
+         LIMIT 1`,
+        [comuna, rol],
+      )
+      if (!parcelRows[0]) {
+        throw new Error(`El rol ${rol} no existe en el catastro de la comuna ${comuna}`)
+      }
+      method = 'manual_parcel'
+    }
+    score = 1
+    signals = null
+  }
 
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
        sii_rol = $2, sii_direccion = $3, match_score = $4,
-       match_confidence = 'manual', match_method = 'manual',
+       sii_comuna_code = COALESCE($6, sii_comuna_code),
+       match_confidence = 'manual', match_method = $7,
        match_signals = $5, stage = 'matched',
        needs_review = false, review_reason = NULL, updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [captacionId, chosen.rol, chosen.direccion, chosen.match_score, JSON.stringify(chosen.match_result_v3.signals)],
+    [captacionId, siiRol, direccion, score, signals ? JSON.stringify(signals) : null, comuna, method],
   )
   await syncListingIdentity(rows[0] as CaptacionRow)
   return rows[0] as CaptacionRow
