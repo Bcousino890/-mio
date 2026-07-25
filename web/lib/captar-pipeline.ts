@@ -14,6 +14,7 @@
 // captación vuelve a revisión (ver crossCheckTgrAddress).
 import { pool } from '@/lib/db'
 import { ProxyAgent, type Dispatcher } from 'undici'
+import { chileProxyUrl } from '@/lib/chile-proxy'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import {
@@ -154,20 +155,6 @@ export function extractFromSlug(url: string): Record<string, string | number | n
   info.comuna_label = comuna?.label ?? null
 
   return info
-}
-
-// Mismo criterio de proxy que scraper/lib/fetch.mjs (proxyUrl()) — variables
-// de entorno compartidas con el scraper standalone, prioridad idéntica:
-// SMARTPROXY_URL / PROXY_URL (genéricos) → Evomi CL (H10, activo) →
-// SmartProxy CL (legacy).
-function chileProxyUrl(): string | null {
-  if (process.env.SMARTPROXY_URL) return process.env.SMARTPROXY_URL
-  if (process.env.PROXY_URL) return process.env.PROXY_URL
-  const { EVOMI_PROXY_HOST, EVOMI_PROXY_PORT, EVOMI_PROXY_USER, EVOMI_PROXY_PASS } = process.env
-  if (EVOMI_PROXY_USER) return `http://${EVOMI_PROXY_USER}:${EVOMI_PROXY_PASS}@${EVOMI_PROXY_HOST}:${EVOMI_PROXY_PORT}`
-  const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
-  if (SMARTPROXY_CL_USER) return `http://${SMARTPROXY_CL_USER}:${SMARTPROXY_CL_PASS}@${SMARTPROXY_CL_HOST}:${SMARTPROXY_CL_PORT}`
-  return null
 }
 
 async function fetchListingPageVia(url: string, proxy: string | null): Promise<{ status: number; html: string }> {
@@ -506,6 +493,7 @@ export interface ExtractResult {
 export async function extractListing(url: string): Promise<ExtractResult> {
   const cleanUrl = url.split('#')[0].split('?')[0]
   const slugInfo = extractFromSlug(cleanUrl)
+  const externalId = cleanUrl.match(/MLC-?\d+/)?.[0]?.replace('MLC-', 'MLC') ?? null
 
   let parsed: Record<string, unknown> = {}
   let fetchError: string | null = null
@@ -513,10 +501,11 @@ export async function extractListing(url: string): Promise<ExtractResult> {
     const html = await fetchListingPage(cleanUrl)
     const detail = parsePortalListingDetail(html)
     if (detail) {
-      // Si hay URL de galería, fetch todas las fotos del modal
+      // Fotos: además de las del blob estático + modal de galería, cae al
+      // fallback por item_id (más fiable — ver fetch-portalinmobiliario-gallery.ts).
       let allPhotos = detail.photos
-      if (detail.gallery_url) {
-        const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+      if (detail.gallery_url || externalId) {
+        const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url ?? '', externalId)
         // Combina fotos del HTML estático con las del modal (deduplicado)
         const seenPhotos = new Set(allPhotos)
         for (const photo of galleryPhotos) {
@@ -582,7 +571,6 @@ export async function extractListing(url: string): Promise<ExtractResult> {
   // Registrar el anuncio también en listings_cl (capa cruda) — así la captación
   // deja huella en el inventario general y el dedup posterior lo ve.
   let listingClId: string | null = null
-  const externalId = cleanUrl.match(/MLC-?\d+/)?.[0]?.replace('MLC-', 'MLC') ?? null
   if (externalId) {
     try {
       const { rows } = await pool.query(

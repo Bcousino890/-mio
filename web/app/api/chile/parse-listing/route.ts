@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     }
 
     const slugInfo = extractFromSlug(url)
+    const externalId = url.split('#')[0].split('?')[0].match(/MLC-?\d+/)?.[0]?.replace('MLC-', 'MLC') ?? null
 
     let parsed: Record<string, unknown> = {}
     let fetchError: string | null = null
@@ -27,10 +28,11 @@ export async function POST(request: NextRequest) {
       const html = await fetchListingPage(url)
       const detail = parsePortalListingDetail(html)
       if (detail) {
-        // Si hay URL de galería, fetch todas las fotos del modal
+        // Fotos: además de las del blob estático + modal de galería, cae al
+        // fallback por item_id (más fiable — ver fetch-portalinmobiliario-gallery.ts).
         let allPhotos = detail.photos
-        if (detail.gallery_url) {
-          const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+        if (detail.gallery_url || externalId) {
+          const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url ?? '', externalId)
           // Combina fotos del HTML estático con las del modal (deduplicado)
           const seenPhotos = new Set(allPhotos)
           for (const photo of galleryPhotos) {

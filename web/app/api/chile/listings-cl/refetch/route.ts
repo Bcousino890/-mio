@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, source_url FROM listings_cl WHERE id = $1`,
+      `SELECT id, source_url, external_id FROM listings_cl WHERE id = $1`,
       [id],
     )
     const listing = rows[0]
@@ -47,9 +47,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'No se pudo interpretar el aviso (¿cambió el portal?)' }, { status: 422 })
     }
 
+    // Fotos: además de las del blob estático + modal de galería, cae al
+    // fallback por item_id (más fiable — ver fetch-portalinmobiliario-gallery.ts).
     let photos = detail.photos
-    if (detail.gallery_url) {
-      const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
+    if (detail.gallery_url || listing.external_id) {
+      const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url ?? '', listing.external_id)
       const seen = new Set(photos)
       for (const p of galleryPhotos) if (!seen.has(p)) { photos.push(p); seen.add(p) }
     }
