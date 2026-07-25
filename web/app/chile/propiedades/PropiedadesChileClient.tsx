@@ -21,7 +21,7 @@ type Listing = {
   currency: string | null
   source_url: string | null
   is_active: boolean
-  // El aviso fue movido a mano entre fichas (unión/separación manual, 0078):
+  // El aviso fue movido a mano entre fichas (unión/separación manual, 0079):
   // el dedup automático ya no lo reagrupa por su cuenta.
   manual_property_lock?: boolean
   seller_reference: string | null
@@ -55,7 +55,7 @@ type Property = {
   listings: Listing[]
   manual_latitude: number | null
   manual_longitude: number | null
-  // Sello de la última unión/separación manual (0078) — distingue un grupo
+  // Sello de la última unión/separación manual (0079) — distingue un grupo
   // curado por el equipo de uno propuesto por el score del dedup.
   manual_merge_at: string | null
 }
@@ -121,7 +121,7 @@ function priceSpread(p: Property) {
 // Además de abrir la ficha, la tarjeta es el gesto de MATCHING MANUAL: se
 // arrastra una sobre otra para unirlas (o se seleccionan varias con el modo
 // "Unir"). El dedup automático nunca acierta el 100%; el equipo mirando las
-// fotos sí, y esa decisión pesa más que el score (ver 0078).
+// fotos sí, y esa decisión pesa más que el score (ver 0079).
 type CardHandlers = {
   onOpen: (p: Property) => void
   selectMode: boolean
@@ -513,7 +513,7 @@ function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     }
   }, [activeListing, refetching, p.id, onRefetched])
 
-  // Separar un aviso de este grupo (matching manual inverso, 0078): el aviso no
+  // Separar un aviso de este grupo (matching manual inverso, 0079): el aviso no
   // se borra, se muda a una ficha propia y el par queda como "rechazado por un
   // humano" para que el dedup automático no lo vuelva a juntar. Es el "deshacer"
   // tanto de una unión manual como de un agrupamiento del score que estaba mal.
@@ -884,7 +884,7 @@ export default function PropiedadesChileClient() {
   const [totalPages, setTotalPages] = useState(1)
   const [selected, setSelected] = useState<Property | null>(null)
 
-  // ── Matching MANUAL (0078) ────────────────────────────────────────────────
+  // ── Matching MANUAL (0079) ────────────────────────────────────────────────
   // Dos gestos para lo mismo: arrastrar una ficha sobre otra, o activar el modo
   // "Unir", marcar varias y unirlas. El dedup automático deja pasar casos que a
   // ojo son obvios; esto los cierra sin esperar al score.

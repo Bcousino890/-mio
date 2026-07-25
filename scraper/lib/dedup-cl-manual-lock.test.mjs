@@ -2,11 +2,11 @@
 //
 // Correr:  node --test scraper/lib/dedup-cl-manual-lock.test.mjs
 //
-// Contexto (migración 0078): el equipo une/separa fichas a mano desde
-// /chile/propiedades cuando el score no llega. Nivel 1 agrupa por
-// (property_code, advertiser_id) y REASIGNA la familia completa a un mismo
-// property_cl — sin protección, separar a mano dos anuncios que comparten
-// property_code se revertía solo en el siguiente barrido.
+// Contexto (migración 0079): el equipo une/separa fichas a mano desde
+// /chile/propiedades cuando el dedup no acierta. Nivel 1 agrupa por
+// (advertiser_id, seller_reference) —corredora + su código interno— y REASIGNA
+// la familia completa a un mismo property_cl; sin protección, separar a mano dos
+// anuncios de esa familia se revertía solo en el siguiente barrido.
 // `listings_cl.manual_property_lock` marca esos anuncios: no se reasignan, pero
 // sí siguen contando para saber a qué ficha pertenece el grupo.
 
@@ -23,6 +23,8 @@ const BASE = {
   manual_property_lock: false,
 };
 
+const key = (s) => String(s ?? '').trim().toLowerCase();
+
 /**
  * Fake mínimo de pg.Client para runNivel1DedupCl: enruta por fragmentos
  * estables del SQL sobre un store en memoria y registra los UPDATE aplicados.
@@ -36,19 +38,27 @@ function makeFakeClient(listings) {
       const q = norm(sql);
 
       // Cola de Nivel 1: grupos con algún anuncio sin agrupar y sin fijar a mano.
-      if (q.startsWith('SELECT DISTINCT property_code, advertiser_id')) {
+      if (q.startsWith('SELECT DISTINCT advertiser_id, seller_reference')) {
         const seen = new Map();
         for (const l of listings.values()) {
-          if (l.property_code == null || l.property_cl_id != null || l.manual_property_lock) continue;
-          seen.set(`${l.property_code}|${l.advertiser_id}`, { property_code: l.property_code, advertiser_id: l.advertiser_id });
+          if (!l.advertiser_id || !key(l.seller_reference)) continue;
+          if (l.property_cl_id != null || l.manual_property_lock) continue;
+          seen.set(`${l.advertiser_id}|${key(l.seller_reference)}`, {
+            advertiser_id: l.advertiser_id, seller_reference: l.seller_reference,
+          });
         }
         return { rows: [...seen.values()] };
       }
 
-      // Familia por (property_code, advertiser_id).
-      if (q.includes('FROM listings_cl') && q.includes('WHERE property_code = $1')) {
-        const [code, advertiser] = params;
-        return { rows: [...listings.values()].filter((l) => l.property_code === code && l.advertiser_id === advertiser) };
+      // Familia por (advertiser_id, seller_reference).
+      if (q.includes('FROM listings_cl') && q.includes('WHERE advertiser_id = $1')) {
+        const [advertiser, ref] = params;
+        return { rows: [...listings.values()].filter((l) => l.advertiser_id === advertiser && key(l.seller_reference) === key(ref)) };
+      }
+
+      // Segunda pasada: anuncios que quedaron sin property_cl → ficha propia.
+      if (q.includes('FROM listings_cl') && q.includes('WHERE property_cl_id IS NULL')) {
+        return { rows: [...listings.values()].filter((l) => l.property_cl_id == null) };
       }
 
       // Consolidación al refrescar agregados.
@@ -63,12 +73,15 @@ function makeFakeClient(listings) {
       }
 
       if (q.startsWith('UPDATE listings_cl SET property_cl_id')) {
-        const [propertyClId, ids] = params;
         const respectsLock = q.includes('NOT manual_property_lock');
+        const byId = q.includes('id = $2');
+        const [propertyClId, target] = params;
+        const ids = byId ? [target] : target;
         const touched = [];
         for (const id of ids) {
           const l = listings.get(id);
           if (!l || l.property_cl_id === propertyClId) continue;
+          if (byId && l.property_cl_id != null) continue; // ... AND property_cl_id IS NULL
           if (respectsLock && l.manual_property_lock) continue;
           l.property_cl_id = propertyClId;
           touched.push(id);
@@ -87,13 +100,13 @@ function makeFakeClient(listings) {
 
 const listingsMap = (rows) => new Map(rows.map((r) => [r.id, { ...BASE, ...r }]));
 
-test('Nivel 1 no re-agrupa un anuncio separado a mano aunque comparta property_code', async () => {
+test('Nivel 1 no re-agrupa un anuncio separado a mano aunque comparta corredora y código interno', async () => {
   // L1 y L2 son la misma publicación de la misma corredora; el equipo sacó L2 a
   // una ficha propia (property Q, manual_property_lock). Llega L3, sin agrupar.
   const listings = listingsMap([
-    { id: 'L1', property_code: 'PC-1', property_cl_id: 'P', manual_property_lock: false },
-    { id: 'L2', property_code: 'PC-1', property_cl_id: 'Q', manual_property_lock: true },
-    { id: 'L3', property_code: 'PC-1', property_cl_id: null, manual_property_lock: false },
+    { id: 'L1', advertiser_id: 'a1', seller_reference: 'BV3535', property_cl_id: 'P', manual_property_lock: false },
+    { id: 'L2', advertiser_id: 'a1', seller_reference: 'BV3535', property_cl_id: 'Q', manual_property_lock: true },
+    { id: 'L3', advertiser_id: 'a1', seller_reference: 'bv3535', property_cl_id: null, manual_property_lock: false },
   ]);
   const client = makeFakeClient(listings);
 
@@ -106,8 +119,8 @@ test('Nivel 1 no re-agrupa un anuncio separado a mano aunque comparta property_c
 
 test('Nivel 1 suma la republicación a la ficha curada cuando el resto del grupo está fijado a mano', async () => {
   const listings = listingsMap([
-    { id: 'L1', property_code: 'PC-2', property_cl_id: 'M', manual_property_lock: true },
-    { id: 'L2', property_code: 'PC-2', property_cl_id: null, manual_property_lock: false },
+    { id: 'L1', advertiser_id: 'a1', seller_reference: 'AB-1', property_cl_id: 'M', manual_property_lock: true },
+    { id: 'L2', advertiser_id: 'a1', seller_reference: 'AB-1', property_cl_id: null, manual_property_lock: false },
   ]);
   const client = makeFakeClient(listings);
 
@@ -119,8 +132,8 @@ test('Nivel 1 suma la republicación a la ficha curada cuando el resto del grupo
 
 test('Nivel 1 sigue creando la ficha cuando el grupo no tiene nada fijado a mano', async () => {
   const listings = listingsMap([
-    { id: 'L1', property_code: 'PC-3', property_cl_id: null },
-    { id: 'L2', property_code: 'PC-3', property_cl_id: null },
+    { id: 'L1', advertiser_id: 'a1', seller_reference: 'CD-9', property_cl_id: null },
+    { id: 'L2', advertiser_id: 'a1', seller_reference: 'CD-9', property_cl_id: null },
   ]);
   const client = makeFakeClient(listings);
 
@@ -133,8 +146,8 @@ test('Nivel 1 sigue creando la ficha cuando el grupo no tiene nada fijado a mano
 
 test('un grupo enteramente fijado a mano ni siquiera entra a la cola de Nivel 1', async () => {
   const listings = listingsMap([
-    { id: 'L1', property_code: 'PC-4', property_cl_id: 'M', manual_property_lock: true },
-    { id: 'L2', property_code: 'PC-4', property_cl_id: 'N', manual_property_lock: true },
+    { id: 'L1', advertiser_id: 'a1', seller_reference: 'EF-2', property_cl_id: 'M', manual_property_lock: true },
+    { id: 'L2', advertiser_id: 'a1', seller_reference: 'EF-2', property_cl_id: 'N', manual_property_lock: true },
   ]);
   const client = makeFakeClient(listings);
 

@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0078 · Matching MANUAL de propiedades: unir a mano N property_cl en una sola
+-- 0079 · Matching MANUAL de propiedades: unir a mano N property_cl en una sola
 --        (y poder separar lo que quedó mal unido)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- El dedup automático (Nivel 1 determinista + Nivel 2 probabilístico, ver 0064)

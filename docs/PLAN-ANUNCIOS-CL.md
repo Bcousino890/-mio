@@ -194,7 +194,7 @@ Arranca solo con Las Condes activa.
 - Consolidación "ganador": coords del listing con `location_confidence` más alta;
   m² moda; precio mínimo como "precio de mercado"; unión de portales.
 - Cola de revisión manual para score intermedio (0.45–0.75).
-- **Nivel 3 — matching MANUAL (migración 0078, IMPLEMENTADO):** el score nunca
+- **Nivel 3 — matching MANUAL (migración 0079, IMPLEMENTADO):** el score nunca
   llega al 100%; el equipo mirando las fotos sí. Desde `/chile/propiedades` se
   arrastra una ficha sobre otra (o se marcan varias con el modo "Unir") y se
   fusionan en una sola; el reverso es "Separar" por aviso dentro de la ficha.

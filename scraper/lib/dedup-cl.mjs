@@ -122,7 +122,7 @@ export function consolidateFields(rows) {
 }
 
 export const LISTING_FIELDS_FOR_CONSOLIDATION = `
-  id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
+  id, external_id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
   square_meters, bedrooms, bathrooms, comuna_id, localidad, latitude, longitude,
   location_confidence, exact_address, portal, source_type, advertiser_type,
   advertiser_id, is_active, first_seen_at, last_seen_at, portal_first_seen_at
@@ -178,7 +178,25 @@ export async function createPropertyCl(client, rows) {
       c.portals, c.source_types, c.advertiser_kinds, c.is_active, c.first_seen_at, c.last_seen_at, c.portal_first_seen_at,
     ]
   );
-  return inserted[0].id;
+  const propertyClId = inserted[0].id;
+
+  // Restaura el pin manual si esta propiedad ya tenía uno corregido a mano antes
+  // de rehacer los grupos (respaldo por external_id, migración 0079). Sin esto,
+  // reconstruir el dedup borraría las correcciones de ubicación del equipo.
+  const externalIds = rows.map((r) => r.external_id).filter(Boolean);
+  if (externalIds.length > 0) {
+    await client.query(
+      `UPDATE property_cl p SET manual_latitude = b.manual_latitude,
+                                manual_longitude = b.manual_longitude,
+                                updated_at = now()
+         FROM property_cl_manual_pin_backup b
+        WHERE p.id = $1 AND b.external_id = ANY($2::text[])
+          AND b.manual_latitude IS NOT NULL`,
+      [propertyClId, externalIds]
+    );
+  }
+
+  return propertyClId;
 }
 
 /**
@@ -195,10 +213,23 @@ export async function createPropertyCl(client, rows) {
 export async function runNivel1DedupCl(client, options = {}) {
   const { batch_size = 2000 } = options;
 
+  // ── REGLA DE DEDUPLICACIÓN (decisión del usuario) ─────────────────────────
+  // Dos anuncios son la MISMA propiedad SOLO si coinciden la corredora
+  // (advertiser_id) Y su código interno (seller_reference, ej. "BV3535"). Si no
+  // coinciden ambos, NO se deduplica: cada anuncio queda como su propia ficha.
+  //
+  // Antes se agrupaba por `property_code` (el id de propiedad de Mercado Libre),
+  // que fusionaba fichas que no eran la misma propiedad.
+  //
+  // Venta y arriendo NO se separan a propósito: una misma propiedad publicada en
+  // ambas operaciones por la misma corredora, con el mismo código interno, es UNA
+  // ficha con sus dos anuncios (cada anuncio conserva su propia operación).
   const pending = await client.query(
-    `SELECT DISTINCT property_code, advertiser_id
+    `SELECT DISTINCT advertiser_id, seller_reference
      FROM listings_cl
-     WHERE property_code IS NOT NULL AND property_cl_id IS NULL
+     WHERE advertiser_id IS NOT NULL
+       AND seller_reference IS NOT NULL AND btrim(seller_reference) <> ''
+       AND property_cl_id IS NULL
        AND NOT manual_property_lock
      LIMIT $1`,
     [batch_size]
@@ -207,21 +238,20 @@ export async function runNivel1DedupCl(client, options = {}) {
   let created = 0;
   let linked = 0;
 
-  for (const { property_code, advertiser_id } of pending.rows) {
-    // Familia completa (incluye filas ya clusterizadas de una corrida previa,
-    // para fusionar altas nuevas al mismo grupo en vez de crear uno duplicado).
+  for (const { advertiser_id, seller_reference } of pending.rows) {
+    // Familia completa (incluye filas ya agrupadas en una corrida previa, para
+    // sumar altas nuevas al mismo grupo en vez de crear uno duplicado).
+    // Comparación del código interno sin distinguir mayúsculas ni espacios.
     // `manual_property_lock` marca los anuncios que una PERSONA movió a mano
-    // desde /chile/propiedades (unir/separar, migración 0078): esos quedan
-    // fuera del reagrupamiento automático — si no, separar a mano dos anuncios
-    // que comparten property_code se revertía en el siguiente barrido.
+    // desde /chile/propiedades (unir/separar, migración 0079).
     const { rows: family } = await client.query(
       `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION}, manual_property_lock FROM listings_cl
-       WHERE property_code = $1 AND advertiser_id IS NOT DISTINCT FROM $2`,
-      [property_code, advertiser_id]
+       WHERE advertiser_id = $1 AND lower(btrim(seller_reference)) = lower(btrim($2))`,
+      [advertiser_id, seller_reference]
     );
     // Los anuncios fijados a mano no se reasignan, pero SÍ cuentan para saber a
     // qué property_cl pertenece el grupo: una republicación nueva bajo el mismo
-    // property_code debe caer en la ficha curada, no abrir una paralela. Se
+    // código interno debe caer en la ficha curada, no abrir una paralela. Se
     // prefiere el property_cl de un anuncio NO fijado (la rama automática) y
     // solo se cae al fijado cuando es el único que hay.
     const unlocked = family.filter((r) => !r.manual_property_lock);
@@ -249,7 +279,30 @@ export async function runNivel1DedupCl(client, options = {}) {
     if (existingId) await refreshPropertyClAggregates(client, propertyClId);
   }
 
-  return { groups_processed: pending.rows.length, created, linked };
+  // ── Segunda pasada: SIN deduplicar ────────────────────────────────────────
+  // Todo anuncio que no quedó en un grupo (sin código interno, o único con ese
+  // código) pasa a ser SU PROPIA propiedad, 1 anuncio = 1 ficha. Sin esto, los
+  // anuncios sin `seller_reference` —que son muchos— nunca tendrían property_cl
+  // y desaparecerían de la vista de Propiedades.
+  const { rows: singles } = await client.query(
+    `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION} FROM listings_cl
+     WHERE property_cl_id IS NULL
+     LIMIT $1`,
+    [batch_size]
+  );
+  let standalone = 0;
+  for (const row of singles) {
+    const propertyClId = await createPropertyCl(client, [row]);
+    await client.query(
+      `UPDATE listings_cl SET property_cl_id = $1, match_confidence = 1, updated_at = now()
+       WHERE id = $2 AND property_cl_id IS NULL`,
+      [propertyClId, row.id]
+    );
+    standalone++;
+    linked++;
+  }
+
+  return { groups_processed: pending.rows.length, created: created + standalone, linked, standalone };
 }
 
 /**

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Matching MANUAL de propiedades canónicas chilenas (property_cl) — migración
-// 0078.
+// 0079.
 //
 // El dedup automático agrupa anuncios por score (Nivel 1 determinista + Nivel 2
 // probabilístico, ver 0064 y scraper/lib/clustering-cl.mjs). Cuando se queda
@@ -31,6 +31,7 @@ import type { PoolClient } from 'pg'
 
 export type ConsolidationRow = {
   id: string
+  external_id: string | null
   property_cl_id: string | null
   operation: string | null
   property_type: string | null
@@ -60,7 +61,7 @@ export type ConsolidationRow = {
 // Columnas que necesita consolidateFields, en el mismo orden y con los mismos
 // nombres que LISTING_FIELDS_FOR_CONSOLIDATION de scraper/lib/dedup-cl.mjs.
 export const LISTING_FIELDS_FOR_CONSOLIDATION = `
-  id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
+  id, external_id, property_cl_id, operation, property_type, price, price_uf, uf_rate, uf_rate_date,
   square_meters, bedrooms, bathrooms, comuna_id, localidad, latitude, longitude,
   location_confidence, exact_address, portal, source_type, advertiser_type,
   advertiser_id, is_active, first_seen_at, last_seen_at, portal_first_seen_at
@@ -440,8 +441,8 @@ export async function splitListingsCl(
   )
   if (source.length === 0) throw new Error('property_cl no encontrada')
 
-  const { rows: family } = await client.query<ConsolidationRow & { external_id: string | null; advertiser_name: string | null; match_confidence: string | null }>(
-    `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION}, external_id, advertiser_name, match_confidence
+  const { rows: family } = await client.query<ConsolidationRow & { advertiser_name: string | null; match_confidence: string | null }>(
+    `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION}, advertiser_name, match_confidence
      FROM listings_cl WHERE property_cl_id = $1`,
     [propertyId]
   )

@@ -4,7 +4,7 @@ import { mergePropertiesCl } from '@/lib/property-cl-merge'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/chile/property-cl/merge — unir a mano N propiedades canónicas en
-// una sola (matching manual, migración 0078).
+// una sola (matching manual, migración 0079).
 //
 // El dedup automático no llega al 100%: cuando el equipo ve que dos fichas son
 // el mismo inmueble (mismas fotos, misma casa, distinta corredora), lo arregla

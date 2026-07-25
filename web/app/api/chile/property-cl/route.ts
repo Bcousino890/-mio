@@ -182,7 +182,7 @@ export async function GET(request: NextRequest) {
         p.manual_latitude,
         p.manual_longitude,
         p.manual_pin_set_at,
-        -- Sello de la última unión/separación MANUAL (0078): la ficha lleva el
+        -- Sello de la última unión/separación MANUAL (0079): la ficha lleva el
         -- distintivo "unido a mano" para no confundir un grupo curado por el
         -- equipo con uno propuesto por el score del dedup.
         p.manual_merge_at,

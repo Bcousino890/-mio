@@ -223,7 +223,7 @@ export async function runNivel2ClusteringCl(client, options = {}) {
   } = options;
 
   // 1. Aristas confirmadas. Aquí entran también las decisiones HUMANAS del
-  //    matching manual (migración 0078, web/lib/property-cl-merge.ts): unir a
+  //    matching manual (migración 0079, web/lib/property-cl-merge.ts): unir a
   //    mano inserta pares `confirmed` con decided_by='human' (para que el
   //    grupo curado siga junto en cada barrido) y separar a mano los deja en
   //    `rejected` (por eso este SELECT deja de verlos). El par directo queda
