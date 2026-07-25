@@ -222,7 +222,14 @@ export async function runNivel2ClusteringCl(client, options = {}) {
     max_component_size = DEFAULT_MAX_COMPONENT_SIZE,
   } = options;
 
-  // 1. Aristas confirmadas.
+  // 1. Aristas confirmadas. Aquí entran también las decisiones HUMANAS del
+  //    matching manual (migración 0078, web/lib/property-cl-merge.ts): unir a
+  //    mano inserta pares `confirmed` con decided_by='human' (para que el
+  //    grupo curado siga junto en cada barrido) y separar a mano los deja en
+  //    `rejected` (por eso este SELECT deja de verlos). El par directo queda
+  //    así protegido; una cadena indirecta (a–c–b con scores altos) todavía
+  //    podría volver a unirlos — de ahí el techo de componente y el
+  //    re-particionado estricto de más abajo.
   const { rows: edgeRows } = await client.query(
     `SELECT listing_a AS a, listing_b AS b, score
      FROM listing_match_cl

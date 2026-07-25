@@ -194,6 +194,20 @@ Arranca solo con Las Condes activa.
 - Consolidación "ganador": coords del listing con `location_confidence` más alta;
   m² moda; precio mínimo como "precio de mercado"; unión de portales.
 - Cola de revisión manual para score intermedio (0.45–0.75).
+- **Nivel 3 — matching MANUAL (migración 0078, IMPLEMENTADO):** el score nunca
+  llega al 100%; el equipo mirando las fotos sí. Desde `/chile/propiedades` se
+  arrastra una ficha sobre otra (o se marcan varias con el modo "Unir") y se
+  fusionan en una sola; el reverso es "Separar" por aviso dentro de la ficha.
+  - API: `POST /api/chile/property-cl/merge` y `.../split`
+    (`web/lib/property-cl-merge.ts`).
+  - La decisión humana PESA MÁS que el automático y no se revierte sola:
+    `listings_cl.manual_property_lock` saca esos avisos del reagrupamiento de
+    Nivel 1, y los pares quedan en `listing_match_cl` con `decided_by='human'`
+    (`confirmed` al unir, `rejected` al separar) — que el feeder automático ya
+    respetaba (`WHERE decided_by = 'auto'` en su upsert).
+  - Trazabilidad: `property_merge_log_cl` guarda cada unión/separación con los
+    avisos movidos y su ficha de origen (incluido el `ref_code` de la absorbida,
+    que se borra al unir).
 
 ### H4 — Entidad corredora `corredoras_cl` + trazabilidad
 - Migración `corredoras_cl`: identidad consolidada por `advertiser_id` (clave

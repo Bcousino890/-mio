@@ -199,6 +199,7 @@ export async function runNivel1DedupCl(client, options = {}) {
     `SELECT DISTINCT property_code, advertiser_id
      FROM listings_cl
      WHERE property_code IS NOT NULL AND property_cl_id IS NULL
+       AND NOT manual_property_lock
      LIMIT $1`,
     [batch_size]
   );
@@ -209,24 +210,38 @@ export async function runNivel1DedupCl(client, options = {}) {
   for (const { property_code, advertiser_id } of pending.rows) {
     // Familia completa (incluye filas ya clusterizadas de una corrida previa,
     // para fusionar altas nuevas al mismo grupo en vez de crear uno duplicado).
+    // `manual_property_lock` marca los anuncios que una PERSONA movió a mano
+    // desde /chile/propiedades (unir/separar, migración 0078): esos quedan
+    // fuera del reagrupamiento automático — si no, separar a mano dos anuncios
+    // que comparten property_code se revertía en el siguiente barrido.
     const { rows: family } = await client.query(
-      `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION} FROM listings_cl
+      `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION}, manual_property_lock FROM listings_cl
        WHERE property_code = $1 AND advertiser_id IS NOT DISTINCT FROM $2`,
       [property_code, advertiser_id]
     );
-    if (family.length === 0) continue;
+    // Los anuncios fijados a mano no se reasignan, pero SÍ cuentan para saber a
+    // qué property_cl pertenece el grupo: una republicación nueva bajo el mismo
+    // property_code debe caer en la ficha curada, no abrir una paralela. Se
+    // prefiere el property_cl de un anuncio NO fijado (la rama automática) y
+    // solo se cae al fijado cuando es el único que hay.
+    const unlocked = family.filter((r) => !r.manual_property_lock);
+    if (unlocked.length === 0) continue;
 
-    const existingId = family.find((r) => r.property_cl_id)?.property_cl_id ?? null;
+    const existingId =
+      unlocked.find((r) => r.property_cl_id)?.property_cl_id ??
+      family.find((r) => r.property_cl_id)?.property_cl_id ??
+      null;
     let propertyClId = existingId;
     if (!propertyClId) {
-      propertyClId = await createPropertyCl(client, family);
+      propertyClId = await createPropertyCl(client, unlocked);
       created++;
     }
 
-    const listingIds = family.map((r) => r.id);
+    const listingIds = unlocked.map((r) => r.id);
     await client.query(
       `UPDATE listings_cl SET property_cl_id = $1, match_confidence = 1, updated_at = now()
-       WHERE id = ANY($2::uuid[]) AND property_cl_id IS DISTINCT FROM $1`,
+       WHERE id = ANY($2::uuid[]) AND property_cl_id IS DISTINCT FROM $1
+         AND NOT manual_property_lock`,
       [propertyClId, listingIds]
     );
     linked += listingIds.length;
