@@ -43,6 +43,7 @@ const LISTINGS_JSON = `
       'portal', l.portal,
       'source_url', l.source_url,
       'is_active', l.is_active,
+      'manual_property_lock', l.manual_property_lock,
       'seller_reference', l.seller_reference,
       'photos', COALESCE(l.photos, '[]'::jsonb),
       'description', l.description,
@@ -181,6 +182,10 @@ export async function GET(request: NextRequest) {
         p.manual_latitude,
         p.manual_longitude,
         p.manual_pin_set_at,
+        -- Sello de la última unión/separación MANUAL (0079): la ficha lleva el
+        -- distintivo "unido a mano" para no confundir un grupo curado por el
+        -- equipo con uno propuesto por el score del dedup.
+        p.manual_merge_at,
         -- días en mercado REALES: preferir portal_first_seen_at (antigüedad que
         -- el propio portal declara, "Publicado hace N días") sobre first_seen_at
         -- (cuándo NOSOTROS lo vimos, que subestima si el discovery llegó tarde

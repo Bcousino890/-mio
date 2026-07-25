@@ -6,7 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle,
 } from 'lucide-react'
 
 const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
@@ -21,6 +21,9 @@ type Listing = {
   currency: string | null
   source_url: string | null
   is_active: boolean
+  // El aviso fue movido a mano entre fichas (unión/separación manual, 0079):
+  // el dedup automático ya no lo reagrupa por su cuenta.
+  manual_property_lock?: boolean
   seller_reference: string | null
   photos: string[]
   description: string | null
@@ -52,6 +55,9 @@ type Property = {
   listings: Listing[]
   manual_latitude: number | null
   manual_longitude: number | null
+  // Sello de la última unión/separación manual (0079) — distingue un grupo
+  // curado por el equipo de uno propuesto por el score del dedup.
+  manual_merge_at: string | null
 }
 type Stats = { total: number; multi_corredora: number; confirmed: number; median_price: number | null }
 
@@ -112,7 +118,27 @@ function priceSpread(p: Property) {
 }
 
 // ─── Card ───────────────────────────────────────────────────────────────────
-function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => void }) {
+// Además de abrir la ficha, la tarjeta es el gesto de MATCHING MANUAL: se
+// arrastra una sobre otra para unirlas (o se seleccionan varias con el modo
+// "Unir"). El dedup automático nunca acierta el 100%; el equipo mirando las
+// fotos sí, y esa decisión pesa más que el score (ver 0079).
+type CardHandlers = {
+  onOpen: (p: Property) => void
+  selectMode: boolean
+  selected: boolean
+  onToggleSelect: (p: Property) => void
+  dragId: string | null
+  isDropTarget: boolean
+  onDragStartCard: (id: string) => void
+  onDragEndCard: () => void
+  onDragOverCard: (id: string | null) => void
+  onDropOnCard: (targetId: string) => void
+}
+
+function PropertyCardCl({
+  p, onOpen, selectMode, selected, onToggleSelect,
+  dragId, isDropTarget, onDragStartCard, onDragEndCard, onDragOverCard, onDropOnCard,
+}: { p: Property } & CardHandlers) {
   const [imgError, setImgError] = useState(false)
   // Si la portada cambia (re-scrape que trajo otra foto), reintentar la carga:
   // sin esto, un error previo dejaba el placeholder pegado con la foto nueva.
@@ -120,10 +146,41 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
   const multi = p.corredora_count > 1
+  const isDragging = dragId === p.id
+  const canDrop = dragId != null && dragId !== p.id
+
+  const activate = () => (selectMode ? onToggleSelect(p) : onOpen(p))
+
   return (
-    <button onClick={() => onOpen(p)}
-      className="text-left bg-slate-800/70 border border-slate-700 rounded-xl overflow-hidden hover:border-amber-500/50 hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5 transition-all duration-200 group">
+    // <div role="button"> en vez de <button>: un <button draggable> no arrastra
+    // de forma fiable en todos los navegadores (el botón se queda con el gesto).
+    <div
+      role="button" tabIndex={0}
+      onClick={activate}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate() } }}
+      draggable
+      onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', p.id); onDragStartCard(p.id) }}
+      onDragEnd={onDragEndCard}
+      onDragOver={e => { if (canDrop) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; onDragOverCard(p.id) } }}
+      onDragLeave={() => { if (isDropTarget) onDragOverCard(null) }}
+      onDrop={e => { if (!canDrop) return; e.preventDefault(); onDropOnCard(p.id) }}
+      className={`text-left bg-slate-800/70 border rounded-xl overflow-hidden cursor-pointer transition-all duration-200 group
+        ${isDragging ? 'opacity-40 scale-95' : ''}
+        ${isDropTarget ? 'border-emerald-400 ring-2 ring-emerald-400/60 shadow-xl shadow-emerald-900/30'
+          : selected ? 'border-amber-400 ring-2 ring-amber-400/60'
+          : 'border-slate-700 hover:border-amber-500/50 hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5'}`}>
       <div className="relative aspect-[4/3] bg-slate-900 overflow-hidden">
+        {isDropTarget && (
+          <div className="absolute inset-0 z-20 bg-emerald-950/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-emerald-200 pointer-events-none">
+            <Link2 size={24} /><span className="text-xs font-semibold mt-1">Soltar para unir</span>
+          </div>
+        )}
+        {selectMode && (
+          <span className={`absolute z-10 top-2 left-2 w-6 h-6 rounded-full border-2 flex items-center justify-center backdrop-blur-sm
+            ${selected ? 'bg-amber-500 border-amber-400 text-white' : 'bg-black/50 border-white/60 text-transparent'}`}>
+            <Check size={14} />
+          </span>
+        )}
         {p.cover_photo && !imgError ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={p.cover_photo} alt="" onError={() => setImgError(true)} loading="lazy"
@@ -131,12 +188,20 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
         ) : (
           <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageOff size={28} /></div>
         )}
-        <div className="absolute inset-x-0 top-0 p-2 flex items-start justify-between">
-          {multi ? (
-            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-600/90 text-white backdrop-blur-sm shadow">
-              <GitCompareArrows size={10} /> {p.corredora_count} corredoras
-            </span>
-          ) : <span />}
+        <div className={`absolute inset-x-0 top-0 p-2 flex items-start justify-between gap-1 ${selectMode ? 'pl-9' : ''}`}>
+          <div className="flex flex-col items-start gap-1">
+            {multi && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-600/90 text-white backdrop-blur-sm shadow">
+                <GitCompareArrows size={10} /> {p.corredora_count} corredoras
+              </span>
+            )}
+            {p.manual_merge_at && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-600/90 text-white backdrop-blur-sm shadow"
+                title="Agrupada a mano por el equipo — el dedup automático ya no la reagrupa">
+                <Link2 size={10} /> unida a mano
+              </span>
+            )}
+          </div>
           <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-black/55 text-slate-200 backdrop-blur-sm" title={conf.t}>
             <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {p.location_confidence === 'confirmed' ? 'Rol SII' : 'sin confirmar'}
           </span>
@@ -165,7 +230,7 @@ function PropertyCardCl({ p, onOpen }: { p: Property; onOpen: (p: Property) => v
           {p.days_on_market != null && <><span className="text-slate-600">·</span><span className="inline-flex items-center gap-1"><CalendarClock size={11} /> {marketTime(p.days_on_market)}</span></>}
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -198,8 +263,119 @@ function CorredoraThumb({ src }: { src?: string }) {
   )
 }
 
+// ─── Diálogo de unión manual ────────────────────────────────────────────────
+// Confirma el match manual antes de tocar la BD y deja elegir QUÉ ficha
+// sobrevive (la que conserva su ref_code, su pin corregido y su historial): al
+// arrastrar, por defecto gana la de destino; al seleccionar varias, la que más
+// avisos tiene — mismo criterio determinista que usa el clustering.
+function MergeDialog({ properties, defaultSurvivorId, onCancel, onMerged }: {
+  properties: Property[]
+  defaultSurvivorId?: string
+  onCancel: () => void
+  onMerged: (survivorId: string, message: string) => void
+}) {
+  const fallbackSurvivor = useMemo(() => (
+    [...properties].sort((a, b) => (b.listing_count ?? 0) - (a.listing_count ?? 0))[0]?.id
+  ), [properties])
+  const [survivorId, setSurvivorId] = useState<string>(defaultSurvivorId ?? fallbackSurvivor ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const totalListings = properties.reduce((n, p) => n + (p.listing_count ?? p.listings.length), 0)
+  // Señal de "ojo con esto": unir fichas de comunas distintas casi siempre es
+  // un error de selección, no un match real.
+  const comunas = new Set(properties.map(p => p.comuna_name).filter(Boolean))
+  const operations = new Set(properties.map(p => p.operation))
+
+  const doMerge = useCallback(async () => {
+    setSaving(true); setError(null)
+    try {
+      const res = await fetch('/api/chile/property-cl/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: properties.map(p => p.id), survivor_id: survivorId }),
+      })
+      const data = await res.json()
+      if (!data.success) { setError(data.error ?? 'No se pudo unir'); return }
+      onMerged(data.survivor_id, `${properties.length} fichas unidas en ${data.survivor_ref_code ?? 'una sola'} · ${data.moved_listings} aviso${data.moved_listings === 1 ? '' : 's'} movido${data.moved_listings === 1 ? '' : 's'}`)
+    } catch {
+      setError('Error de red al unir')
+    } finally {
+      setSaving(false)
+    }
+  }, [properties, survivorId, onMerged])
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm" onClick={onCancel}>
+      <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 p-5 pb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-100 inline-flex items-center gap-2"><Link2 size={18} className="text-emerald-400" /> Unir en una sola propiedad</h2>
+            <p className="text-xs text-slate-400 mt-1">
+              {properties.length} fichas · {totalListings} aviso{totalListings === 1 ? '' : 's'} quedarán bajo la ficha que elijas.
+              Se puede deshacer después separando el aviso desde la ficha.
+            </p>
+          </div>
+          <button onClick={onCancel} className="p-1.5 rounded-full bg-slate-700/60 text-slate-300 hover:bg-slate-700"><X size={16} /></button>
+        </div>
+
+        {(comunas.size > 1 || operations.size > 1) && (
+          <div className="mx-5 mb-3 flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <span>
+              {comunas.size > 1 && <>Las fichas son de comunas distintas ({[...comunas].join(', ')}). </>}
+              {operations.size > 1 && <>Hay venta y arriendo mezclados. </>}
+              Revisa que sea de verdad el mismo inmueble.
+            </span>
+          </div>
+        )}
+
+        <div className="px-5 pb-4 space-y-2">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Ficha que se conserva</div>
+          {properties.map(p => {
+            const isSurvivor = p.id === survivorId
+            return (
+              <label key={p.id}
+                className={`flex items-center gap-3 rounded-xl p-2.5 border cursor-pointer transition-colors ${isSurvivor ? 'bg-emerald-500/5 border-emerald-500/40' : 'bg-slate-900/50 border-slate-700 hover:border-slate-600'}`}>
+                <input type="radio" name="survivor" checked={isSurvivor} onChange={() => setSurvivorId(p.id)}
+                  className="w-4 h-4 accent-emerald-500 shrink-0" />
+                <CorredoraThumb src={p.cover_photo ?? undefined} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-mono text-amber-400/90">{p.ref_code ?? '—'}</span>
+                    <span className="text-sm font-semibold text-slate-100">{priceMain(p)}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 truncate mt-0.5">
+                    {p.comuna_name || 'Sin comuna'} · {p.square_meters ?? '—'} m² · {p.bedrooms ?? '—'} dorm.
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    {p.listing_count} aviso{p.listing_count === 1 ? '' : 's'} · {p.corredora_count} corredora{p.corredora_count === 1 ? '' : 's'}
+                    {isSurvivor && <span className="text-emerald-400"> · conserva ref. y pin</span>}
+                  </div>
+                </div>
+              </label>
+            )
+          })}
+        </div>
+
+        {error && <div className="mx-5 mb-3 text-xs text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-lg px-3 py-2">{error}</div>}
+
+        <div className="flex items-center justify-end gap-2 px-5 pb-5">
+          <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-700/60">Cancelar</button>
+          <button onClick={doMerge} disabled={saving || !survivorId}
+            className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
+            <Link2 size={15} /> {saving ? 'Uniendo…' : `Unir ${properties.length} fichas`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Modal / ficha interna ──────────────────────────────────────────────────
-function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () => void; onRefetched: (p: Property) => void }) {
+function PropertyModal({ p, onClose, onRefetched, onSplit }: {
+  p: Property; onClose: () => void; onRefetched: (p: Property) => void; onSplit: (message: string) => void
+}) {
   const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
   const cheapest = sortedListings.find(l => l.price != null)?.listing_id
   // Aviso cuya ubicación declarada se muestra/corrige en el mapa de la ficha
@@ -336,6 +512,35 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
       setTimeout(() => setRefetchMsg(null), 4000)
     }
   }, [activeListing, refetching, p.id, onRefetched])
+
+  // Separar un aviso de este grupo (matching manual inverso, 0079): el aviso no
+  // se borra, se muda a una ficha propia y el par queda como "rechazado por un
+  // humano" para que el dedup automático no lo vuelva a juntar. Es el "deshacer"
+  // tanto de una unión manual como de un agrupamiento del score que estaba mal.
+  const [splittingId, setSplittingId] = useState<string | null>(null)
+  const [splitError, setSplitError] = useState<string | null>(null)
+  const doSplit = useCallback(async (listingId: string) => {
+    if (p.listings.length < 2 || splittingId) return
+    if (!window.confirm('¿Separar este aviso en una ficha propia? El aviso no se borra: pasa a ser una propiedad aparte y el dedup automático no volverá a unirlos.')) return
+    setSplittingId(listingId)
+    setSplitError(null)
+    try {
+      const res = await fetch('/api/chile/property-cl/split', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_id: p.id, listing_ids: [listingId] }),
+      })
+      const data = await res.json()
+      if (!data.success) { setSplitError(data.error ?? 'No se pudo separar'); return }
+      const refreshed = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(p.id)}`).then(r => r.json())
+      if (refreshed.success && refreshed.data) onRefetched(refreshed.data)
+      onSplit(`Aviso separado en la ficha ${data.new_ref_code ?? 'nueva'}`)
+    } catch {
+      setSplitError('Error de red al separar')
+    } finally {
+      setSplittingId(null)
+    }
+  }, [p.id, p.listings.length, splittingId, onRefetched, onSplit])
 
   // Si la galería cambió (re-scrape con más/menos fotos) y el índice quedó fuera
   // de rango, volver a una foto válida en vez de apuntar a un hueco.
@@ -592,6 +797,12 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                 </span>
               )}
             </div>
+            {p.listings.length > 1 && (
+              <p className="text-[11px] text-slate-500 mb-2">
+                ¿Alguno no es esta propiedad? Sepáralo con <Unlink size={11} className="inline -mt-0.5" /> y queda como ficha propia.
+              </p>
+            )}
+            {splitError && <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded-lg px-3 py-2 mb-2">{splitError}</div>}
             <div className="space-y-2.5">
               {sortedListings.map(l => {
                 const isBest = l.listing_id === cheapest && p.corredora_count > 1
@@ -624,6 +835,13 @@ function PropertyModal({ p, onClose, onRefetched }: { p: Property; onClose: () =
                       <div className="flex items-center justify-between gap-2 mt-1.5">
                         <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
                         <div className="flex items-center gap-2 shrink-0">
+                          {p.listings.length > 1 && (
+                            <button onClick={() => doSplit(l.listing_id)} disabled={splittingId != null}
+                              title="No es la misma propiedad: separar este aviso en una ficha propia"
+                              className="text-[11px] text-slate-500 hover:text-rose-400 disabled:opacity-50 inline-flex items-center gap-1">
+                              <Unlink size={11} /> {splittingId === l.listing_id ? 'Separando…' : 'Separar'}
+                            </button>
+                          )}
                           {l.web_propia_url && (
                             <a href={l.web_propia_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-500 hover:text-cyan-400 inline-flex items-center gap-1" title="Web propia de la corredora"><Home size={11} /> web</a>
                           )}
@@ -665,6 +883,77 @@ export default function PropiedadesChileClient() {
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [selected, setSelected] = useState<Property | null>(null)
+
+  // ── Matching MANUAL (0079) ────────────────────────────────────────────────
+  // Dos gestos para lo mismo: arrastrar una ficha sobre otra, o activar el modo
+  // "Unir", marcar varias y unirlas. El dedup automático deja pasar casos que a
+  // ojo son obvios; esto los cierra sin esperar al score.
+  const [mergeMode, setMergeMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  const [mergeDialog, setMergeDialog] = useState<{ properties: Property[]; defaultSurvivorId?: string } | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  // Fuerza el refetch del listado tras unir/separar (el conteo y las fichas
+  // cambian, y la propiedad absorbida ya no existe).
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const showToast = useCallback((message: string) => {
+    setToast(message)
+    setTimeout(() => setToast(null), 5000)
+  }, [])
+
+  const toggleSelect = useCallback((p: Property) => {
+    setSelectedIds(prev => (prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]))
+  }, [])
+
+  const exitMergeMode = useCallback(() => { setMergeMode(false); setSelectedIds([]) }, [])
+
+  const pickProperties = useCallback((ids: string[]) => (
+    ids.map(id => items.find(i => i.id === id)).filter((p): p is Property => !!p)
+  ), [items])
+
+  // Soltar la ficha arrastrada sobre otra = unirlas. Si venía de una selección
+  // múltiple, se arrastra el grupo entero sobre el destino (que además queda
+  // propuesto como la ficha que sobrevive).
+  const onDropOnCard = useCallback((targetId: string) => {
+    const sourceId = dragId
+    setDropTargetId(null)
+    setDragId(null)
+    if (!sourceId || sourceId === targetId) return
+    const ids = selectedIds.includes(sourceId)
+      ? [...new Set([...selectedIds, targetId])]
+      : [sourceId, targetId]
+    const properties = pickProperties(ids)
+    if (properties.length < 2) return
+    setMergeDialog({ properties, defaultSurvivorId: targetId })
+  }, [dragId, selectedIds, pickProperties])
+
+  const openMergeFromSelection = useCallback(() => {
+    const properties = pickProperties(selectedIds)
+    if (properties.length < 2) return
+    setMergeDialog({ properties })
+  }, [pickProperties, selectedIds])
+
+  const handleMerged = useCallback(async (survivorId: string, message: string) => {
+    const mergedIds = mergeDialog?.properties.map(p => p.id) ?? []
+    setMergeDialog(null)
+    setSelectedIds([])
+    setMergeMode(false)
+    setReloadKey(k => k + 1)
+    showToast(message)
+    // Si la ficha abierta participó de la unión, mostrar ya la superviviente
+    // (la absorbida dejó de existir).
+    if (selected && mergedIds.includes(selected.id)) {
+      const refreshed = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(survivorId)}`).then(r => r.json()).catch(() => null)
+      setSelected(refreshed?.success ? refreshed.data : null)
+    }
+  }, [mergeDialog, selected, showToast])
+
+  const handleSplit = useCallback((message: string) => {
+    setReloadKey(k => k + 1)
+    showToast(message)
+  }, [showToast])
 
   // Estado de filtros — hidratado desde la URL al montar (compartible/persistente).
   const initial = useMemo(() => {
@@ -748,7 +1037,7 @@ export default function PropiedadesChileClient() {
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed])
+  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, reloadKey])
 
   const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0)
   const clearAll = () => {
@@ -764,7 +1053,11 @@ export default function PropiedadesChileClient() {
           <div className="p-2 rounded-lg bg-amber-500/15 text-amber-400"><Home size={20} /></div>
           <div>
             <h1 className="text-xl font-bold text-slate-100 leading-none">Propiedades</h1>
-            <p className="text-[11px] text-slate-500 mt-1">Inmuebles canónicos deduplicados · 1 propiedad = 1 ficha, aunque la publiquen N corredoras</p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Inmuebles canónicos deduplicados · 1 propiedad = 1 ficha, aunque la publiquen N corredoras
+              <span className="text-slate-600"> · </span>
+              <span className="inline-flex items-center gap-1 text-slate-400"><Move size={11} /> arrastra una ficha sobre otra para unirlas</span>
+            </p>
           </div>
         </div>
 
@@ -789,6 +1082,13 @@ export default function PropiedadesChileClient() {
           </select>
           <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${activeFilters > 0 ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
             <SlidersHorizontal size={14} /> Filtros {activeFilters > 0 && `(${activeFilters})`}
+          </button>
+          {/* Matching manual: el modo selección. El arrastre funciona siempre,
+              con o sin este modo activo. */}
+          <button onClick={() => (mergeMode ? exitMergeMode() : setMergeMode(true))}
+            title="Marcar varias fichas que son el mismo inmueble y unirlas en una sola"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mergeMode ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
+            <Link2 size={14} /> {mergeMode ? 'Salir de unir' : 'Unir'}
           </button>
           <div className="relative">
             <button onClick={() => setShowSortMenu(!showSortMenu)} className="flex items-center gap-1 text-sm text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600 whitespace-nowrap">
@@ -855,7 +1155,18 @@ export default function PropiedadesChileClient() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {items.map(p => <PropertyCardCl key={p.id} p={p} onOpen={setSelected} />)}
+            {items.map(p => (
+              <PropertyCardCl key={p.id} p={p} onOpen={setSelected}
+                selectMode={mergeMode}
+                selected={selectedIds.includes(p.id)}
+                onToggleSelect={toggleSelect}
+                dragId={dragId}
+                isDropTarget={dropTargetId === p.id}
+                onDragStartCard={setDragId}
+                onDragEndCard={() => { setDragId(null); setDropTargetId(null) }}
+                onDragOverCard={setDropTargetId}
+                onDropOnCard={onDropOnCard} />
+            ))}
           </div>
         )}
 
@@ -868,7 +1179,42 @@ export default function PropiedadesChileClient() {
         )}
       </div>
 
-      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} onRefetched={setSelected} />}
+      {/* Barra flotante del modo "Unir" — vive fuera del scroll para seguir a
+          mano mientras se recorre la grilla buscando la ficha gemela. */}
+      {mergeMode && (
+        <div className="fixed bottom-4 inset-x-0 z-[90] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 bg-slate-800 border border-emerald-500/40 rounded-full shadow-2xl shadow-black/50 pl-4 pr-2 py-2">
+            <span className="text-sm text-slate-200">
+              {selectedIds.length === 0
+                ? 'Marca las fichas que son el mismo inmueble'
+                : `${selectedIds.length} ficha${selectedIds.length === 1 ? '' : 's'} seleccionada${selectedIds.length === 1 ? '' : 's'}`}
+            </span>
+            {selectedIds.length > 0 && (
+              <button onClick={() => setSelectedIds([])} className="text-xs text-slate-400 hover:text-slate-200">Limpiar</button>
+            )}
+            <button onClick={openMergeFromSelection} disabled={selectedIds.length < 2}
+              className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-1.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600">
+              <Link2 size={14} /> Unir
+            </button>
+            <button onClick={exitMergeMode} className="p-1.5 rounded-full text-slate-400 hover:text-slate-200 hover:bg-slate-700"><X size={16} /></button>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-20 inset-x-0 z-[130] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-2 text-sm bg-emerald-600 text-white px-4 py-2 rounded-full shadow-xl">
+            <BadgeCheck size={15} /> {toast}
+          </div>
+        </div>
+      )}
+
+      {mergeDialog && (
+        <MergeDialog properties={mergeDialog.properties} defaultSurvivorId={mergeDialog.defaultSurvivorId}
+          onCancel={() => setMergeDialog(null)} onMerged={handleMerged} />
+      )}
+
+      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} onRefetched={setSelected} onSplit={handleSplit} />}
     </div>
   )
 }
