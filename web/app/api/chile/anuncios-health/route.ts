@@ -209,6 +209,30 @@ export async function GET(request: Request) {
       console.warn('[anuncios-health] sin métricas de cola:', e instanceof Error ? e.message : e)
     }
 
+    // Resultado de las últimas fichas procesadas. Un job puede COMPLETARSE sin
+    // haber guardado nada (handleDetailJob devuelve {ok:false} cuando el fetch o
+    // el parseo fallan, en vez de lanzar), así que "completado" no significa
+    // "guardado": sin ver el `output` es imposible distinguir una cola que
+    // avanza de una que se está comiendo los anuncios en silencio.
+    let detailOutcomes: { outcome: string; count: number }[] = []
+    try {
+      const o = await pool.query(
+        `SELECT COALESCE(
+                  CASE WHEN output->>'ok' = 'true' THEN 'ok:' || COALESCE(output->>'changeType', 'sin cambios')
+                       WHEN output ? 'ok' THEN 'falló: ' || COALESCE(output->>'reason', '?')
+                       ELSE 'excepción: ' || left(COALESCE(output->>'message', output::text), 60) END,
+                  'sin salida') AS outcome,
+                count(*)::int AS n
+         FROM pgboss.job
+         WHERE name = 'detail-cl' AND state IN ('completed', 'failed')
+           AND completed_on > now() - interval '1 hour'
+         GROUP BY 1 ORDER BY 2 DESC LIMIT 12`
+      )
+      detailOutcomes = o.rows.map((r) => ({ outcome: r.outcome, count: num(r.n) }))
+    } catch (e) {
+      console.warn('[anuncios-health] sin desglose de fichas:', e instanceof Error ? e.message : e)
+    }
+
     // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
     // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
     // quedó guardado la última vez que corrió un barrido (que puede tener horas).
@@ -266,6 +290,9 @@ export async function GET(request: Request) {
       // Colas de trabajo: `created` pendiente creciendo = el cuello de botella
       // está en la descarga de fichas, no en el barrido.
       queues,
+      // Qué devolvieron las fichas procesadas en la última hora: "completado" no
+      // implica "guardado".
+      detail_outcomes: detailOutcomes,
     })
   } catch (error) {
     console.error('Error en anuncios-health:', error)
