@@ -23,6 +23,17 @@ const SORT_CLAUSES: Record<string, string> = {
   sqm: '(CASE WHEN p.square_meters > 0 THEN p.canonical_price::numeric / p.square_meters ELSE NULL END) ASC NULLS LAST',
 }
 
+// Sin agrupar la fila es el ANUNCIO, así que ordenar por el agregado de la ficha
+// daría un orden incoherente con lo que se ve en la tarjeta (dos anuncios de la
+// misma ficha comparten agregado pero muestran precios distintos).
+const SORT_CLAUSES_UNGROUPED: Record<string, string> = {
+  recent: 'l.last_seen_at DESC',
+  price_asc: 'l.price ASC NULLS LAST',
+  price_desc: 'l.price DESC NULLS LAST',
+  corredoras: 'p.corredora_count DESC, l.last_seen_at DESC',
+  sqm: '(CASE WHEN l.square_meters > 0 THEN l.price::numeric / l.square_meters ELSE NULL END) ASC NULLS LAST',
+}
+
 // Desglose de anuncios (listings_cl) de una propiedad canónica: cada corredora
 // que la publica, con su precio y estado. Se usa tanto en el detalle como para
 // enriquecer las filas de la lista con el resumen de sus corredoras.
@@ -89,6 +100,12 @@ export async function GET(request: NextRequest) {
   // "En canje / sin exclusividad": misma propiedad publicada por >1 corredora.
   const onlyMultiCorredora = sp.get('only_multi_corredora') === 'true'
   const onlyConfirmed = sp.get('only_confirmed') === 'true'
+  // AGRUPAR (`grouped=1`) = una ficha por INMUEBLE: junta los anuncios que
+  // comparten corredora + código interno, incluidos los que la misma corredora
+  // publica a la vez en venta y en arriendo. Es opt-in a propósito: por defecto
+  // la lista enseña UN anuncio = UNA ficha, para que el recuento cuadre con lo
+  // que muestra el portal y no parezca que faltan propiedades.
+  const grouped = sp.get('grouped') === '1'
 
   const sortParam = sp.get('sort')
   const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'recent'
@@ -104,21 +121,43 @@ export async function GET(request: NextRequest) {
       return `$${params.length}`
     }
 
+    // El detalle por id SIEMPRE va contra la ficha canónica (property_cl): la
+    // vista sin agrupar solo cambia CÓMO se lista, no qué es una ficha.
+    const listUngrouped = !id && !grouped
+
+    // Sin agrupar, la fila es el ANUNCIO: los filtros de precio/superficie/
+    // operación tienen que mirar al anuncio, no al agregado de la ficha (si no,
+    // un anuncio de arriendo saldría bajo el filtro "venta" solo porque su ficha
+    // agrupa ambos, que es justo lo que la vista sin agrupar quiere separar).
+    const F = listUngrouped
+      ? { operation: 'l.operation', price: 'l.price', sqm: 'l.square_meters', bedrooms: 'l.bedrooms', active: 'l.is_active' }
+      : { operation: 'p.operation', price: 'p.canonical_price', sqm: 'p.square_meters', bedrooms: 'p.bedrooms', active: 'p.is_active' }
+
+    // LEFT JOIN a property_cl, NO inner: un anuncio recién guardado todavía no
+    // tiene ficha asignada (se la pone el dedup, que corre cada 15 min). Con
+    // inner join esos anuncios quedaban INVISIBLES en la lista — exactamente el
+    // "faltan propiedades" que esta vista existe para evitar.
+    const fromClause = listUngrouped
+      ? `FROM listings_cl l
+         LEFT JOIN property_cl p ON p.id = l.property_cl_id
+         LEFT JOIN chile_comunas c ON c.id = COALESCE(l.comuna_id, p.comuna_id)`
+      : `FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id`
+
     const conditions: string[] = []
     if (id) {
       conditions.push(`p.id = ${addParam(id)}`)
     } else {
-      // La lista muestra por defecto solo propiedades con algún anuncio activo;
-      // el detalle por id sí puede traer una ya dada de baja (historial).
-      conditions.push('p.is_active = true')
+      // La lista muestra por defecto solo lo que sigue publicado; el detalle por
+      // id sí puede traer una ficha ya dada de baja (historial).
+      conditions.push(`${F.active} = true`)
     }
-    if (operation && operation !== 'all') conditions.push(`p.operation = ${addParam(operation)}`)
+    if (operation && operation !== 'all') conditions.push(`${F.operation} = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
     if (comunaCode) conditions.push(`c.sii_comuna_code = ${addParam(comunaCode)}`)
-    if (priceMin !== null) conditions.push(`p.canonical_price >= ${addParam(priceMin)}`)
-    if (priceMax !== null) conditions.push(`p.canonical_price <= ${addParam(priceMax)}`)
-    if (sqmMin !== null) conditions.push(`p.square_meters >= ${addParam(sqmMin)}`)
-    if (bedroomsMin !== null) conditions.push(`p.bedrooms >= ${addParam(bedroomsMin)}`)
+    if (priceMin !== null) conditions.push(`${F.price} >= ${addParam(priceMin)}`)
+    if (priceMax !== null) conditions.push(`${F.price} <= ${addParam(priceMax)}`)
+    if (sqmMin !== null) conditions.push(`${F.sqm} >= ${addParam(sqmMin)}`)
+    if (bedroomsMin !== null) conditions.push(`${F.bedrooms} >= ${addParam(bedroomsMin)}`)
     if (onlyMultiCorredora) conditions.push('p.corredora_count > 1')
     if (onlyConfirmed) conditions.push(`p.location_confidence = 'confirmed'`)
 
@@ -132,9 +171,9 @@ export async function GET(request: NextRequest) {
          COUNT(*) AS total,
          COUNT(*) FILTER (WHERE p.corredora_count > 1) AS multi_corredora,
          COUNT(*) FILTER (WHERE p.location_confidence = 'confirmed') AS confirmed,
-         percentile_cont(0.5) WITHIN GROUP (ORDER BY p.canonical_price)
-           FILTER (WHERE p.canonical_price > 0) AS median_price
-       FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id ${whereClause}`,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY ${F.price})
+           FILTER (WHERE ${F.price} > 0) AS median_price
+       ${fromClause} ${whereClause}`,
       params
     )
     const statsRow = statsResult.rows[0] ?? {}
@@ -149,18 +188,23 @@ export async function GET(request: NextRequest) {
     const dataParams = [...params, pageSize, offset]
     const query = `
       SELECT
-        p.id,
+        ${listUngrouped ? 'COALESCE(p.id, l.id)' : 'p.id'} AS id,
+        -- Clave de fila: sin agrupar hay una fila por ANUNCIO, así que dos
+        -- anuncios de la misma ficha comparten el mismo id de propiedad (y
+        -- abren la misma ficha, que es lo correcto) pero necesitan claves
+        -- distintas en la grilla.
+        ${listUngrouped ? 'l.id' : 'p.id'} AS row_key,
         p.ref_code,
-        p.operation,
+        ${F.operation} AS operation,
         p.property_type,
-        p.canonical_price,
-        p.canonical_price_uf,
+        ${F.price} AS canonical_price,
+        ${listUngrouped ? 'l.price_uf' : 'p.canonical_price_uf'} AS canonical_price_uf,
         p.uf_rate,
         p.uf_rate_date,
-        p.square_meters,
-        CASE WHEN p.square_meters > 0 THEN ROUND(p.canonical_price / p.square_meters) ELSE 0 END AS price_sqm,
-        p.bedrooms,
-        p.bathrooms,
+        ${F.sqm} AS square_meters,
+        CASE WHEN ${F.sqm} > 0 THEN ROUND(${F.price}::numeric / ${F.sqm}) ELSE 0 END AS price_sqm,
+        ${F.bedrooms} AS bedrooms,
+        ${listUngrouped ? 'l.bathrooms' : 'p.bathrooms'} AS bathrooms,
         p.comuna_id,
         c.name AS comuna_name,
         c.sii_comuna_code,
@@ -170,12 +214,12 @@ export async function GET(request: NextRequest) {
         p.exact_address,
         p.location_confidence,
         p.rol_matriz,
-        p.listing_count,
-        p.corredora_count,
+        ${listUngrouped ? '1' : 'p.listing_count'} AS listing_count,
+        ${listUngrouped ? '1' : 'p.corredora_count'} AS corredora_count,
         p.portals,
         p.source_types,
         p.advertiser_kinds,
-        p.is_active,
+        ${F.active} AS is_active,
         p.first_seen_at,
         p.last_seen_at,
         p.portal_first_seen_at,
@@ -191,12 +235,11 @@ export async function GET(request: NextRequest) {
         -- (cuándo NOSOTROS lo vimos, que subestima si el discovery llegó tarde
         -- a la comuna — ver 0076).
         EXTRACT(DAY FROM (now() - COALESCE(p.portal_first_seen_at, p.first_seen_at)))::int AS days_on_market,
-        ${COVER_PHOTO},
+        ${listUngrouped ? '(l.photos->>0) AS cover_photo' : COVER_PHOTO},
         ${LISTINGS_JSON}
-      FROM property_cl p
-      LEFT JOIN chile_comunas c ON c.id = p.comuna_id
+      ${fromClause}
       ${whereClause}
-      ORDER BY ${SORT_CLAUSES[sort]}
+      ORDER BY ${(listUngrouped ? SORT_CLAUSES_UNGROUPED : SORT_CLAUSES)[sort]}
       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
     `
 

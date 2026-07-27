@@ -6,7 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
-  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle,
+  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers,
 } from 'lucide-react'
 
 // La ficha (modal) y sus tipos/helpers viven en un módulo compartido: la misma
@@ -375,6 +375,10 @@ export default function PropiedadesChileClient() {
   const [bedroomsMin, setBedroomsMin] = useState<number | null>(initial.get('dorm') ? Number(initial.get('dorm')) : null)
   const [onlyMulti, setOnlyMulti] = useState(initial.get('canje') === '1')
   const [onlyConfirmed, setOnlyConfirmed] = useState(initial.get('conf') === '1')
+  // Agrupar = 1 ficha por INMUEBLE (junta venta+arriendo de la misma corredora
+  // con el mismo código interno). APAGADO por defecto: la lista enseña un
+  // anuncio = una ficha, para que el recuento cuadre con el del portal.
+  const [grouped, setGrouped] = useState(initial.get('agrupar') === '1')
   const [sortBy, setSortBy] = useState<SortKey>((initial.get('sort') as SortKey) in SORT_LABELS ? (initial.get('sort') as SortKey) : 'recent')
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [showFilters, setShowFilters] = useState(true)
@@ -386,7 +390,7 @@ export default function PropiedadesChileClient() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [searchInput])
 
-  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy])
+  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy, grouped])
 
   // Sincroniza el estado a la URL sin recargar (history.replaceState). Incluye
   // la ficha abierta (?p=<id>) — URL específica y compartible por propiedad,
@@ -402,12 +406,13 @@ export default function PropiedadesChileClient() {
     if (bedroomsMin != null) qs.set('dorm', String(bedroomsMin))
     if (onlyMulti) qs.set('canje', '1')
     if (onlyConfirmed) qs.set('conf', '1')
+    if (grouped) qs.set('agrupar', '1')
     if (sortBy !== 'recent') qs.set('sort', sortBy)
     if (page > 1) qs.set('page', String(page))
     if (selected) qs.set('p', selected.id)
     const s = qs.toString()
     window.history.replaceState(null, '', s ? `?${s}` : window.location.pathname)
-  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy, page, selected])
+  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, grouped, sortBy, page, selected])
 
   // Al montar: si la URL trae ?p=<id> (link compartido/bookmark de una ficha
   // específica), abre esa ficha directo — sin depender de que esté en la
@@ -433,6 +438,7 @@ export default function PropiedadesChileClient() {
     if (bedroomsMin != null) params.append('bedrooms_min', String(bedroomsMin))
     if (onlyMulti) params.append('only_multi_corredora', 'true')
     if (onlyConfirmed) params.append('only_confirmed', 'true')
+    if (grouped) params.append('grouped', '1')
 
     fetch(`/api/chile/property-cl?${params.toString()}`)
       .then(r => r.json())
@@ -442,7 +448,7 @@ export default function PropiedadesChileClient() {
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, reloadKey])
+  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, grouped, reloadKey])
 
   const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0)
   const clearAll = () => {
@@ -459,7 +465,9 @@ export default function PropiedadesChileClient() {
           <div>
             <h1 className="text-xl font-bold text-slate-100 leading-none">Propiedades</h1>
             <p className="text-[11px] text-slate-500 mt-1">
-              Inmuebles canónicos deduplicados · 1 propiedad = 1 ficha, aunque la publiquen N corredoras
+              {grouped
+                ? '1 ficha por inmueble · los anuncios de la misma corredora con el mismo código interno (venta y arriendo incluidos) van juntos'
+                : 'Todos los anuncios, uno por ficha · pulsa «Agrupar» para juntar los de la misma corredora + código interno'}
               <span className="text-slate-600"> · </span>
               <span className="inline-flex items-center gap-1 text-slate-400"><Move size={11} /> arrastra una ficha sobre otra para unirlas</span>
             </p>
@@ -490,6 +498,13 @@ export default function PropiedadesChileClient() {
           </button>
           {/* Matching manual: el modo selección. El arrastre funciona siempre,
               con o sin este modo activo. */}
+          <button onClick={() => setGrouped(g => !g)}
+            title={grouped
+              ? 'Mostrando 1 ficha por inmueble: los anuncios de la misma corredora con el mismo código interno (incluidos venta y arriendo del mismo inmueble) van juntos.'
+              : 'Mostrando todos los anuncios, uno por ficha — el recuento cuadra con el del portal. Pulsa para agrupar los duplicados de la misma corredora + código interno.'}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${grouped ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
+            <Layers size={14} /> {grouped ? 'Agrupadas' : 'Agrupar'}
+          </button>
           <button onClick={() => (mergeMode ? exitMergeMode() : setMergeMode(true))}
             title="Marcar varias fichas que son el mismo inmueble y unirlas en una sola"
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${mergeMode ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
@@ -561,7 +576,7 @@ export default function PropiedadesChileClient() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {items.map(p => (
-              <PropertyCardCl key={p.id} p={p} onOpen={setSelected}
+              <PropertyCardCl key={(p as { row_key?: string }).row_key ?? p.id} p={p} onOpen={setSelected}
                 selectMode={mergeMode}
                 selected={selectedIds.includes(p.id)}
                 onToggleSelect={toggleSelect}
