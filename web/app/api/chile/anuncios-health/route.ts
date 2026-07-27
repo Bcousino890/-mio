@@ -126,9 +126,16 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const [counts, targets, versionPulse] = await Promise.all([
+    // ?live=0 → NO sondear el portal en esta lectura. El panel se auto-refresca
+    // seguido para verse en vivo, y sondear Portal Inmobiliario en cada pasada
+    // serían cientos de peticiones/hora desde la IP de la VPS — justo lo que ya
+    // provocó un 403 en producción. Con live=0 solo se leen los contadores de la
+    // BD (baratos); el frontend conserva el último total del portal conocido y
+    // lo re-sondea de tanto en tanto o cuando el usuario pulsa Refrescar.
+    const skipLive = new URL(request.url).searchParams.get('live') === '0'
+    const [counts, targets, versionPulse, versionPulse1h, timeline] = await Promise.all([
       pool.query(`
         SELECT
           (SELECT count(*) FROM listings_cl) AS listings_total,
@@ -164,6 +171,23 @@ export async function GET() {
         WHERE scraped_at > now() - interval '24 hours'
         GROUP BY change_type ORDER BY n DESC
       `),
+      // Misma foto pero de la ÚLTIMA HORA. Sin este contraste, el agregado de 24h
+      // no distingue "esto está pasando ahora" de "esto pasó de madrugada y ya se
+      // corrigió" — es lo que hacía ilegible el pico de bajas de un barrido roto.
+      pool.query(`
+        SELECT change_type, count(*) AS n
+        FROM listing_version_log_cl
+        WHERE scraped_at > now() - interval '1 hour'
+        GROUP BY change_type ORDER BY n DESC
+      `),
+      // Línea de tiempo por hora: deja ver EN QUÉ MOMENTO se produjo un pico y si
+      // ya se detuvo, en vez de un número acumulado sin contexto.
+      pool.query(`
+        SELECT date_trunc('hour', scraped_at) AS hora, change_type, count(*) AS n
+        FROM listing_version_log_cl
+        WHERE scraped_at > now() - interval '24 hours'
+        GROUP BY 1, 2 ORDER BY 1
+      `),
     ])
 
     const c = counts.rows[0]
@@ -172,9 +196,11 @@ export async function GET() {
     // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
     // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
     // quedó guardado la última vez que corrió un barrido (que puede tener horas).
-    const liveTotals = await Promise.all(
-      targets.rows.map((t) => probeLivePortalTotal(t.comuna, t.operation, t.property_type))
-    )
+    const liveTotals = skipLive
+      ? targets.rows.map(() => null)
+      : await Promise.all(
+          targets.rows.map((t) => probeLivePortalTotal(t.comuna, t.operation, t.property_type))
+        )
     const probedAt = new Date().toISOString()
 
     return NextResponse.json({
@@ -213,6 +239,14 @@ export async function GET() {
       })),
       // Pulso de actividad de las últimas 24h (altas, cambios de precio, bajas…).
       activity_24h: versionPulse.rows.map((r) => ({ change_type: r.change_type, count: num(r.n) })),
+      // Y el de la última hora: es lo que dice si algo está pasando AHORA.
+      activity_1h: versionPulse1h.rows.map((r) => ({ change_type: r.change_type, count: num(r.n) })),
+      // Por hora, para situar los picos en el tiempo.
+      activity_timeline: timeline.rows.map((r) => ({
+        hora: r.hora, change_type: r.change_type, count: num(r.n),
+      })),
+      // Si esta lectura sondeó el portal o solo leyó la BD (auto-refresco barato).
+      live_probed: !skipLive,
     })
   } catch (error) {
     console.error('Error en anuncios-health:', error)

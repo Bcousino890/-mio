@@ -18,18 +18,42 @@ type Target = {
   live_portal_total: number | null; live_probed_at: string | null
   cadencia: string
 }
+type Pulse = { change_type: string; count: number }
 type Health = {
   success: boolean; generated_at: string; totals: Totals
-  targets: Target[]; activity_24h: { change_type: string; count: number }[]
+  targets: Target[]; activity_24h: Pulse[]
+  activity_1h?: Pulse[]
+  activity_timeline?: { hora: string; change_type: string; count: number }[]
+  live_probed?: boolean
 }
 
 function ago(iso: string | null): string {
   if (!iso) return 'nunca'
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  // El reloj del servidor puede ir unos ms por delante del navegador: sin este
+  // clamp, una lectura recién generada se mostraba como "hace -1s".
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
   if (s < 60) return `hace ${s}s`
   if (s < 3600) return `hace ${Math.floor(s / 60)}m`
   if (s < 86400) return `hace ${Math.floor(s / 3600)}h`
   return `hace ${Math.floor(s / 86400)}d`
+}
+
+// Cadencias del refresco en vivo. La lectura barata solo toca la BD; la sonda al
+// portal es una petición real a Portal Inmobiliario por objetivo, así que va muy
+// espaciada — a 30s serían ~240 peticiones/hora desde la IP de la VPS, que es lo
+// que ya provocó un 403 en producción.
+const POLL_MS = 10_000
+const PROBE_MS = 5 * 60_000
+
+const CHANGE_LABEL: Record<string, string> = {
+  new: 'altas', delisted: 'bajas', reactivated: 'reactivados',
+  price_change: 'cambios de precio', updated: 'actualizados', agency_change: 'cambio de corredora',
+}
+const CHANGE_CLS: Record<string, string> = {
+  new: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
+  delisted: 'text-rose-300 border-rose-500/30 bg-rose-500/10',
+  reactivated: 'text-sky-300 border-sky-500/30 bg-sky-500/10',
+  price_change: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
 }
 
 const CAD: Record<string, { t: string; cls: string; icon: React.ReactNode }> = {
@@ -58,10 +82,29 @@ export default function AnunciosHealthClient() {
   const [rerunning, setRerunning] = useState(false)
   const [rerunMsg, setRerunMsg] = useState<string | null>(null)
 
-  const load = useCallback(() => {
-    fetch('/api/chile/anuncios-health')
+  // `withProbe=false` = lectura barata (solo BD). Conserva el último total del
+  // portal conocido por objetivo, para que la columna "Portal declara" no
+  // parpadee a "—" entre sondas.
+  const load = useCallback((withProbe = true) => {
+    fetch(`/api/chile/anuncios-health${withProbe ? '' : '?live=0'}`)
       .then(r => r.json())
-      .then(d => { if (d.success) { setData(d); setError(null) } else setError(d.error || 'Error') })
+      .then(d => {
+        if (!d.success) { setError(d.error || 'Error'); return }
+        setError(null)
+        setData(prev => {
+          if (!prev || d.live_probed) return d
+          const previo = new Map(prev.targets.map(t => [`${t.comuna}|${t.operation}|${t.property_type}`, t]))
+          return {
+            ...d,
+            targets: d.targets.map((t: Target) => {
+              const p = previo.get(`${t.comuna}|${t.operation}|${t.property_type}`)
+              return t.live_portal_total == null && p
+                ? { ...t, live_portal_total: p.live_portal_total, live_probed_at: p.live_probed_at }
+                : t
+            }),
+          }
+        })
+      })
       .catch(e => setError(e instanceof Error ? e.message : 'Error'))
       .finally(() => setLoading(false))
   }, [])
@@ -76,10 +119,19 @@ export default function AnunciosHealthClient() {
   }, [load])
 
   useEffect(() => {
-    load()
-    const id = setInterval(load, 30000) // auto-refresco cada 30s
-    return () => clearInterval(id)
+    load(true)
+    const barato = setInterval(() => load(false), POLL_MS)   // BD: en vivo, cada 10s
+    const sonda = setInterval(() => load(true), PROBE_MS)    // portal: cada 5 min
+    return () => { clearInterval(barato); clearInterval(sonda) }
   }, [load])
+
+  // Reloj propio: hace avanzar los "hace Ns" aunque no haya llegado dato nuevo,
+  // que es lo que hace que el panel se vea vivo y no congelado.
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   const t = data?.totals
   const fresh = t?.last_seen_at ? ago(t.last_seen_at) : 'sin datos'
@@ -92,8 +144,14 @@ export default function AnunciosHealthClient() {
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-cyan-500/15 text-cyan-400"><Activity size={20} /></div>
             <div>
-              <h1 className="text-xl font-bold text-slate-100 leading-none">Salud del scraping · Anuncios CL</h1>
-              <p className="text-[11px] text-slate-500 mt-1">Estado del pipeline en vivo · última lectura {data ? ago(data.generated_at) : '—'}</p>
+              <h1 className="text-xl font-bold text-slate-100 leading-none flex items-center gap-2">
+                Salud del scraping · Anuncios CL
+                <span className="inline-flex items-center gap-1 text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                  title={`Se actualiza solo cada ${POLL_MS / 1000}s. El total del portal se re-consulta cada ${PROBE_MS / 60000} min (es una petición real a Portal Inmobiliario).`}>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> en vivo
+                </span>
+              </h1>
+              <p className="text-[11px] text-slate-500 mt-1">Se actualiza solo cada {POLL_MS / 1000}s · última lectura {data ? ago(data.generated_at) : '—'}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -105,7 +163,8 @@ export default function AnunciosHealthClient() {
               className="inline-flex items-center gap-1.5 text-xs text-white bg-amber-600 border border-amber-600 px-3 py-2 rounded-lg hover:bg-amber-500 disabled:opacity-50">
               <RefreshCw size={13} className={rerunning ? 'animate-spin' : ''} /> Re-scrapear todo
             </button>
-            <button onClick={load} className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
+            <button onClick={() => load(true)} title="Vuelve a consultar el total real en Portal Inmobiliario ahora mismo"
+              className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
               <RefreshCw size={13} /> Refrescar
             </button>
           </div>
@@ -203,20 +262,50 @@ export default function AnunciosHealthClient() {
               </div>
             </div>
 
-            {/* Actividad 24h */}
-            <h2 className="text-sm font-semibold text-slate-300 mb-2">Actividad últimas 24 h</h2>
-            {data.activity_24h.length === 0 ? (
-              <div className="text-slate-500 text-sm bg-slate-800/40 border border-slate-700/60 rounded-xl px-4 py-3">Sin cambios registrados en las últimas 24 h.</div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {data.activity_24h.map((a) => (
-                  <span key={a.change_type} className="inline-flex items-center gap-2 text-xs bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-300">
-                    <span className="capitalize">{a.change_type}</span>
-                    <span className="font-bold text-slate-100">{a.count}</span>
-                  </span>
-                ))}
-              </div>
-            )}
+            {/* Actividad: última hora vs 24h. El contraste es lo que importa —
+                un acumulado de 24h no distingue un pico ya corregido de algo que
+                sigue pasando ahora mismo. */}
+            <h2 className="text-sm font-semibold text-slate-300 mb-2">Actividad</h2>
+            {(() => {
+              const h1 = new Map((data.activity_1h ?? []).map(a => [a.change_type, a.count]))
+              const tipos = data.activity_24h.map(a => a.change_type)
+              if (tipos.length === 0) {
+                return <div className="text-slate-500 text-sm bg-slate-800/40 border border-slate-700/60 rounded-xl px-4 py-3">Sin cambios registrados en las últimas 24 h.</div>
+              }
+              return (
+                <div className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500 border-b border-slate-700 bg-slate-800/80">
+                        <th className="px-4 py-2.5 font-semibold">Tipo de cambio</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">Última hora</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">Últimas 24 h</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.activity_24h.map((a) => {
+                        const ahora = h1.get(a.change_type) ?? 0
+                        return (
+                          <tr key={a.change_type} className="border-b border-slate-700/50 last:border-0">
+                            <td className="px-4 py-2.5">
+                              <span className={`inline-flex items-center text-[11px] px-2 py-0.5 rounded-full border ${CHANGE_CLS[a.change_type] ?? 'text-slate-300 border-slate-600 bg-slate-700/30'}`}>
+                                {CHANGE_LABEL[a.change_type] ?? a.change_type}
+                              </span>
+                            </td>
+                            <td className={`px-3 py-2.5 text-right font-semibold ${ahora > 0 ? 'text-slate-100' : 'text-slate-600'}`}>{ahora}</td>
+                            <td className="px-3 py-2.5 text-right text-slate-400">{a.count.toLocaleString('es-CL')}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-slate-500 px-4 py-2.5 border-t border-slate-700/60">
+                    La columna de 24 h es acumulada: incluye lo corregido. Para saber si algo sigue
+                    ocurriendo, mira la última hora.
+                  </p>
+                </div>
+              )
+            })()}
           </>
         )}
       </div>
