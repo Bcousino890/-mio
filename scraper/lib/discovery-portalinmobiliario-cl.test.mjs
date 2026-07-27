@@ -53,8 +53,15 @@ test('buildListUrl: ordena por más recientes y pagina con _Desde_N', () => {
   // causa de que la cobertura de comunas grandes cayera de ~70% a ~40%: la
   // bisección por precio creía que había menos anuncios de los reales.
   assert.equal(
-    buildListUrl({ ...base, offset: 48, priceRange: { minClp: 0, maxClp: 650000000 } }),
+    buildListUrl({ ...base, offset: 48, priceRange: { min: 0, max: 650000000, unit: 'CLP' } }),
     `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLP-650000000CLP/_Desde_49_NoIndex_True`
+  )
+  // Venta filtra en UF (CLF): confirmado en vivo contra Las Condes — el propio
+  // portal ofrece bandas nativas en UF y su suma da el total exacto sin
+  // bisección extra (ver PRICE_CEILING_CLF en discovery-portalinmobiliario-cl.mjs).
+  assert.equal(
+    buildListUrl({ ...base, offset: 0, priceRange: { min: 0, max: 15000, unit: 'CLF' } }),
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLF-15000CLF`
   )
   // Sin priceRange, sortRecent:false mantiene el formato clásico sin orden.
   assert.equal(
@@ -251,19 +258,20 @@ test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la
     calls[url] = (calls[url] || 0) + 1
     return { ok: true, html: `${url}|CALL|${calls[url]}` }
   }
+  // TARGET.operation es 'sale' → discoverTarget bisecta en UF (CLF), no CLP.
   const parseMetaFn = (html) => {
     const sep = html.lastIndexOf('|CALL|')
     const url = html.slice(0, sep)
     const call = Number(html.slice(sep + 6))
     if (!url.includes('_PriceRange_')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // barrido base: topa
-    if (url.includes('_PriceRange_0CLP-10000000000CLP')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // probe rango completo
-    if (url.includes('_PriceRange_0CLP-5000000000CLP')) {
+    if (url.includes('_PriceRange_0CLF-300000CLF')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // probe rango completo
+    if (url.includes('_PriceRange_0CLF-150000CLF')) {
       // 1ª vez (el probe de subdividePriceBands): "chica", queda como hoja.
       // 2ª vez (el barrido REAL de esa hoja): en realidad topa.
       return call === 1 ? { total: 800, pageCount: 1, resultsLimit: RESULTS_LIMIT } : { total: 2500, pageCount: 1, resultsLimit: RESULTS_LIMIT }
     }
-    if (url.includes('_PriceRange_5000000000CLP-10000000000CLP')) return { total: 50, pageCount: 1, resultsLimit: RESULTS_LIMIT }
-    // Sub-bandas nacidas de la corrección de [0, 5.000.000.000]: caben.
+    if (url.includes('_PriceRange_150000CLF-300000CLF')) return { total: 50, pageCount: 1, resultsLimit: RESULTS_LIMIT }
+    // Sub-bandas nacidas de la corrección de [0, 150.000]: caben.
     return { total: 1200, pageCount: 1, resultsLimit: RESULTS_LIMIT }
   }
   let n = 0
@@ -283,54 +291,82 @@ test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la
 test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso Colina)', async () => {
   // Modela una comuna densa (tipo Colina): la banda alta sigue por encima del
   // tope y hay que partirla otra vez. `probe` devuelve el total por rango.
-  const probe = async ({ minClp, maxClp }) => {
+  const probe = async ({ min, max }) => {
     // Densidad concentrada en la parte baja: [0, mitad) tiene mucho, arriba poco.
-    const span = maxClp - minClp
-    if (minClp === 0 && maxClp === 10_000_000_000) return 5699 // comuna entera
+    const span = max - min
+    if (min === 0 && max === 10_000_000_000) return 5699 // comuna entera
     if (span > 2_000_000_000) return 3000 // bandas anchas todavía topan
     return 1200 // bandas ya estrechas caben
   }
   const bands = await subdividePriceBands(probe, 2000)
   assert.ok(bands.length >= 2, 'debe partir la comuna en varias bandas')
   // Cubren [0, techo] sin huecos ni solapes (contiguas y ordenadas).
-  const sorted = [...bands].sort((a, b) => a.minClp - b.minClp)
-  assert.equal(sorted[0].minClp, 0)
-  assert.equal(sorted[sorted.length - 1].maxClp, 10_000_000_000)
-  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].minClp, sorted[i - 1].maxClp)
+  const sorted = [...bands].sort((a, b) => a.min - b.min)
+  assert.equal(sorted[0].min, 0)
+  assert.equal(sorted[sorted.length - 1].max, 10_000_000_000)
+  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].min, sorted[i - 1].max)
 })
 
 test('subdividePriceBands: comuna bajo el tope → una sola banda, sin bisecar', async () => {
   const probe = async () => 900
   const bands = await subdividePriceBands(probe, 2000)
   assert.equal(bands.length, 1)
-  assert.deepEqual(bands[0], { minClp: 0, maxClp: 10_000_000_000 })
+  assert.deepEqual(bands[0], { min: 0, max: 10_000_000_000, unit: 'CLP' })
 })
 
-test('subdividePriceBands: Las Condes casa/venta REAL (verificado en vivo 2026-07-24) — cobertura exacta sin huecos', async () => {
+test('subdividePriceBands: Las Condes casa/venta REAL en CLP (verificado en vivo 2026-07-24) — cobertura exacta sin huecos', async () => {
   // Totales capturados contra el portal real (venta/casa/las-condes-metropolitana,
-  // resultsLimit=2000): confirma que la bisección alcanza el 100% de la comuna —
-  // la suma de las bandas hoja da EXACTO el total sin filtro (3487), sin huecos
-  // ni traslapes. Cierra la duda de si el discovery puede cubrir comunas grandes
-  // por completo (sí puede) — la brecha 1.603 property_cl vs 3.487 anuncios
-  // crudos es dedup (N corredoras → 1 propiedad canónica) y/o ciclos de barrido
-  // aún pendientes en el VPS, no un límite del algoritmo de bisección.
+  // resultsLimit=2000): confirma que el ALGORITMO de bisección (unidad-agnóstico)
+  // alcanza el 100% de la comuna — la suma de las bandas hoja da EXACTO el total
+  // sin filtro (3487), sin huecos ni traslapes. discoverTarget ya no bisecta venta
+  // en CLP en producción (ver test siguiente, ahora usa CLF/UF), pero el algoritmo
+  // en sí debe seguir siendo correcto para cualquier unidad — este test lo fija.
   const REAL_TOTALS = {
     '0-10000000000': 3487, '0-5000000000': 3484, '0-2500000000': 3438,
     '0-1250000000': 3010, '0-625000000': 979, '625000000-1250000000': 2031,
     '625000000-937500000': 1162, '937500000-1250000000': 869,
     '1250000000-2500000000': 428, '2500000000-5000000000': 46, '5000000000-10000000000': 3,
   }
-  const probe = async ({ minClp, maxClp }) => REAL_TOTALS[`${minClp}-${maxClp}`] ?? null
+  const probe = async ({ min, max }) => REAL_TOTALS[`${min}-${max}`] ?? null
   const bands = await subdividePriceBands(probe, 2000)
 
-  const sorted = [...bands].sort((a, b) => a.minClp - b.minClp)
-  assert.equal(sorted[0].minClp, 0)
-  assert.equal(sorted[sorted.length - 1].maxClp, 10_000_000_000)
-  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].minClp, sorted[i - 1].maxClp)
-  for (const b of sorted) assert.ok((REAL_TOTALS[`${b.minClp}-${b.maxClp}`] ?? 0) <= 2000, `banda [${b.minClp},${b.maxClp}] no quedó bajo el tope`)
+  const sorted = [...bands].sort((a, b) => a.min - b.min)
+  assert.equal(sorted[0].min, 0)
+  assert.equal(sorted[sorted.length - 1].max, 10_000_000_000)
+  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].min, sorted[i - 1].max)
+  for (const b of sorted) assert.ok((REAL_TOTALS[`${b.min}-${b.max}`] ?? 0) <= 2000, `banda [${b.min},${b.max}] no quedó bajo el tope`)
 
-  const sum = sorted.reduce((s, b) => s + (REAL_TOTALS[`${b.minClp}-${b.maxClp}`] ?? 0), 0)
+  const sum = sorted.reduce((s, b) => s + (REAL_TOTALS[`${b.min}-${b.max}`] ?? 0), 0)
   assert.equal(sum, 3487) // === total real sin filtro: cobertura exacta, sin huecos
+})
+
+test('subdividePriceBands: Las Condes casa/venta REAL en UF/CLF (verificado en vivo 2026-07-27) — venta filtra en UF', async () => {
+  // Totales capturados en vivo contra el portal real, en UF (venta/casa/
+  // las-condes-metropolitana, techo PRICE_CEILING_CLF=300000, resultsLimit=2000).
+  // Confirma en datos reales los primeros niveles de bisección que el algoritmo
+  // efectivamente recorre con este techo: la banda sigue topada por debajo de
+  // 75.000 UF porque casi todo el inventario de Las Condes está ahí (las bandas
+  // NATIVAS del propio portal —0-15000, 15000-24000, 24000-∞ UF— dan
+  // 941+1316+1225=3482, el total exacto, evidencia de que UF es la unidad
+  // correcta para venta). Por debajo de 75.000 UF no se sondeó punto a punto
+  // contra el portal — se aproxima proporcionalmente al ancho solo para que la
+  // bisección del test termine determinísticamente.
+  const REAL_TOTALS_UF = {
+    '0-300000': 3482, '0-150000': 3480, '150000-300000': 2,
+    '0-75000': 3457, '75000-150000': 23,
+  }
+  const probe = async ({ min, max }) => {
+    const key = `${min}-${max}`
+    if (key in REAL_TOTALS_UF) return REAL_TOTALS_UF[key]
+    return Math.round(((max - min) / 75_000) * 3457)
+  }
+  const bands = await subdividePriceBands(probe, 2000, 0, 300_000, 'CLF')
+
+  const sorted = [...bands].sort((a, b) => a.min - b.min)
+  assert.equal(sorted[0].min, 0)
+  assert.equal(sorted[sorted.length - 1].max, 300_000)
+  for (const b of sorted) assert.equal(b.unit, 'CLF')
+  for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].min, sorted[i - 1].max)
 })
 
 test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna', async () => {

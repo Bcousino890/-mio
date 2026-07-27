@@ -32,11 +32,34 @@ import { fold } from './chile-comunas.mjs'
 const PAGE_SIZE = 48 // confirmado en Fase 0: 48 resultados por página (_Desde_49, _Desde_97…)
 
 // Bisección por banda de precio (para comunas que superan el tope de paginación
-// del portal, ~2000). Techo alto en CLP que cubre cualquier residencial chileno
-// (≈ USD 10M); el tramo por encima se barre como banda abierta [techo, ∞).
+// del portal, ~2000). Techo alto que cubre cualquier residencial chileno; el
+// tramo por encima se barre como banda abierta [techo, ∞).
 const PRICE_CEILING_CLP = 10_000_000_000
 const MAX_PRICE_DEPTH = 8            // 2^8 = 256 bandas máx: sobra para cualquier comuna
 const MIN_BAND_WIDTH_CLP = 10_000_000 // no bisecar por debajo de 10M CLP de ancho
+
+// VENTA: el portal filtra y muestra el precio en UF (Unidad de Fomento) — es la
+// moneda en la que casi toda propiedad en venta se publica en Chile. Verificado
+// en vivo contra Las Condes/casa/venta (2026-07-27): el propio portal ofrece
+// bandas NATIVAS en UF (`_PriceRange_0CLF-15000CLF`, `_PriceRange_15000CLF-24000CLF`,
+// `_PriceRange_24000CLF-0CLF` — "CLF" es el código ISO 4217 de la UF) y su suma da
+// EXACTO el total sin filtro (941+1316+1225=3482), sin bisección adicional. Bisecar
+// en CLP en cambio arrastra el redondeo de una tasa UF→CLP que el portal no usa
+// para filtrar — los bordes de banda en CLP no calzan con los bordes reales en UF
+// que el portal aplica internamente. ARRIENDO se deja en CLP (el arriendo mensual
+// en Chile se publica predominantemente en pesos, no en UF).
+const PRICE_CEILING_CLF = 300_000 // UF; cubre cualquier residencial (visto hasta ~58.000 UF)
+const MIN_BAND_WIDTH_CLF = 200    // UF; no bisecar por debajo de 200 UF de ancho
+
+function priceUnitFor(operation) {
+  return operation === 'sale' ? 'CLF' : 'CLP'
+}
+function priceCeilingFor(unit) {
+  return unit === 'CLF' ? PRICE_CEILING_CLF : PRICE_CEILING_CLP
+}
+function minBandWidthFor(unit) {
+  return unit === 'CLF' ? MIN_BAND_WIDTH_CLF : MIN_BAND_WIDTH_CLP
+}
 
 /** operación interna → segmento de URL de Portalinmobiliario. */
 export function operationSlug(operation) {
@@ -65,22 +88,23 @@ export function regionSlug(region) {
 }
 
 /**
- * Sufijo de filtro de banda de precio de Portalinmobiliario, en CLP. `0` = sin
+ * Sufijo de filtro de banda de precio de Portalinmobiliario. `unit` es 'CLP' o
+ * 'CLF' (UF — usada para venta, ver PRICE_CEILING_CLF más arriba). `0` = sin
  * límite (así lo escribe el propio portal: `_PriceRange_1000000000CLP-0CLP` =
- * "más de mil millones"). Filtra TODAS las publicaciones convirtiendo UF→CLP,
- * así que la unión de bandas cubre el 100% de la comuna (verificado: las bandas
- * nativas de Las Condes suman exactamente su total). `null` = sin filtro.
+ * "más de mil millones"). La unión de bandas cubre el 100% de la comuna
+ * (verificado: las bandas nativas de Las Condes suman exactamente su total,
+ * tanto en CLP como en CLF). `null` = sin filtro.
  */
 export function priceRangeSegment(priceRange) {
   if (!priceRange) return ''
-  const { minClp = 0, maxClp = 0 } = priceRange
-  return `/_PriceRange_${Math.round(minClp)}CLP-${Math.round(maxClp)}CLP`
+  const { min = 0, max = 0, unit = 'CLP' } = priceRange
+  return `/_PriceRange_${Math.round(min)}${unit}-${Math.round(max)}${unit}`
 }
 
 /**
  * URL de una página de listado de propiedades USADAS. `offset` en {0,48,96,…};
  * la página 1 (offset 0) no lleva sufijo, el resto usa `/_Desde_{offset+1}_NoIndex_True`.
- * `priceRange` opcional ({minClp,maxClp}) añade el filtro de banda de precio, que
+ * `priceRange` opcional ({min,max,unit}) añade el filtro de banda de precio, que
  * PI apila ANTES del sufijo de paginación.
  */
 export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0, priceRange = null, sortRecent = true }) {
@@ -291,18 +315,19 @@ async function sweepBandCorrective(client, ctx, range, seen, depth = 0) {
   const r = await sweepBand(client, ctx, range, seen)
   if (!r.capped) return { pages: r.pages, enqueued: r.enqueued, completed: r.completed, capped: false }
 
-  const minClp = range?.minClp ?? 0
-  const maxClp = range?.maxClp ?? PRICE_CEILING_CLP
-  const width = maxClp - minClp
-  if (depth >= MAX_PRICE_DEPTH || width <= MIN_BAND_WIDTH_CLP) {
+  const unit = range?.unit ?? 'CLP'
+  const min = range?.min ?? 0
+  const max = range?.max ?? priceCeilingFor(unit)
+  const width = max - min
+  if (depth >= MAX_PRICE_DEPTH || width <= minBandWidthFor(unit)) {
     // No se puede seguir partiendo: mejor esfuerzo, esta porción queda incompleta.
     return { pages: r.pages, enqueued: r.enqueued, completed: false, capped: true }
   }
 
-  const mid = minClp + Math.floor(width / 2)
+  const mid = min + Math.floor(width / 2)
   await ctx.sleep(ctx.politenessMs)
-  const lower = await sweepBandCorrective(client, ctx, { minClp, maxClp: mid }, seen, depth + 1)
-  const upper = await sweepBandCorrective(client, ctx, { minClp: mid, maxClp }, seen, depth + 1)
+  const lower = await sweepBandCorrective(client, ctx, { min, max: mid, unit }, seen, depth + 1)
+  const upper = await sweepBandCorrective(client, ctx, { min: mid, max, unit }, seen, depth + 1)
   return {
     pages: r.pages + lower.pages + upper.pages,
     enqueued: r.enqueued + lower.enqueued + upper.enqueued,
@@ -312,24 +337,24 @@ async function sweepBandCorrective(client, ctx, range, seen, depth = 0) {
 }
 
 /**
- * Bisección recursiva por precio: parte una banda [minClp,maxClp] hasta que cada
- * sub-banda esté bajo el tope de paginación del portal. `probe(range)` devuelve
- * el `total` que el portal declara para esa banda. Puro respecto a la red (recibe
- * `probe` inyectable). Devuelve las bandas hoja a barrer.
+ * Bisección recursiva por precio: parte una banda [min,max] (en `unit`, 'CLP' o
+ * 'CLF'/UF) hasta que cada sub-banda esté bajo el tope de paginación del portal.
+ * `probe(range)` devuelve el `total` que el portal declara para esa banda. Puro
+ * respecto a la red (recibe `probe` inyectable). Devuelve las bandas hoja a barrer.
  *
  * Colina (5699, banda alta 2118 > 2000) es justo el caso: la banda que aún topa
  * se subdivide sola, sin listas de barrios ni tope por comuna.
  */
-export async function subdividePriceBands(probe, resultsLimit, minClp = 0, maxClp = PRICE_CEILING_CLP, depth = 0) {
-  const total = await probe({ minClp, maxClp })
+export async function subdividePriceBands(probe, resultsLimit, min = 0, max = PRICE_CEILING_CLP, unit = 'CLP', depth = 0) {
+  const total = await probe({ min, max, unit })
   // Sin dato o ya bajo el tope: es una banda hoja.
-  if (total == null || total <= resultsLimit) return [{ minClp, maxClp }]
+  if (total == null || total <= resultsLimit) return [{ min, max, unit }]
   // No se puede seguir partiendo (profundidad/ancho mínimo): se barre igual
   // (topará, pero es el mejor esfuerzo — caso extremo improbable).
-  if (depth >= MAX_PRICE_DEPTH || (maxClp - minClp) <= MIN_BAND_WIDTH_CLP) return [{ minClp, maxClp }]
-  const mid = minClp + Math.floor((maxClp - minClp) / 2)
-  const lower = await subdividePriceBands(probe, resultsLimit, minClp, mid, depth + 1)
-  const upper = await subdividePriceBands(probe, resultsLimit, mid, maxClp, depth + 1)
+  if (depth >= MAX_PRICE_DEPTH || (max - min) <= minBandWidthFor(unit)) return [{ min, max, unit }]
+  const mid = min + Math.floor((max - min) / 2)
+  const lower = await subdividePriceBands(probe, resultsLimit, min, mid, unit, depth + 1)
+  const upper = await subdividePriceBands(probe, resultsLimit, mid, max, unit, depth + 1)
   return [...lower, ...upper]
 }
 
@@ -367,6 +392,9 @@ export async function discoverTarget(client, target, deps = {}) {
     // Comuna por encima del tope: subdividir por precio. Cada banda se barre
     // ENTERA; su unión cubre el 100% de la comuna. Los 2000 ya vistos en el
     // barrido base se re-ven en sus bandas (dedup natural por el Set `seen`).
+    // Venta bisecta en UF (moneda nativa del filtro de venta del portal, ver
+    // PRICE_CEILING_CLF); arriendo se mantiene en CLP.
+    const unit = priceUnitFor(target.operation)
     const probe = async (range) => {
       const url = buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation: target.operation, propertyType: target.property_type, priceRange: range })
       const res = await fetch(url, { profile: 'portalinmobiliario' })
@@ -374,7 +402,7 @@ export async function discoverTarget(client, target, deps = {}) {
       await sleep(politenessMs)
       return parseMeta(res.html).total
     }
-    const bands = await subdividePriceBands(probe, resultsLimit ?? 2000)
+    const bands = await subdividePriceBands(probe, resultsLimit ?? 2000, 0, priceCeilingFor(unit), unit)
     bandsUsed = bands.length
     completed = true
     for (const band of bands) {
