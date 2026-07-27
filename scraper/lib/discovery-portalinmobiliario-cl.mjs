@@ -64,6 +64,24 @@ const MIN_BAND_COVERAGE = 0.9
 // daría 80% y la marcaría incompleta sin motivo. Una banda solo se considera
 // truncada si le faltan MÁS de estos anuncios Y además baja del umbral.
 const MAX_BAND_SHORTFALL = 3
+// Umbral del barrido COMPLETO (unión de todas las bandas) contra el total de la
+// comuna. Es la puerta que habilita dar de baja, así que es más estricto que el
+// de banda: lo no visto se daría por dado de baja, y a 0,98 el error máximo
+// queda acotado (~70 de 3.482 en Las Condes). Medido en real: 99,5% en un
+// barrido local y 99,6% en producción, así que hay holgura de sobra.
+const MIN_SWEEP_COVERAGE = 0.98
+
+/**
+ * ¿Lo visto cuadra con lo que el portal declaró? Regla ÚNICA para banda y para
+ * barrido completo: vale si alcanza la fracción mínima O si lo que falta cabe en
+ * la tolerancia absoluta (para bandas/comunas diminutas, donde perder 1 anuncio
+ * ya hunde el porcentaje). `declared` desconocido o 0 → no se puede juzgar, se
+ * da por bueno (los guardas de `seen.size > 0` cubren ese caso).
+ */
+function coverageOk(seenCount, declared, minFraction) {
+  if (declared == null || declared <= 0) return true
+  return (declared - seenCount) <= MAX_BAND_SHORTFALL || seenCount / declared >= minFraction
+}
 
 function priceUnitFor(operation) {
   return operation === 'sale' ? 'CLF' : 'CLP'
@@ -333,8 +351,7 @@ async function sweepBand(client, ctx, priceRange, seen) {
   let coverage = null
   if (!capped && portalTotal != null && portalTotal > 0) {
     coverage = bandSeen.size / portalTotal
-    const shortfall = portalTotal - bandSeen.size
-    if (completed && shortfall > MAX_BAND_SHORTFALL && coverage < MIN_BAND_COVERAGE) {
+    if (completed && !coverageOk(bandSeen.size, portalTotal, MIN_BAND_COVERAGE)) {
       completed = false
       reason = reason ?? `cobertura insuficiente: ${bandSeen.size}/${portalTotal} vistos`
     }
@@ -474,11 +491,28 @@ export async function discoverTarget(client, target, deps = {}) {
     reason = `comuna topó paginación (total=${portalTotal}): subdividida en ${bandsUsed} bandas de precio`
   }
 
-  // Exhaustivo (seguro para dar de baja) = barrido base completo y no topado, o
-  // banda-por-banda con TODAS las bandas completas (unión = 100% de la comuna).
-  const exhaustive = base.capped
-    ? (completed && allBandsExhaustive)
-    : (completed && !base.capped)
+  // ¿Vimos la comuna entera? La medida DIRECTA es la unión de todas las bandas
+  // contra el total que el portal declara — no que las ~95 peticiones de un
+  // barrido salieran todas perfectas. Exigir lo segundo dejaba `last_success_at`
+  // congelado y la detección de bajas apagada por un solo fallo transitorio de
+  // red, aun teniendo el 99,6% de la comuna en la mano (visto en producción:
+  // 3468/3481 y el target seguía marcándose incompleto).
+  const sweepCoverage = portalTotal != null && portalTotal > 0 ? seen.size / portalTotal : null
+  const coverageConfirmed = coverageOk(seen.size, portalTotal, MIN_SWEEP_COVERAGE)
+
+  let exhaustive
+  if (sweepCoverage != null) {
+    // Hay total declarado: manda la cobertura medida, en los dos sentidos.
+    exhaustive = coverageConfirmed
+    completed = coverageConfirmed
+    if (!coverageConfirmed) {
+      reason = `cobertura del barrido ${seen.size}/${portalTotal} bajo el mínimo — no se dan de baja anuncios`
+    }
+  } else {
+    // Sin total con el que contrastar (404 de comuna vacía, fallo en la p1):
+    // se cae a las señales de terminación de la paginación.
+    exhaustive = completed && !base.capped && allBandsExhaustive
+  }
 
   let delisted = 0
   if (exhaustive && target.comuna_id && seen.size > 0) {

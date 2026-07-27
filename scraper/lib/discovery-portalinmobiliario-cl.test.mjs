@@ -308,7 +308,62 @@ test('discoverTarget: banda que "termina bien" pero vio MENOS de lo declarado �
   assert.equal(res.exhaustive, false)
   assert.equal(res.delisted, 0)        // ← lo importante: NO da de baja sobre un barrido parcial
   assert.deepEqual(client.state.delistedIds, [])
-  assert.match(res.reason, /cobertura insuficiente/)
+  assert.match(res.reason, /cobertura del barrido 336\/3000/)
+})
+
+test('discoverTarget: un fallo transitorio en UNA banda no invalida un barrido que vio el 98% (regresión de producción)', async () => {
+  // Escenario REAL visto en producción tras arreglar la URL: la comuna se barrió
+  // al 99,6% (3468/3481) pero `last_success_at` seguía congelado y la detección
+  // de bajas apagada, porque bastaba que UNA de las ~95 peticiones fallase para
+  // marcar el target incompleto. Ahora manda la cobertura AGREGADA medida.
+  //
+  // Inventario de 100 anuncios repartidos por precio; el portal solo deja
+  // paginar 50 (tope) → el barrido base topa y dispara la bisección. La banda
+  // alta pierde su última página por un 500 transitorio: se ven 98 de 100.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
+  const RESULTS_LIMIT = 50
+  const bandOf = (url) => url.match(/_PriceRange_([^_]+)/)?.[1] ?? 'BASE'
+  // Inventario global de 100 anuncios repartidos uniformemente por precio hasta
+  // el techo de 220.000 UF. Cada banda sirve su tramo del MISMO inventario (ids
+  // compartidos) — es lo que hace que el solapamiento base↔bandas y la cobertura
+  // agregada se comporten como en producción.
+  const INVENTARIO = 100, TECHO = 220_000
+  const idx = (uf) => Math.round((uf / TECHO) * INVENTARIO)
+  const sliceOf = (band) => {
+    if (band === 'BASE') return [0, INVENTARIO]
+    const [min, max] = band.split('-').map((s) => Number(s.replace('CLF', '')))
+    return [idx(min), max === 0 ? INVENTARIO : idx(max)] // max 0 = banda abierta [min, ∞)
+  }
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async (url) => {
+      // La última página de la banda alta falla con un 500 transitorio.
+      if (bandOf(url) === '110000CLF-220000CLF' && url.includes('_Desde_49')) {
+        return { ok: false, status: 500, reason: 'HTTP 500' }
+      }
+      return { ok: true, html: url }
+    },
+    parseList: (url) => {
+      const [from, to] = sliceOf(bandOf(url))
+      const offset = Number(url.match(/_Desde_(\d+)/)?.[1] ?? 1) - 1
+      const alcanzable = Math.min(to - from, RESULTS_LIMIT)
+      const n = Math.max(0, Math.min(48, alcanzable - offset))
+      return Array.from({ length: n }, (_, i) => listing(`MLC-${from + offset + i}`))
+    },
+    parseMeta: (url) => {
+      const [from, to] = sliceOf(bandOf(url))
+      const total = to - from
+      return { total, pageCount: 1, resultsLimit: Math.min(total, RESULTS_LIMIT) }
+    },
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+
+  assert.equal(res.capped, true)
+  assert.equal(res.seen, 98)          // se perdieron 2 por el 500 transitorio
+  assert.equal(res.exhaustive, true)  // 98/100 = 98% → sigue siendo fiable
+  assert.equal(res.completed, true)   // ← last_success_at avanza (antes no lo hacía)
+  assert.equal(res.delisted, 1)       // ← y la detección de bajas vuelve a correr
+  assert.deepEqual(client.state.delistedIds, ['uuid-vivo'])
 })
 
 test('discoverTarget: banda diminuta a la que le falta 1 SÍ es completa (tolerancia absoluta)', async () => {
