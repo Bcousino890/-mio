@@ -323,11 +323,17 @@ async function main() {
     : async () => {}
 
   await boss.work(QUEUES.DETAIL, async (jobs) => {
+    const salidas = []
     for (const job of jobs) {
-      await handleDetailJob(dbClient, job.data, {
-        enqueueMediaSync: enqueueMediaSync,
-      })
+      const r = await handleDetailJob(dbClient, job.data, { enqueueMediaSync })
+      // pg-boss guarda como `output` lo que DEVUELVE el handler de la cola. Al
+      // no devolver nada, todas las fichas quedaban con output null: un job
+      // "completado" no distinguía haber guardado el anuncio de haberlo tirado
+      // (handleDetailJob devuelve {ok:false} en vez de lanzar cuando el fetch o
+      // el parseo fallan). Devolverlo es lo que hace diagnosticable la cola.
+      salidas.push({ externalId: job.data?.externalId, ...r })
     }
+    return salidas.length === 1 ? salidas[0] : salidas
   })
 
   if (s3) {
