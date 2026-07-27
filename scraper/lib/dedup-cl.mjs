@@ -129,6 +129,53 @@ export const LISTING_FIELDS_FOR_CONSOLIDATION = `
 `;
 
 /**
+ * Re-sincroniza los agregados DERIVADOS de property_cl con la realidad de sus
+ * anuncios, para TODAS las fichas de golpe.
+ *
+ * Por qué hace falta: `is_active`, `listing_count` y `corredora_count` se
+ * calculan al consolidar un grupo (consolidateFields) y nadie los vuelve a tocar
+ * cuando un anuncio se da de BAJA (markDelisted del discovery) o se REACTIVA (el
+ * upsert) — esos caminos escriben en listings_cl y no pasan por el dedup. Así
+ * que la ficha se desincroniza y, como /chile/propiedades filtra por
+ * `is_active`, quedan fichas VIVAS invisibles en el CRM.
+ *
+ * Medido en producción: 780 fichas marcadas inactivas cuando solo 179 anuncios
+ * lo estaban de verdad — 780 propiedades reales que no aparecían en la lista.
+ *
+ * Son campos derivables al 100% por SQL, así que se recalculan en una sentencia
+ * barata que solo escribe las filas que difieren: idempotente, y se cura tanto
+ * del desfase ya acumulado como del que aparezca después.
+ */
+export async function reconcilePropertyClDerivedCl(client) {
+  const { rowCount } = await client.query(`
+    UPDATE property_cl p
+    SET is_active = d.activo,
+        listing_count = d.n_anuncios,
+        corredora_count = d.n_corredoras,
+        updated_at = now()
+    FROM (
+      SELECT p2.id,
+             EXISTS (SELECT 1 FROM listings_cl l WHERE l.property_cl_id = p2.id AND l.is_active) AS activo,
+             (SELECT count(*) FROM listings_cl l WHERE l.property_cl_id = p2.id) AS n_anuncios,
+             GREATEST(
+               (SELECT count(DISTINCT l.advertiser_id) FROM listings_cl l
+                 WHERE l.property_cl_id = p2.id AND l.advertiser_id IS NOT NULL),
+               -- Sin advertiser_id no se puede saber si se repiten: se cuenta
+               -- como 1 mientras haya algún anuncio (mismo criterio que
+               -- consolidateFields), nunca 0.
+               CASE WHEN EXISTS (SELECT 1 FROM listings_cl l WHERE l.property_cl_id = p2.id) THEN 1 ELSE 0 END
+             ) AS n_corredoras
+      FROM property_cl p2
+    ) d
+    WHERE d.id = p.id
+      AND (p.is_active IS DISTINCT FROM d.activo
+        OR p.listing_count IS DISTINCT FROM d.n_anuncios
+        OR p.corredora_count IS DISTINCT FROM d.n_corredoras)
+  `);
+  return { reconciled: rowCount ?? 0 };
+}
+
+/**
  * Recalcula los campos agregados de un property_cl existente a partir de TODOS
  * sus listings_cl actuales (no solo el lote que disparó la corrida) — para que
  * quede correcto aunque Nivel 2 (Fase 3) ya haya sumado listings de otras

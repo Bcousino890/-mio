@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleDetailJob } from './worker-cl.mjs';
+import { handleDetailJob, handleDedupClusterJob } from './worker-cl.mjs';
 
 const PARSED_UF_LISTING = {
   external_id: 'MLC-1', source_url: 'https://x/MLC-1-slug-_JM', portal: 'portalinmobiliario',
@@ -87,4 +87,32 @@ test('handleDetailJob: fetch fallido no llama a getUfRate (evita el fetch de UF 
   );
   assert.equal(res.ok, false);
   assert.equal(ufCalled, false);
+});
+
+// ─── dedup-cluster ───────────────────────────────────────────────────────────
+
+test('handleDedupClusterJob: re-sincroniza los agregados de property_cl al final', async () => {
+  // Blinda el bug de producción: is_active/listing_count/corredora_count de
+  // property_cl se calculan al agrupar, pero dar de BAJA (markDelisted del
+  // discovery) o REACTIVAR un anuncio ocurre FUERA del dedup y no los tocaba.
+  // Resultado: 780 fichas marcadas inactivas con solo 179 anuncios inactivos —
+  // 780 propiedades vivas invisibles en /chile/propiedades, que filtra por
+  // is_active. La reconciliación tiene que correr en cada pasada del job.
+  const orden = [];
+  const paso = (nombre, valor) => async () => { orden.push(nombre); return valor; };
+
+  const res = await handleDedupClusterJob({}, {
+    nivel1: paso('nivel1', { groups_processed: 0, created: 0, linked: 0 }),
+    link15: paso('link15', { linked: 0 }),
+    broker: paso('broker', { advertisers_processed: 0, created: 0, linked: 0 }),
+    reconcile: paso('reconcile', { reconciled: 780 }),
+  });
+
+  assert.deepEqual(res.reconcile, { reconciled: 780 });
+  assert.ok(orden.includes('reconcile'), 'la reconciliación debe ejecutarse');
+  // Va AL FINAL: el resto del pipeline mueve anuncios entre fichas antes.
+  assert.equal(orden[orden.length - 1], 'reconcile');
+  // Y el clustering difuso sigue desactivado (regla del usuario: dedup SOLO por
+  // corredora + código interno).
+  assert.ok(res.nivel2.skipped, 'nivel2 debe seguir desactivado por defecto');
 });

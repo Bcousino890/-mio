@@ -46,7 +46,7 @@ import { parseDetailPage } from './lib/parse-portalinmobiliario.mjs'
 import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
-import { runNivel1DedupCl, runCorredoraConsolidationCl } from './lib/dedup-cl.mjs'
+import { runNivel1DedupCl, runCorredoraConsolidationCl, reconcilePropertyClDerivedCl } from './lib/dedup-cl.mjs'
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
@@ -161,6 +161,7 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     nivel2 = null,
     link15 = runInternalCodeLinkCl,
     broker = runCorredoraConsolidationCl,
+    reconcile = reconcilePropertyClDerivedCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
@@ -169,6 +170,12 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     // property_cl del anuncio de PI de la misma corredora por código interno.
     link15: await link15(dbClient),
     broker: await broker(dbClient),
+    // Re-sincroniza is_active/listing_count/corredora_count de property_cl con
+    // sus anuncios. Va AL FINAL, cuando el resto del pipeline ya movió anuncios
+    // entre fichas. Sin esto, dar de baja o reactivar un anuncio (que ocurre
+    // fuera del dedup) deja la ficha desincronizada y /chile/propiedades —que
+    // filtra por is_active— esconde propiedades vivas.
+    reconcile: await reconcile(dbClient),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res
