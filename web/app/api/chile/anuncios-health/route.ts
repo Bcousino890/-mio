@@ -193,6 +193,22 @@ export async function GET(request: Request) {
     const c = counts.rows[0]
     const num = (v: unknown) => Number(v ?? 0)
 
+    // Profundidad de las colas de pg-boss. Sin esto no hay forma de distinguir
+    // "el barrido no ve los anuncios" de "los ve, los encola y la cola no avanza"
+    // — que es justo la duda cuando el nº de anuncios crudos se queda clavado
+    // mientras el barrido reporta miles de vistos. Va en su propio try: si el
+    // esquema de pg-boss cambia, el panel no puede caerse por esto.
+    let queues: { queue: string; state: string; count: number }[] = []
+    try {
+      const q = await pool.query(
+        `SELECT name AS queue, state::text AS state, count(*)::int AS n
+         FROM pgboss.job GROUP BY 1, 2 ORDER BY 1, 2`
+      )
+      queues = q.rows.map((r) => ({ queue: r.queue, state: r.state, count: num(r.n) }))
+    } catch (e) {
+      console.warn('[anuncios-health] sin métricas de cola:', e instanceof Error ? e.message : e)
+    }
+
     // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
     // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
     // quedó guardado la última vez que corrió un barrido (que puede tener horas).
@@ -247,6 +263,9 @@ export async function GET(request: Request) {
       })),
       // Si esta lectura sondeó el portal o solo leyó la BD (auto-refresco barato).
       live_probed: !skipLive,
+      // Colas de trabajo: `created` pendiente creciendo = el cuello de botella
+      // está en la descarga de fichas, no en el barrido.
+      queues,
     })
   } catch (error) {
     console.error('Error en anuncios-health:', error)
