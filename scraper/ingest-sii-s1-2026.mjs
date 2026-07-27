@@ -28,15 +28,24 @@ import { join, basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ingestSiiCatastroComuna } from './lib/sii-catastro-cl.mjs'
 
+// Códigos SII confirmados en db/migrations/0023-0026 (Vitacura y Lo Barnechea
+// pasaron por varias correcciones — 15160/15161 son los valores finales, no
+// los de los intentos intermedios) y usados en el resto del código
+// (web/lib/captar-pipeline.ts SLUG_TO_SII). Antes esta lista tenía valores
+// obsoletos de intentos previos (15131/15111/13119/13106/13301) que ya habían
+// sido corregidos en la BD — ingerir con `--all` habría vuelto a escribir
+// sii_roles_cl/sii_construcciones_cl bajo el código viejo para 5 de 8
+// comunas, invisibles para el resto de la app (que siempre resuelve el
+// código vigente vía chile_comunas).
 const COMUNAS_PRIORITARIAS = [
-  '15131', // Vitacura
+  '15160', // Vitacura
   '15108', // Las Condes
-  '15111', // Lo Barnechea
-  '13119', // Providencia
+  '15161', // Lo Barnechea
+  '13123', // Providencia
   '13120', // Ñuñoa
-  '13106', // La Reina
+  '13113', // La Reina
   '13101', // Santiago
-  '13301', // Colina
+  '14201', // Colina
 ]
 
 const { values: args } = parseArgs({
