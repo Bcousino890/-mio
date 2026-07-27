@@ -58,6 +58,12 @@ const MIN_BAND_WIDTH_CLF = 200    // UF; no bisecar por debajo de 200 UF de anch
 // 691/692 = 99,9%. Un barrido truncado de los que causaban el problema daba
 // 40-70%, muy por debajo de este umbral.
 const MIN_BAND_COVERAGE = 0.9
+// Tolerancia ABSOLUTA, para que el umbral relativo no castigue a las bandas
+// diminutas: en una banda de 5 anuncios (existen: 110.000-220.000 UF en Las
+// Condes tiene exactamente 5), que se venda uno entre el probe y el barrido ya
+// daría 80% y la marcaría incompleta sin motivo. Una banda solo se considera
+// truncada si le faltan MÁS de estos anuncios Y además baja del umbral.
+const MAX_BAND_SHORTFALL = 3
 
 function priceUnitFor(operation) {
   return operation === 'sale' ? 'CLF' : 'CLP'
@@ -327,7 +333,8 @@ async function sweepBand(client, ctx, priceRange, seen) {
   let coverage = null
   if (!capped && portalTotal != null && portalTotal > 0) {
     coverage = bandSeen.size / portalTotal
-    if (completed && coverage < MIN_BAND_COVERAGE) {
+    const shortfall = portalTotal - bandSeen.size
+    if (completed && shortfall > MAX_BAND_SHORTFALL && coverage < MIN_BAND_COVERAGE) {
       completed = false
       reason = reason ?? `cobertura insuficiente: ${bandSeen.size}/${portalTotal} vistos`
     }

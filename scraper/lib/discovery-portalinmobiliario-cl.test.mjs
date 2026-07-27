@@ -311,6 +311,25 @@ test('discoverTarget: banda que "termina bien" pero vio MENOS de lo declarado �
   assert.match(res.reason, /cobertura insuficiente/)
 })
 
+test('discoverTarget: banda diminuta a la que le falta 1 SÍ es completa (tolerancia absoluta)', async () => {
+  // El umbral relativo del 90% no puede castigar a las bandas diminutas: la
+  // banda 110.000-220.000 UF de Las Condes tiene exactamente 5 anuncios, y que
+  // se venda uno entre el probe y el barrido daría 80% — bloquearía la
+  // detección de bajas de toda la comuna por un anuncio.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
+  let served = false
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({ ok: true, html: 'P' }),
+    parseList: () => { if (served) return []; served = true; return [0, 1, 2, 3].map((i) => listing(`MLC-${i}`)) },
+    parseMeta: () => ({ total: 5, pageCount: 1, resultsLimit: 5 }), // declara 5, se ven 4
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.completed, true)
+  assert.equal(res.exhaustive, true)
+  assert.equal(res.delisted, 1) // sí puede dar de baja lo que ya no aparece
+})
+
 test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la encuentra topada → se subdivide y corrige (no se pierde en silencio)', async () => {
   // Modela la brecha real vista en producción (Las Condes/Venta quedó en 69%,
   // 2416/3487, pese a que la bisección da cobertura exacta en pruebas con probes
