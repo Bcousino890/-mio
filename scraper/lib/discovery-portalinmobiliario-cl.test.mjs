@@ -46,12 +46,17 @@ test('buildListUrl: ordena por más recientes y pagina con _Desde_N', () => {
     buildListUrl({ ...base, operation: 'rent', offset: 96 }),
     `${PI}/arriendo/casa/propiedades-usadas/las-condes-metropolitana/_Desde_97_OrderId_BEGINS*DESC_NoIndex_True`
   )
-  // Banda de precio + paginación + orden, todo combinado (verificado contra el portal).
+  // Con banda de precio, el orden NO se aplica aunque sortRecent sea true:
+  // BUG VERIFICADO contra el portal real — combinar _PriceRange_ con
+  // _OrderId_BEGINS*DESC hace que el portal devuelva un `total` MENOR y falso
+  // (banda 0-650M: 1105 sin orden vs 971 con orden, mismo rango exacto). Era la
+  // causa de que la cobertura de comunas grandes cayera de ~70% a ~40%: la
+  // bisección por precio creía que había menos anuncios de los reales.
   assert.equal(
     buildListUrl({ ...base, offset: 48, priceRange: { minClp: 0, maxClp: 650000000 } }),
-    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLP-650000000CLP/_Desde_49_OrderId_BEGINS*DESC_NoIndex_True`
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLP-650000000CLP/_Desde_49_NoIndex_True`
   )
-  // Sin orden (sortRecent:false) mantiene el formato clásico.
+  // Sin priceRange, sortRecent:false mantiene el formato clásico sin orden.
   assert.equal(
     buildListUrl({ ...base, offset: 0, sortRecent: false }),
     `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana`

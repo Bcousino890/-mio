@@ -87,14 +87,22 @@ export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, p
   const type = fold(String(propertyType ?? 'casa')) || 'casa'
   let url = `https://www.portalinmobiliario.com/${operationSlug(operation)}/${type}/propiedades-usadas/${slug}-${rslug}`
   url += priceRangeSegment(priceRange)
-  // Orden "Más recientes" (_OrderId_BEGINS*DESC). Dos motivos:
-  //  1) Los anuncios nuevos aparecen primero → el barrido los ve de inmediato.
-  //  2) ESTABILIZA la paginación: el orden por relevancia (el de por defecto)
-  //     reordena los resultados entre peticiones, y por eso aparecían páginas
-  //     con anuncios repetidos y se perdían otros al paginar.
+  // Orden "Más recientes" (_OrderId_BEGINS*DESC). Dos motivos cuando NO hay
+  // filtro de precio: 1) los anuncios nuevos aparecen primero; 2) estabiliza la
+  // paginación (el orden por relevancia reordena entre peticiones).
+  //
+  // BUG VERIFICADO: combinado con `_PriceRange_`, el portal devuelve un `total`
+  // MENOR y falso — probado en real: banda 0-650M da total=1105 sin orden pero
+  // total=971 CON orden (mismo rango, ~12% menos). Esto hacía que la bisección
+  // por precio creyera que había menos anuncios de los reales y sub-cubriera
+  // cada banda — la causa de que la cobertura cayera de ~70% a ~40%. Por eso el
+  // orden NO se aplica cuando hay priceRange; la paginación dentro de una banda
+  // ya no depende del orden para ser estable (se pagina hasta el final real,
+  // ver decideContinue), así que no se pierde nada al omitirlo ahí.
+  const applySort = sortRecent && !priceRange
   const parts = []
   if (offset > 0) parts.push(`_Desde_${offset + 1}`)
-  if (sortRecent) parts.push('_OrderId_BEGINS*DESC')
+  if (applySort) parts.push('_OrderId_BEGINS*DESC')
   if (parts.length > 0) url += `/${parts.join('')}_NoIndex_True`
   return url
 }
