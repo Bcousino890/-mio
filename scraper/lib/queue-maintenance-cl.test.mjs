@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pruneDuplicateJobsCl } from './queue-maintenance-cl.mjs'
+import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl } from './queue-maintenance-cl.mjs'
 
 /** Cliente falso: registra las consultas y devuelve el rowCount programado. */
 function fakeClient(rowCountByQueue) {
@@ -74,4 +74,32 @@ test('pruneDuplicateJobsCl: acepta un mapa de colas a medida', async () => {
   const res = await pruneDuplicateJobsCl(client, { 'otra-cola': 'miId' })
   assert.deepEqual(res, { 'otra-cola': 3 })
   assert.deepEqual(client.queries[0].params, ['otra-cola', 'miId'])
+})
+
+// ─── prioridad de los anuncios que faltan ────────────────────────────────────
+
+test('prioritizeMissingDetailJobsCl: adelanta SOLO los pendientes que aún no están en la base', async () => {
+  // pg-boss sirve por prioridad y, a igualdad, por antigüedad. La cola arrastra
+  // miles de jobs viejos que solo REFRESCAN anuncios ya guardados; los que de
+  // verdad faltan se encolaron después y quedaban al final. Medido en
+  // producción: la cola bajaba de 3.475 a 3.416 sin una sola alta.
+  let sql = null, params = null
+  const client = { async query(s, p) { sql = s.replace(/\s+/g, ' ').trim(); params = p; return { rowCount: 1005 } } }
+
+  const res = await prioritizeMissingDetailJobsCl(client)
+  assert.deepEqual(res, { prioritized: 1005 })
+  assert.deepEqual(params, [100])
+  // Solo pendientes: nunca reordena lo que ya se está ejecutando.
+  assert.match(sql, /state = 'created'/)
+  // Solo los que NO están en listings_cl.
+  assert.match(sql, /NOT EXISTS/)
+  assert.match(sql, /listings_cl/)
+  // Idempotente: no reescribe los que ya tienen la prioridad correcta.
+  assert.match(sql, /priority < \$1/)
+})
+
+test('prioritizeMissingDetailJobsCl: un fallo no tumba el pipeline que lo invoca', async () => {
+  const client = { async query() { throw new Error('pgboss.job no existe') } }
+  const res = await prioritizeMissingDetailJobsCl(client)
+  assert.match(res.error, /pgboss\.job no existe/)
 })

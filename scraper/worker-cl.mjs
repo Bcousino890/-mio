@@ -47,7 +47,7 @@ import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl, reconcilePropertyClDerivedCl } from './lib/dedup-cl.mjs'
-import { pruneDuplicateJobsCl } from './lib/queue-maintenance-cl.mjs'
+import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl } from './lib/queue-maintenance-cl.mjs'
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
@@ -164,6 +164,7 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     broker = runCorredoraConsolidationCl,
     reconcile = reconcilePropertyClDerivedCl,
     pruneJobs = pruneDuplicateJobsCl,
+    prioritizeJobs = prioritizeMissingDetailJobsCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
@@ -182,6 +183,10 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     // prevención real es el singletonKey del `send`; esto cura lo ya apilado y
     // cubre cualquier camino que encole sin clave.
     prune: await pruneJobs(dbClient),
+    // Los anuncios que FALTAN pasan delante de los jobs viejos que solo
+    // refrescan lo ya guardado: si no, el catálogo no crece hasta drenar horas
+    // de cola vieja.
+    priorizar: await prioritizeJobs(dbClient),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res
@@ -312,8 +317,11 @@ async function main() {
   // job nuevo en CADA llamada, así que cada barrido re-encolaba los mismos
   // anuncios: detail-cl acumuló 46.797 pendientes para ~3.700 anuncios reales,
   // dejando cualquier anuncio nuevo enterrado días detrás de sus duplicados.
+  // `priority: 100` — el discovery SOLO encola anuncios que aún no están en la
+  // base, así que siempre deben ir por delante de los jobs viejos que se limitan
+  // a refrescar lo ya guardado (ver prioritizeMissingDetailJobsCl).
   const enqueueDetail = (externalId, sourceUrl) =>
-    boss.send(QUEUES.DETAIL, { externalId, sourceUrl }, { singletonKey: String(externalId) })
+    boss.send(QUEUES.DETAIL, { externalId, sourceUrl }, { singletonKey: String(externalId), priority: 100 })
 
   // Si no hay S3 no hay worker de media-sync registrado (ver más abajo): encolar
   // ahí sería tirar jobs a un pozo sin fondo — se habían apilado 70.524. Se
