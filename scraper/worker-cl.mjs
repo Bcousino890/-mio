@@ -47,6 +47,7 @@ import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl, reconcilePropertyClDerivedCl } from './lib/dedup-cl.mjs'
+import { pruneDuplicateJobsCl } from './lib/queue-maintenance-cl.mjs'
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
@@ -162,6 +163,7 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     link15 = runInternalCodeLinkCl,
     broker = runCorredoraConsolidationCl,
     reconcile = reconcilePropertyClDerivedCl,
+    pruneJobs = pruneDuplicateJobsCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
@@ -176,6 +178,10 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     // fuera del dedup) deja la ficha desincronizada y /chile/propiedades —que
     // filtra por is_active— esconde propiedades vivas.
     reconcile: await reconcile(dbClient),
+    // Red de seguridad del atasco de colas: deja un pendiente por anuncio. La
+    // prevención real es el singletonKey del `send`; esto cura lo ya apilado y
+    // cubre cualquier camino que encole sin clave.
+    prune: await pruneJobs(dbClient),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res
@@ -277,8 +283,22 @@ async function main() {
   boss.on('error', (err) => console.error('[worker-cl] pg-boss error:', err))
   await boss.start()
 
+  // Colas DEDUPLICADAS: `policy: 'short'` + `singletonKey` = como mucho UN job
+  // PENDIENTE por entidad. Con la política 'standard' de por defecto, pg-boss
+  // crea un job nuevo en cada `send` aunque se repita el singletonKey, así que
+  // cada barrido re-encolaba los mismos anuncios: detail-cl acumuló 46.797
+  // pendientes para ~3.700 anuncios reales y un anuncio nuevo quedaba enterrado
+  // días detrás de sus propios duplicados — la razón de que el contador de
+  // anuncios crudos no subiera. Verificado: con 'short', 5 envíos = 1 job.
+  const DEDUPED_QUEUES = new Set([QUEUES.DETAIL, QUEUES.MEDIA_SYNC])
   for (const queueName of Object.values(QUEUES)) {
-    await boss.createQueue(queueName)
+    const policy = DEDUPED_QUEUES.has(queueName) ? 'short' : 'standard'
+    await boss.createQueue(queueName, { name: queueName, policy })
+    // createQueue NO cambia la política de una cola ya existente, y las de
+    // producción nacieron 'standard': hay que migrarlas explícitamente.
+    if (DEDUPED_QUEUES.has(queueName)) {
+      await boss.updateQueue(queueName, { name: queueName, policy })
+    }
   }
 
   let s3 = null
@@ -288,10 +308,24 @@ async function main() {
     console.warn(`[worker-cl] media-sync-cl deshabilitado: ${e.message}`)
   }
 
+  // `singletonKey` = UN job pendiente por entidad. Sin él, `boss.send` crea un
+  // job nuevo en CADA llamada, así que cada barrido re-encolaba los mismos
+  // anuncios: detail-cl acumuló 46.797 pendientes para ~3.700 anuncios reales,
+  // dejando cualquier anuncio nuevo enterrado días detrás de sus duplicados.
+  const enqueueDetail = (externalId, sourceUrl) =>
+    boss.send(QUEUES.DETAIL, { externalId, sourceUrl }, { singletonKey: String(externalId) })
+
+  // Si no hay S3 no hay worker de media-sync registrado (ver más abajo): encolar
+  // ahí sería tirar jobs a un pozo sin fondo — se habían apilado 70.524. Se
+  // omite en silencio y las fotos se sincronizan cuando el bucket esté puesto.
+  const enqueueMediaSync = s3
+    ? (listingId) => boss.send(QUEUES.MEDIA_SYNC, { listingId }, { singletonKey: String(listingId) })
+    : async () => {}
+
   await boss.work(QUEUES.DETAIL, async (jobs) => {
     for (const job of jobs) {
       await handleDetailJob(dbClient, job.data, {
-        enqueueMediaSync: (listingId) => boss.send(QUEUES.MEDIA_SYNC, { listingId }),
+        enqueueMediaSync: enqueueMediaSync,
       })
     }
   })
@@ -329,7 +363,7 @@ async function main() {
   await boss.work(QUEUES.DISCOVERY, async (jobs) => {
     for (const job of jobs) {
       await handleDiscoveryJob(dbClient, job.data, {
-        enqueueDetail: (externalId, sourceUrl) => boss.send(QUEUES.DETAIL, { externalId, sourceUrl }),
+        enqueueDetail: enqueueDetail,
       })
     }
   })
@@ -348,7 +382,7 @@ async function main() {
   await boss.work(QUEUES.CORREDORA_WEB, async (jobs) => {
     for (const job of jobs) {
       await handleCorredoraWebCrawlJob(dbClient, job.data, {
-        enqueueMediaSync: (listingId) => boss.send(QUEUES.MEDIA_SYNC, { listingId }),
+        enqueueMediaSync: enqueueMediaSync,
       })
     }
   })
