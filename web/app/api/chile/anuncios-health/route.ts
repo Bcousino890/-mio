@@ -233,6 +233,25 @@ export async function GET(request: Request) {
       console.warn('[anuncios-health] sin desglose de fichas:', e instanceof Error ? e.message : e)
     }
 
+    // Los PENDIENTES separados en "el anuncio ya está guardado" (el job solo lo
+    // refrescará) y "todavía no está" (el job hará crecer el catálogo), con su
+    // prioridad. Es lo único que dice si el catálogo no crece porque no hay
+    // trabajo encolado para los que faltan, o porque lo hay pero va detrás.
+    let pendingSplit: { falta: boolean; priority: number; count: number }[] = []
+    try {
+      const s = await pool.query(
+        `SELECT (l.id IS NULL) AS falta, j.priority, count(*)::int AS n
+         FROM pgboss.job j
+         LEFT JOIN listings_cl l
+           ON l.portal = 'portalinmobiliario' AND l.external_id = j.data->>'externalId'
+         WHERE j.name = 'detail-cl' AND j.state = 'created'
+         GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC`
+      )
+      pendingSplit = s.rows.map((r) => ({ falta: !!r.falta, priority: num(r.priority), count: num(r.n) }))
+    } catch (e) {
+      console.warn('[anuncios-health] sin desglose de pendientes:', e instanceof Error ? e.message : e)
+    }
+
     // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
     // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
     // quedó guardado la última vez que corrió un barrido (que puede tener horas).
@@ -293,6 +312,8 @@ export async function GET(request: Request) {
       // Qué devolvieron las fichas procesadas en la última hora: "completado" no
       // implica "guardado".
       detail_outcomes: detailOutcomes,
+      // Pendientes: cuántos harían crecer el catálogo y con qué prioridad.
+      pending_split: pendingSplit,
     })
   } catch (error) {
     console.error('Error en anuncios-health:', error)
