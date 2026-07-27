@@ -3,10 +3,14 @@
 // reutilizables desde la CLI (rebuild-property-cl-cl.mjs / backfill-…) y desde el
 // arranque del worker (runStartupFixesCl, una sola vez, marcadas en data_fixes_cl).
 //
-//  1. rebuildPropertyClCl: reconstruye property_cl desde cero tras corregir el
-//     falso positivo del dedup (fusionaba inmuebles distintos de la misma
-//     corredora). property_cl es DERIVADA (solo listings_cl la referencia, con
-//     ON DELETE SET NULL), así que borrarla y re-derivarla no pierde datos crudos.
+//  1. rebuildPropertyClCl: reconstruye property_cl desde cero con la ÚNICA regla
+//     de deduplicación vigente (decisión del usuario): agrupar SOLO si coinciden
+//     corredora (advertiser_id) Y código interno (seller_reference). Nunca por
+//     matching difuso/probabilístico — de ahí que use exclusivamente
+//     runNivel1DedupCl (que ya cubre tanto los grupos como los anuncios sin
+//     código interno, 1 aviso = 1 ficha). property_cl es DERIVADA (solo
+//     listings_cl la referencia, con ON DELETE SET NULL), así que borrarla y
+//     re-derivarla no pierde datos crudos.
 //  2. backfillSuperficieFotosCl: re-scrapea fichas cuya superficie es claramente
 //     el terreno filtrado (casa/depto con square_meters ≥ umbral) para que el
 //     parser corregido recalcule superficie construida + deduplique fotos, y
@@ -17,12 +21,8 @@ import pg from 'pg'
 import {
   runNivel1DedupCl,
   runCorredoraConsolidationCl,
-  createPropertyCl,
   refreshPropertyClAggregates,
-  LISTING_FIELDS_FOR_CONSOLIDATION,
 } from './dedup-cl.mjs'
-import { runNivel2ClusteringCl } from './clustering-cl.mjs'
-import { runMatchFeederCl } from './match-feeder-cl.mjs'
 import { fetchHtmlResilient, SLEEP } from './fetch.mjs'
 import { parseDetailPage } from './parse-portalinmobiliario.mjs'
 import { upsertListingCl } from './upsert-listing-cl.mjs'
@@ -61,62 +61,48 @@ export async function diagnosePropertyCl(client) {
   return { total: total.rows[0].n, overMerged: overMerged.rows[0].n }
 }
 
-async function individualizeOrphans(client) {
-  const { rows: orphans } = await client.query(
-    `SELECT ${LISTING_FIELDS_FOR_CONSOLIDATION}
-     FROM listings_cl WHERE property_cl_id IS NULL AND is_active = true`
-  )
-  let created = 0
-  for (const row of orphans) {
-    const pid = await createPropertyCl(client, [row])
-    await client.query(
-      `UPDATE listings_cl SET property_cl_id = $1, match_confidence = 1, updated_at = now() WHERE id = $2`,
-      [pid, row.id],
-    )
-    created++
-  }
-  return created
-}
-
 /**
- * Reconstruye property_cl desde cero (re-feed opcional + Nivel 1 + Nivel 2 +
- * individualización de anuncios sueltos), en UNA transacción. Idempotente.
+ * Reconstruye property_cl desde cero con la regla vigente (Nivel 1: corredora +
+ * código interno), en UNA transacción. Idempotente.
  */
-export async function rebuildPropertyClCl(client, { skipFeed = false, log = NOOP_LOG } = {}) {
+export async function rebuildPropertyClCl(client, { log = NOOP_LOG } = {}) {
   // Serializa con el dedup periódico (evita deadlock por orden de locks inverso).
   await client.query('SELECT pg_advisory_lock($1)', [DEDUP_ADVISORY_LOCK_KEY])
   try {
-    return await rebuildPropertyClInner(client, { skipFeed, log })
+    return await rebuildPropertyClInner(client, { log })
   } finally {
     await client.query('SELECT pg_advisory_unlock($1)', [DEDUP_ADVISORY_LOCK_KEY])
   }
 }
 
-async function rebuildPropertyClInner(client, { skipFeed, log }) {
+async function rebuildPropertyClInner(client, { log }) {
   const before = await diagnosePropertyCl(client)
   log(`[rebuild] antes: ${before.total} property_cl, ${before.overMerged} sospechosos de fusión indebida`)
 
-  if (!skipFeed) {
-    const { rows: comunas } = await client.query(
-      `SELECT DISTINCT comuna_id FROM listings_cl WHERE is_active = true AND comuna_id IS NOT NULL`
-    )
-    const comunaIds = comunas.map((r) => r.comuna_id)
-    const fed = await runMatchFeederCl(client, { comunaIds })
-    log(`[rebuild] re-feed: ${fed.confirmed} confirmados, ${fed.candidate} candidatos (${fed.pairs_scored} pares)`)
-  }
-
   await client.query('BEGIN')
   try {
-    await client.query(`UPDATE listings_cl SET property_cl_id = NULL, match_confidence = NULL WHERE property_cl_id IS NOT NULL`)
-    await client.query(`DELETE FROM property_cl`)
+    // Solo se resetean los anuncios NO fijados a mano (migración 0079). Los
+    // `manual_property_lock` mantienen su property_cl_id intacto — es la
+    // decisión curada del equipo, y runNivel1DedupCl ya sabe reusar esa ficha
+    // como ancla cuando reprocesa el grupo.
+    await client.query(
+      `UPDATE listings_cl SET property_cl_id = NULL, match_confidence = NULL
+       WHERE property_cl_id IS NOT NULL AND NOT manual_property_lock`
+    )
+    // Solo se borran las fichas que quedaron SIN NINGÚN anuncio (ni siquiera uno
+    // fijado a mano) — nunca las que un lock sigue anclando. `property_cl_id`
+    // tiene ON DELETE SET NULL: borrar una ficha con anuncios fijados los
+    // desancla igual, aunque el UPDATE de arriba no los haya tocado.
+    await client.query(
+      `DELETE FROM property_cl p
+       WHERE NOT EXISTS (SELECT 1 FROM listings_cl l WHERE l.property_cl_id = p.id)`
+    )
     const n1 = await drain(runNivel1DedupCl, client)
-    const n2 = await runNivel2ClusteringCl(client)
-    const individuals = await individualizeOrphans(client)
     await drain(runCorredoraConsolidationCl, client)
     await client.query('COMMIT')
     const after = await diagnosePropertyCl(client)
-    log(`[rebuild] listo: ${before.total} → ${after.total} property_cl (Nivel1 ${n1.created}, Nivel2 ${n2.merged}, individuales ${individuals}); fusiones indebidas ${before.overMerged} → ${after.overMerged}`)
-    return { before, after, nivel1: n1.created, nivel2: n2.merged, individuals }
+    log(`[rebuild] listo: ${before.total} → ${after.total} property_cl (Nivel1 ${n1.created}); fusiones indebidas ${before.overMerged} → ${after.overMerged}`)
+    return { before, after, nivel1: n1.created }
   } catch (e) {
     await client.query('ROLLBACK')
     throw e
