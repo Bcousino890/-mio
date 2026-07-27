@@ -48,8 +48,16 @@ const MIN_BAND_WIDTH_CLP = 10_000_000 // no bisecar por debajo de 10M CLP de anc
 // para filtrar — los bordes de banda en CLP no calzan con los bordes reales en UF
 // que el portal aplica internamente. ARRIENDO se deja en CLP (el arriendo mensual
 // en Chile se publica predominantemente en pesos, no en UF).
-const PRICE_CEILING_CLF = 300_000 // UF; cubre cualquier residencial (visto hasta ~58.000 UF)
+const PRICE_CEILING_CLF = 220_000 // UF; verificado: 0-220.000 UF da 3482 en Las Condes = su total exacto
 const MIN_BAND_WIDTH_CLF = 200    // UF; no bisecar por debajo de 200 UF de ancho
+
+// Fracción mínima del total declarado por el portal que una banda debe haber
+// visto para darse por COMPLETA (ver la confirmación de fin en sweepBand). Se
+// deja holgura porque el propio `total` fluctúa unas unidades entre peticiones
+// (publicaciones que entran/salen en vivo): medido en real, un barrido sano da
+// 691/692 = 99,9%. Un barrido truncado de los que causaban el problema daba
+// 40-70%, muy por debajo de este umbral.
+const MIN_BAND_COVERAGE = 0.9
 
 function priceUnitFor(operation) {
   return operation === 'sale' ? 'CLF' : 'CLP'
@@ -88,47 +96,58 @@ export function regionSlug(region) {
 }
 
 /**
- * Sufijo de filtro de banda de precio de Portalinmobiliario. `unit` es 'CLP' o
+ * Token de filtro de banda de precio de Portalinmobiliario. `unit` es 'CLP' o
  * 'CLF' (UF — usada para venta, ver PRICE_CEILING_CLF más arriba). `0` = sin
  * límite (así lo escribe el propio portal: `_PriceRange_1000000000CLP-0CLP` =
- * "más de mil millones"). La unión de bandas cubre el 100% de la comuna
- * (verificado: las bandas nativas de Las Condes suman exactamente su total,
- * tanto en CLP como en CLF). `null` = sin filtro.
+ * "más de mil millones"), lo que permite una banda abierta [techo, ∞).
+ *
+ * Devuelve el token SIN barra: va concatenado con `_Desde_`/`_OrderId_` dentro
+ * de UN MISMO segmento de ruta (ver buildListUrl — ponerlo en segmento aparte
+ * hace que el portal lo ignore al paginar).
  */
-export function priceRangeSegment(priceRange) {
+export function priceRangeFilter(priceRange) {
   if (!priceRange) return ''
   const { min = 0, max = 0, unit = 'CLP' } = priceRange
-  return `/_PriceRange_${Math.round(min)}${unit}-${Math.round(max)}${unit}`
+  return `_PriceRange_${Math.round(min)}${unit}-${Math.round(max)}${unit}`
 }
 
 /**
- * URL de una página de listado de propiedades USADAS. `offset` en {0,48,96,…};
- * la página 1 (offset 0) no lleva sufijo, el resto usa `/_Desde_{offset+1}_NoIndex_True`.
- * `priceRange` opcional ({min,max,unit}) añade el filtro de banda de precio, que
- * PI apila ANTES del sufijo de paginación.
+ * URL de una página de listado de propiedades USADAS. `offset` en {0,48,96,…}.
+ *
+ * FORMATO CRÍTICO — todos los modificadores (`_Desde_`, `_OrderId_`,
+ * `_PriceRange_`) van CONCATENADOS EN UN ÚNICO SEGMENTO de ruta, en ese orden,
+ * cerrando con `_NoIndex_True`. Es el formato que el PROPIO portal genera en sus
+ * enlaces de paginación (`pagination.pagination_nodes_url` del blob Nordic):
+ *
+ *   …/las-condes-metropolitana/_Desde_49_OrderId_BEGINS*DESC_PriceRange_0CLF-15000CLF_NoIndex_True
+ *
+ * Poner `_PriceRange_` en un segmento APARTE (…/_PriceRange_X/_Desde_49_…) hace
+ * que el portal lo IGNORE en todas las páginas salvo la primera: verificado en
+ * real sobre la banda 0-15.000 UF de Las Condes — con el formato de 2 segmentos,
+ * la p10 devolvía anuncios de hasta 120.000 UF (41 de 48 fuera de banda) y en la
+ * p21 el `total` volvía a 3483 (el total SIN filtro). Con el formato de 1
+ * segmento: 0 fuera de banda en TODAS las páginas, `total` estable en ~937, y la
+ * p20 cierra con 25 anuncios (19×48+25 = 937 = el total exacto) seguida de 404.
+ *
+ * Era la causa raíz de que las bandas de precio convergieran al mismo conjunto
+ * sin filtrar al paginar (bandas distintas acumulando ~1706 ids idénticos), de la
+ * cobertura estancada y del baile de altas/bajas: cada banda daba de baja lo que
+ * "no veía" mientras en realidad estaba paginando la comuna entera sin filtro.
+ *
+ * El orden "Más recientes" (`_OrderId_BEGINS*DESC`) SÍ es compatible con
+ * `_PriceRange_` en este formato (verificado: mismo `total` 937 con y sin orden,
+ * y 0 fugas hasta la última página). El "bug del orden que corrompía el total"
+ * documentado antes era, en realidad, este mismo bug de segmentos.
  */
 export function buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation, propertyType, offset = 0, priceRange = null, sortRecent = true }) {
   const type = fold(String(propertyType ?? 'casa')) || 'casa'
-  let url = `https://www.portalinmobiliario.com/${operationSlug(operation)}/${type}/propiedades-usadas/${slug}-${rslug}`
-  url += priceRangeSegment(priceRange)
-  // Orden "Más recientes" (_OrderId_BEGINS*DESC). Dos motivos cuando NO hay
-  // filtro de precio: 1) los anuncios nuevos aparecen primero; 2) estabiliza la
-  // paginación (el orden por relevancia reordena entre peticiones).
-  //
-  // BUG VERIFICADO: combinado con `_PriceRange_`, el portal devuelve un `total`
-  // MENOR y falso — probado en real: banda 0-650M da total=1105 sin orden pero
-  // total=971 CON orden (mismo rango, ~12% menos). Esto hacía que la bisección
-  // por precio creyera que había menos anuncios de los reales y sub-cubriera
-  // cada banda — la causa de que la cobertura cayera de ~70% a ~40%. Por eso el
-  // orden NO se aplica cuando hay priceRange; la paginación dentro de una banda
-  // ya no depende del orden para ser estable (se pagina hasta el final real,
-  // ver decideContinue), así que no se pierde nada al omitirlo ahí.
-  const applySort = sortRecent && !priceRange
+  const base = `https://www.portalinmobiliario.com/${operationSlug(operation)}/${type}/propiedades-usadas/${slug}-${rslug}`
   const parts = []
   if (offset > 0) parts.push(`_Desde_${offset + 1}`)
-  if (applySort) parts.push('_OrderId_BEGINS*DESC')
-  if (parts.length > 0) url += `/${parts.join('')}_NoIndex_True`
-  return url
+  if (sortRecent) parts.push('_OrderId_BEGINS*DESC')
+  if (priceRange) parts.push(priceRangeFilter(priceRange))
+  if (parts.length === 0) return base
+  return `${base}/${parts.join('')}_NoIndex_True`
 }
 
 /**
@@ -294,7 +313,26 @@ async function sweepBand(client, ctx, priceRange, seen) {
   }
 
   const capped = portalTotal != null && resultsLimit != null && portalTotal > resultsLimit
-  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, reason }
+
+  // CONFIRMACIÓN DE FIN: que la paginación se detenga "con buena pinta" (404,
+  // página vacía) no prueba que se haya visto TODO. La prueba dura es contrastar
+  // lo visto contra lo que el portal declaró para esta misma banda. Sin este
+  // contraste, un barrido truncado se reportaba `completed` y markDelisted daba
+  // de baja anuncios vivos que simplemente no se llegaron a ver — el origen del
+  // baile de altas/bajas (2061 bajas + 1574 reactivaciones en 24h).
+  //
+  // Solo aplica a bandas NO topadas: el barrido base de una comuna grande se
+  // corta a propósito en el tope del portal (2000 de 3482) y su desvío ya lo
+  // gestiona la bisección por precio.
+  let coverage = null
+  if (!capped && portalTotal != null && portalTotal > 0) {
+    coverage = bandSeen.size / portalTotal
+    if (completed && coverage < MIN_BAND_COVERAGE) {
+      completed = false
+      reason = reason ?? `cobertura insuficiente: ${bandSeen.size}/${portalTotal} vistos`
+    }
+  }
+  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, coverage, reason }
 }
 
 /**
@@ -318,13 +356,19 @@ async function sweepBandCorrective(client, ctx, range, seen, depth = 0) {
   const unit = range?.unit ?? 'CLP'
   const min = range?.min ?? 0
   const max = range?.max ?? priceCeilingFor(unit)
-  const width = max - min
+  // Banda ABIERTA [min, ∞) (`max === 0`, como la escribe el portal): no tiene
+  // ancho finito que partir por la mitad, así que se corta en 2×min — el tramo
+  // bajo queda cerrado y el alto sigue abierto. Duplicar en vez de promediar
+  // hace que el techo persiga hacia arriba los precios raros que motivaron el
+  // desborde, en vez de quedarse atascado cerca de `min`.
+  const isOpen = max === 0
+  const width = isOpen ? Infinity : max - min
   if (depth >= MAX_PRICE_DEPTH || width <= minBandWidthFor(unit)) {
     // No se puede seguir partiendo: mejor esfuerzo, esta porción queda incompleta.
     return { pages: r.pages, enqueued: r.enqueued, completed: false, capped: true }
   }
 
-  const mid = min + Math.floor(width / 2)
+  const mid = isOpen ? Math.max(min * 2, min + minBandWidthFor(unit)) : min + Math.floor(width / 2)
   await ctx.sleep(ctx.politenessMs)
   const lower = await sweepBandCorrective(client, ctx, { min, max: mid, unit }, seen, depth + 1)
   const upper = await sweepBandCorrective(client, ctx, { min: mid, max, unit }, seen, depth + 1)
@@ -402,7 +446,16 @@ export async function discoverTarget(client, target, deps = {}) {
       await sleep(politenessMs)
       return parseMeta(res.html).total
     }
-    const bands = await subdividePriceBands(probe, resultsLimit ?? 2000, 0, priceCeilingFor(unit), unit)
+    const ceiling = priceCeilingFor(unit)
+    // Banda ABIERTA final [techo, ∞): `max: 0` es como el propio portal escribe
+    // "sin límite superior". Sin ella, todo lo que supere el techo se perdería en
+    // silencio. En Las Condes hoy está vacía (404, que sweepBand trata como
+    // "sin inventario" → completed), pero es el seguro para comunas/tipos con
+    // precios por encima del techo — cuesta una petición y evita un hueco mudo.
+    const bands = [
+      ...(await subdividePriceBands(probe, resultsLimit ?? 2000, 0, ceiling, unit)),
+      { min: ceiling, max: 0, unit },
+    ]
     bandsUsed = bands.length
     completed = true
     for (const band of bands) {

@@ -30,7 +30,7 @@ test('operationSlug / comunaSlug / regionSlug', () => {
   assert.equal(regionSlug('Región Metropolitana de Santiago'), 'metropolitana')
 })
 
-test('buildListUrl: ordena por más recientes y pagina con _Desde_N', () => {
+test('buildListUrl: TODOS los modificadores en UN segmento, orden _Desde_/_OrderId_/_PriceRange_', () => {
   const base = { comunaSlug: 'las-condes', regionSlug: 'metropolitana', operation: 'sale', propertyType: 'casa' }
   const PI = 'https://www.portalinmobiliario.com'
   // Orden "más recientes" por defecto (estabiliza la paginación, ver buildListUrl).
@@ -46,24 +46,30 @@ test('buildListUrl: ordena por más recientes y pagina con _Desde_N', () => {
     buildListUrl({ ...base, operation: 'rent', offset: 96 }),
     `${PI}/arriendo/casa/propiedades-usadas/las-condes-metropolitana/_Desde_97_OrderId_BEGINS*DESC_NoIndex_True`
   )
-  // Con banda de precio, el orden NO se aplica aunque sortRecent sea true:
-  // BUG VERIFICADO contra el portal real — combinar _PriceRange_ con
-  // _OrderId_BEGINS*DESC hace que el portal devuelva un `total` MENOR y falso
-  // (banda 0-650M: 1105 sin orden vs 971 con orden, mismo rango exacto). Era la
-  // causa de que la cobertura de comunas grandes cayera de ~70% a ~40%: la
-  // bisección por precio creía que había menos anuncios de los reales.
+  // EL FORMATO CRÍTICO: paginación + orden + precio CONCATENADOS en un único
+  // segmento, exactamente como el portal escribe sus propios enlaces de
+  // paginación. Con `_PriceRange_` en segmento aparte el portal lo IGNORA desde
+  // la página 2 en adelante y devuelve la comuna entera sin filtrar (verificado
+  // en real: p10 de la banda 0-15.000 UF traía anuncios de hasta 120.000 UF).
   assert.equal(
-    buildListUrl({ ...base, offset: 48, priceRange: { min: 0, max: 650000000, unit: 'CLP' } }),
-    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLP-650000000CLP/_Desde_49_NoIndex_True`
+    buildListUrl({ ...base, offset: 48, priceRange: { min: 0, max: 15000, unit: 'CLF' } }),
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_Desde_49_OrderId_BEGINS*DESC_PriceRange_0CLF-15000CLF_NoIndex_True`
   )
-  // Venta filtra en UF (CLF): confirmado en vivo contra Las Condes — el propio
-  // portal ofrece bandas nativas en UF y su suma da el total exacto sin
-  // bisección extra (ver PRICE_CEILING_CLF en discovery-portalinmobiliario-cl.mjs).
   assert.equal(
     buildListUrl({ ...base, offset: 0, priceRange: { min: 0, max: 15000, unit: 'CLF' } }),
-    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_PriceRange_0CLF-15000CLF`
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_OrderId_BEGINS*DESC_PriceRange_0CLF-15000CLF_NoIndex_True`
   )
-  // Sin priceRange, sortRecent:false mantiene el formato clásico sin orden.
+  // Arriendo sigue filtrando en CLP (el arriendo mensual se publica en pesos).
+  assert.equal(
+    buildListUrl({ ...base, operation: 'rent', offset: 0, priceRange: { min: 0, max: 650000000, unit: 'CLP' } }),
+    `${PI}/arriendo/casa/propiedades-usadas/las-condes-metropolitana/_OrderId_BEGINS*DESC_PriceRange_0CLP-650000000CLP_NoIndex_True`
+  )
+  // Banda ABIERTA [min, ∞): `max: 0` es como el portal escribe "sin tope".
+  assert.equal(
+    buildListUrl({ ...base, offset: 0, priceRange: { min: 220000, max: 0, unit: 'CLF' } }),
+    `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_OrderId_BEGINS*DESC_PriceRange_220000CLF-0CLF_NoIndex_True`
+  )
+  // Sin nada que añadir, la URL queda desnuda (sin `_NoIndex_True` colgando).
   assert.equal(
     buildListUrl({ ...base, offset: 0, sortRecent: false }),
     `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana`
@@ -215,22 +221,55 @@ test('discoverTarget: 404 en página 1 = comuna vacía → completo, sin bajas, 
   assert.equal(client.state.stats.completed, true) // last_success_at avanza
 })
 
+/**
+ * Simulador de portal REALISTA: pagina de 48 en 48 y agota cada banda justo en el
+ * total que declara (y nunca más allá del tope de 2000 del portal). Hace falta
+ * que sea coherente porque sweepBand ya no se fía de que la paginación "acabe
+ * bien": contrasta lo visto contra el total declarado (MIN_BAND_COVERAGE) y da
+ * la banda por INCOMPLETA si no cuadra. Un fake que declare 800 y sirva 2 por
+ * página es justo el barrido truncado que esa comprobación existe para cazar.
+ *
+ * `totalFor(band, call)` devuelve el total declarado de esa banda; `band` es el
+ * token de precio ('0CLF-110000CLF') o 'BASE' sin filtro, y `call` es la
+ * n-ésima petición a esa misma URL (para modelar totales que cambian entre el
+ * probe y el barrido real).
+ */
+function makePortal(totalFor) {
+  const RESULTS_LIMIT = 2000
+  const calls = {}
+  const split = (html) => {
+    const i = html.lastIndexOf('|CALL|')
+    return { url: html.slice(0, i), call: Number(html.slice(i + 6)) }
+  }
+  const bandOf = (url) => url.match(/_PriceRange_([^_]+)/)?.[1] ?? 'BASE'
+  const declared = (html) => { const { url, call } = split(html); return { band: bandOf(url), url, total: totalFor(bandOf(url), call) } }
+  return {
+    fetch: async (url) => { calls[url] = (calls[url] ?? 0) + 1; return { ok: true, html: `${url}|CALL|${calls[url]}` } },
+    parseList: (html) => {
+      const { url, band, total } = declared(html)
+      const offset = Number(url.match(/_Desde_(\d+)/)?.[1] ?? 1) - 1
+      const alcanzable = Math.min(total, RESULTS_LIMIT) // el portal no pagina más allá del tope
+      const n = Math.max(0, Math.min(48, alcanzable - offset))
+      return Array.from({ length: n }, (_, i) => listing(`MLC-${band}-${offset + i}`))
+    },
+    parseMeta: (html) => {
+      const { total } = declared(html)
+      const alcanzable = Math.min(total, RESULTS_LIMIT)
+      return { total, pageCount: Math.ceil(alcanzable / 48), resultsLimit: alcanzable }
+    },
+  }
+}
+
 test('discoverTarget: comuna que topa paginación → subdivide por precio y SÍ es exhaustiva', async () => {
   // Comuna grande: total=3479 > tope 2000 → el barrido base topa. Ahora se
   // subdivide por bandas de precio; cada banda cabe → la unión ve el 100% de la
   // comuna → exhaustivo → sí puede dar de baja lo que ya no aparece.
   const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
-  let page = 0, metaCall = 0
+  // Comuna grande: 3479 sin filtro (topa el tope de 2000) → bisección. Cada
+  // banda cabe holgada y se agota entera.
+  const portal = makePortal((band) => (band === 'BASE' ? 3479 : 800))
   const res = await discoverTarget(client, TARGET, {
-    fetch: async () => ({ ok: true, html: 'P' }),
-    parseList: () => { page++; return [listing(`MLC-${page}-a`), listing(`MLC-${page}-b`)] },
-    parseMeta: () => {
-      metaCall++
-      // Primera llamada (barrido base, página 1): la comuna topa.
-      if (metaCall === 1) return { total: 3479, pageCount: 1, resultsLimit: 2000 }
-      // Probes y barridos de banda: cada banda cabe bajo el tope y termina.
-      return { total: 800, pageCount: 1, resultsLimit: 2000 }
-    },
+    ...portal,
     enqueueDetail: async () => {},
     sleep: async () => {},
   })
@@ -243,6 +282,35 @@ test('discoverTarget: comuna que topa paginación → subdivide por precio y SÍ
   assert.match(res.reason, /bandas de precio/)
 })
 
+test('discoverTarget: banda que "termina bien" pero vio MENOS de lo declarado → NO es exhaustiva ni da de baja', async () => {
+  // La red de seguridad del punto 1: la paginación acaba limpia (página vacía),
+  // pero la banda solo sirvió 300 de los 3000 anuncios que declaró. Antes esto
+  // se reportaba `completed` y markDelisted daba de baja anuncios vivos que
+  // simplemente no se llegaron a ver — el origen del baile de altas/bajas.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-vivo', external_id: 'MLC-VIVO' }] })
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({ ok: true, html: 'P' }),
+    // Declara 3000 pero solo entrega 300 (y luego se vacía): cobertura 10%.
+    parseList: (() => {
+      let served = 0
+      return () => {
+        if (served >= 300) return []
+        const page = Array.from({ length: 48 }, (_, i) => listing(`MLC-${served + i}`))
+        served += 48
+        return page
+      }
+    })(),
+    parseMeta: () => ({ total: 3000, pageCount: 63, resultsLimit: 3000 }),
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.completed, false)   // la paginación acabó, pero la cobertura no cuadra
+  assert.equal(res.exhaustive, false)
+  assert.equal(res.delisted, 0)        // ← lo importante: NO da de baja sobre un barrido parcial
+  assert.deepEqual(client.state.delistedIds, [])
+  assert.match(res.reason, /cobertura insuficiente/)
+})
+
 test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la encuentra topada → se subdivide y corrige (no se pierde en silencio)', async () => {
   // Modela la brecha real vista en producción (Las Condes/Venta quedó en 69%,
   // 2416/3487, pese a que la bisección da cobertura exacta en pruebas con probes
@@ -251,34 +319,21 @@ test('discoverTarget: banda que el probe dio por "chica" pero el barrido real la
   // igual que "cabe" — ver subdividePriceBands). Sin corrección, esos resultados
   // extra se pierden en silencio y el barrido se reporta "completo" sin serlo.
   const client = makeClient({ known: [], activeInComuna: [] })
-  const RESULTS_LIMIT = 2000
-  const calls = {}
-
-  const fetchFn = async (url) => {
-    calls[url] = (calls[url] || 0) + 1
-    return { ok: true, html: `${url}|CALL|${calls[url]}` }
-  }
-  // TARGET.operation es 'sale' → discoverTarget bisecta en UF (CLF), no CLP.
-  const parseMetaFn = (html) => {
-    const sep = html.lastIndexOf('|CALL|')
-    const url = html.slice(0, sep)
-    const call = Number(html.slice(sep + 6))
-    if (!url.includes('_PriceRange_')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // barrido base: topa
-    if (url.includes('_PriceRange_0CLF-300000CLF')) return { total: 3479, pageCount: 1, resultsLimit: RESULTS_LIMIT } // probe rango completo
-    if (url.includes('_PriceRange_0CLF-150000CLF')) {
+  // TARGET.operation es 'sale' → discoverTarget bisecta en UF (CLF), techo 220.000.
+  const portal = makePortal((band, call) => {
+    if (band === 'BASE') return 3479                  // barrido base: topa
+    if (band === '0CLF-220000CLF') return 3479        // probe del rango completo
+    if (band === '0CLF-110000CLF') {
       // 1ª vez (el probe de subdividePriceBands): "chica", queda como hoja.
-      // 2ª vez (el barrido REAL de esa hoja): en realidad topa.
-      return call === 1 ? { total: 800, pageCount: 1, resultsLimit: RESULTS_LIMIT } : { total: 2500, pageCount: 1, resultsLimit: RESULTS_LIMIT }
+      // 2ª vez (el barrido REAL de esa hoja): en realidad topa → hay que corregir.
+      return call === 1 ? 800 : 2500
     }
-    if (url.includes('_PriceRange_150000CLF-300000CLF')) return { total: 50, pageCount: 1, resultsLimit: RESULTS_LIMIT }
-    // Sub-bandas nacidas de la corrección de [0, 150.000]: caben.
-    return { total: 1200, pageCount: 1, resultsLimit: RESULTS_LIMIT }
-  }
-  let n = 0
+    if (band === '110000CLF-220000CLF') return 50
+    if (band === '220000CLF-0CLF') return 0           // banda abierta: vacía
+    return 1200                                       // sub-bandas de la corrección: caben
+  })
   const res = await discoverTarget(client, TARGET, {
-    fetch: fetchFn,
-    parseMeta: parseMetaFn,
-    parseList: () => { n++; return [listing(`MLC-${n}-a`), listing(`MLC-${n}-b`)] },
+    ...portal,
     enqueueDetail: async () => {},
     sleep: async () => {},
   })
@@ -340,33 +395,36 @@ test('subdividePriceBands: Las Condes casa/venta REAL en CLP (verificado en vivo
   assert.equal(sum, 3487) // === total real sin filtro: cobertura exacta, sin huecos
 })
 
-test('subdividePriceBands: Las Condes casa/venta REAL en UF/CLF (verificado en vivo 2026-07-27) — venta filtra en UF', async () => {
-  // Totales capturados en vivo contra el portal real, en UF (venta/casa/
-  // las-condes-metropolitana, techo PRICE_CEILING_CLF=300000, resultsLimit=2000).
-  // Confirma en datos reales los primeros niveles de bisección que el algoritmo
-  // efectivamente recorre con este techo: la banda sigue topada por debajo de
-  // 75.000 UF porque casi todo el inventario de Las Condes está ahí (las bandas
-  // NATIVAS del propio portal —0-15000, 15000-24000, 24000-∞ UF— dan
-  // 941+1316+1225=3482, el total exacto, evidencia de que UF es la unidad
-  // correcta para venta). Por debajo de 75.000 UF no se sondeó punto a punto
-  // contra el portal — se aproxima proporcionalmente al ancho solo para que la
-  // bisección del test termine determinísticamente.
+test('subdividePriceBands: Las Condes casa/venta REAL en UF/CLF (verificado en vivo 2026-07-27) — árbol completo, bandas bajo el tope y sin huecos', async () => {
+  // Árbol de bisección COMPLETO capturado en vivo contra el portal real
+  // (venta/casa/las-condes-metropolitana, techo PRICE_CEILING_CLF=220000,
+  // resultsLimit=2000). Cada entrada es un `total` que el portal declaró de
+  // verdad para ese rango en UF. Verificado además: `_PriceRange_0CLF-220000CLF`
+  // da 3482 = el total EXACTO sin filtro de la comuna, y por encima de 220.000 UF
+  // el portal devuelve 404 (no hay inventario) — por eso ese techo basta.
   const REAL_TOTALS_UF = {
-    '0-300000': 3482, '0-150000': 3480, '150000-300000': 2,
-    '0-75000': 3457, '75000-150000': 23,
+    '0-220000': 3482, '0-110000': 3477, '110000-220000': 5,
+    '0-55000': 3396, '55000-110000': 81,
+    '0-27500': 2725, '27500-55000': 684,
+    '0-13750': 692, '13750-27500': 2033,
+    '13750-20625': 1201, '20625-27500': 831,
   }
-  const probe = async ({ min, max }) => {
-    const key = `${min}-${max}`
-    if (key in REAL_TOTALS_UF) return REAL_TOTALS_UF[key]
-    return Math.round(((max - min) / 75_000) * 3457)
-  }
-  const bands = await subdividePriceBands(probe, 2000, 0, 300_000, 'CLF')
+  const probe = async ({ min, max }) => REAL_TOTALS_UF[`${min}-${max}`] ?? null
+  const bands = await subdividePriceBands(probe, 2000, 0, 220_000, 'CLF')
 
   const sorted = [...bands].sort((a, b) => a.min - b.min)
+  // Contiguas, cubriendo [0, techo] sin huecos ni solapes, todas en UF.
   assert.equal(sorted[0].min, 0)
-  assert.equal(sorted[sorted.length - 1].max, 300_000)
+  assert.equal(sorted[sorted.length - 1].max, 220_000)
   for (const b of sorted) assert.equal(b.unit, 'CLF')
   for (let i = 1; i < sorted.length; i++) assert.equal(sorted[i].min, sorted[i - 1].max)
+  // Toda banda hoja quedó BAJO el tope de paginación (si no, se perderían
+  // anuncios: el portal no deja paginar más allá de ~2000 por búsqueda).
+  for (const b of sorted) assert.ok(REAL_TOTALS_UF[`${b.min}-${b.max}`] <= 2000, `banda [${b.min},${b.max}] sobre el tope`)
+  // Y su suma reconstruye el total de la comuna (3482, con el ruido normal de
+  // publicaciones que entran/salen entre peticiones).
+  const sum = sorted.reduce((s, b) => s + REAL_TOTALS_UF[`${b.min}-${b.max}`], 0)
+  assert.ok(Math.abs(sum - 3482) <= 20, `la suma de bandas (${sum}) debe reconstruir el total 3482`)
 })
 
 test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna', async () => {
