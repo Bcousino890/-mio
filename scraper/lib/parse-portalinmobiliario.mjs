@@ -401,6 +401,29 @@ export function parseListMeta(html) {
   }
 }
 
+// ─── Helper: códigos del bloque "Información de la corredora" en el DOM ──────
+// El blob Nordic NO siempre trae el "Código de la propiedad" (property_code) en
+// `seller_profile(.rex)?.bottom_extra_info[]`: varía por layout y, en tiendas
+// oficiales (`seller_profile_rex`), muchas fichas lo renderizan solo en el HTML.
+// Ese bloque expone cada dato como un `.ui-seller-info__status-info` con un
+// título `.ui-seller-info__status-info__title` (la etiqueta, ej. "Código de la
+// propiedad") y un valor `.ui-seller-info__status-info__subtitle` (ej. 114611).
+// Devuelve un mapa etiqueta(minúsculas)→valor para usar como fallback. Nunca
+// lanza: HTML raro ⇒ mapa vacío ⇒ el fallback simplemente no aplica.
+function sellerStatusInfoFromDom(html) {
+  const out = new Map()
+  if (!html) return out
+  try {
+    const $ = cheerioLoad(html)
+    $('.ui-seller-info__status-info').each((_, el) => {
+      const label = decode($(el).find('.ui-seller-info__status-info__title').first().text()).toLowerCase()
+      const value = decode($(el).find('.ui-seller-info__status-info__subtitle').first().text())
+      if (label && value && !out.has(label)) out.set(label, value)
+    })
+  } catch { /* HTML raro: mapa vacío */ }
+  return out
+}
+
 /**
  * Parsea la ficha de detalle de Portalinmobiliario. Devuelve el objeto con
  * los mismos campos "core" que produce parseDetailPage de Idealista (en lo
@@ -601,6 +624,15 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       if (/c[oó]digo de la propiedad/i.test(item?.title?.text ?? '')) {
         property_code = item?.subtitles?.[0]?.text ?? null
         break
+      }
+    }
+    // Fallback DOM: muchas fichas NO traen el código en el blob Nordic (varía
+    // por layout; frecuente en tiendas oficiales `seller_profile_rex`) pero SÍ
+    // lo renderizan en el bloque "Información de la corredora". Solo se recurre
+    // al DOM si el blob no dio nada, para no re-parsear el HTML en el caso común.
+    if (property_code == null) {
+      for (const [label, value] of sellerStatusInfoFromDom(html)) {
+        if (/c[oó]digo de la propiedad/i.test(label)) { property_code = value; break }
       }
     }
 

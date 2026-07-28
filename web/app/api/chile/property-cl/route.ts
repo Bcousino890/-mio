@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
-import { extractListing, findRolAtPoint, setRolFromPin } from '@/lib/captar-pipeline'
+import {
+  extractListing, setRolFromPin, resolveRolAtPoint, findCrmCaptacionByRol,
+  type ResolvedRol, type CrmCaptacion,
+} from '@/lib/captar-pipeline'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/property-cl — propiedades CANÓNICAS deduplicadas (plan Anuncios CL
@@ -74,6 +77,32 @@ const LISTINGS_JSON = `
     LEFT JOIN corredoras_cl cor ON cor.id = l.corredora_id
     WHERE l.property_cl_id = p.id
   ), '[]'::jsonb) AS listings
+`
+
+// ¿Ya está el inmueble (por su rol SII confirmado a mano) en el CRM de
+// captación, con dueño/teléfonos para llamar? Se resuelve por rol_matriz +
+// comuna. Solo corre cuando hay rol confirmado (barato: captaciones_cl está
+// indexada por sii_rol) — si no, NULL. Alimenta el aviso "ya subido, llamar"
+// de la ficha.
+const CRM_JSON = `
+  (CASE WHEN p.rol_matriz IS NOT NULL AND c.sii_comuna_code IS NOT NULL THEN (
+     SELECT jsonb_build_object(
+       'captacion_id', cap.id,
+       'owner_name', cap.owner_name,
+       'owner_rut', cap.owner_rut,
+       'phones', cap.phones,
+       'emails', cap.emails,
+       'stage', cap.stage,
+       'dealernet_status', cap.dealernet_status,
+       'needs_review', cap.needs_review,
+       'source_url', cap.source_url,
+       'updated_at', cap.updated_at
+     )
+     FROM captaciones_cl cap
+     WHERE cap.sii_rol = p.rol_matriz AND cap.sii_comuna_code = c.sii_comuna_code
+     ORDER BY (cap.owner_name IS NOT NULL) DESC, (cap.phones IS NOT NULL) DESC, cap.updated_at DESC
+     LIMIT 1
+   ) ELSE NULL END) AS crm
 `
 
 // Foto de portada: la primera foto del anuncio activo más reciente del grupo.
@@ -226,6 +255,9 @@ export async function GET(request: NextRequest) {
         p.manual_latitude,
         p.manual_longitude,
         p.manual_pin_set_at,
+        -- Marca manual "ya subida al CRM externo (Smart)" — para no duplicar el
+        -- alta comercial; se enciende/apaga desde la ficha (0082).
+        p.smart_crm_at,
         -- Sello de la última unión/separación MANUAL (0079): la ficha lleva el
         -- distintivo "unido a mano" para no confundir un grupo curado por el
         -- equipo con uno propuesto por el score del dedup.
@@ -236,6 +268,7 @@ export async function GET(request: NextRequest) {
         -- a la comuna — ver 0076).
         EXTRACT(DAY FROM (now() - COALESCE(p.portal_first_seen_at, p.first_seen_at)))::int AS days_on_market,
         ${listUngrouped ? '(l.photos->>0) AS cover_photo' : COVER_PHOTO},
+        ${CRM_JSON},
         ${LISTINGS_JSON}
       ${fromClause}
       ${whereClause}
@@ -292,11 +325,30 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, latitude, longitude, source_url } = body ?? {}
+    const { id, latitude, longitude, source_url, smart_crm } = body ?? {}
 
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
     }
+
+    // Marca manual "ya subida al CRM externo (Smart)" — independiente del pin.
+    // Body: { id, smart_crm: true } para marcar, { id, smart_crm: false } para
+    // desmarcar. No es una integración con Smart: solo el estado que declara el
+    // equipo para no duplicar el alta comercial.
+    if (typeof smart_crm === 'boolean') {
+      const { rows } = await pool.query(
+        `UPDATE property_cl
+           SET smart_crm_at = CASE WHEN $2 THEN now() ELSE NULL END, updated_at = now()
+         WHERE id = $1
+         RETURNING id, smart_crm_at`,
+        [id, smart_crm],
+      )
+      if (rows.length === 0) {
+        return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
+      }
+      return NextResponse.json({ success: true, data: rows[0] })
+    }
+
     const clearing = latitude == null && longitude == null
     if (!clearing && (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude))) {
       return NextResponse.json({ success: false, error: 'latitude/longitude deben ser números (o ambos null para borrar)' }, { status: 400 })
@@ -316,25 +368,56 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
     }
 
+    // Resolver el rol SII de la parcela BAJO el pin corregido y COMPLETAR la
+    // ficha del inmueble con esa info real (rol, dirección exacta, parcela). El
+    // pin arrastrado a mano ES la ubicación real, así que el rol se resuelve por
+    // geometría (point-in-polygon sobre el catastro), no por matching de texto.
+    let rol: ResolvedRol | null = null
+    let crm: CrmCaptacion | null = null
     let captacion: { id: string; sii_rol: string | null; comuna_name: string | null } | null = null
     let captacionError: string | null = null
-    if (!clearing && typeof source_url === 'string' && source_url) {
+
+    if (!clearing) {
       try {
-        const rolHit = await findRolAtPoint(latitude, longitude)
-        const { captacion: c } = await extractListing(source_url)
-        if (rolHit) {
-          const updated = await setRolFromPin(c.id, rolHit.rol, rolHit.sii_comuna_code)
-          captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rolHit.comuna_name }
+        rol = await resolveRolAtPoint(latitude, longitude)
+        if (rol) {
+          // Persistir el rol confirmado a mano en la ficha canónica (máxima
+          // confianza: lo confirmó un humano). NO pisa latitude/longitude —
+          // el pin declarado por el anuncio sigue intacto; esto es la capa
+          // "resuelta" (rol_matriz + dirección exacta + parcela catastral).
+          await pool.query(
+            `UPDATE property_cl SET
+               rol_matriz = $2, rol_confidence = 1, matched_parcel_id = $3,
+               exact_address = COALESCE($4, exact_address), updated_at = now()
+             WHERE id = $1`,
+            [id, rol.rol, rol.parcel_id, rol.direccion],
+          )
+          crm = await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)
         } else {
-          captacion = { id: c.id, sii_rol: null, comuna_name: null }
           captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
         }
       } catch (e) {
-        captacionError = e instanceof Error ? e.message : 'Error al buscar el rol / guardar en captación'
+        captacionError = e instanceof Error ? e.message : 'Error al resolver el rol bajo el pin'
+      }
+
+      // Si además viene la URL del aviso cuya ubicación se está corrigiendo,
+      // crear/actualizar su captación con el rol ya resuelto — así el pin
+      // corregido entra solo al pipeline de captación (dueño vía TGR, contacto
+      // vía DealerNet) sin volver a pegar la URL en /chile/captar-url.
+      if (rol && typeof source_url === 'string' && source_url) {
+        try {
+          const { captacion: c } = await extractListing(source_url)
+          const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code)
+          captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rol.comuna_name }
+          // La captación recién sincronizada puede ser la más completa: refrescar.
+          crm = (await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)) ?? crm
+        } catch (e) {
+          captacionError = captacionError ?? (e instanceof Error ? e.message : 'Error al guardar en captación')
+        }
       }
     }
 
-    return NextResponse.json({ success: true, data: rows[0], captacion, captacion_error: captacionError })
+    return NextResponse.json({ success: true, data: rows[0], rol, crm, captacion, captacion_error: captacionError })
   } catch (error) {
     console.error('Error guardando pin manual de property_cl:', error)
     return NextResponse.json(

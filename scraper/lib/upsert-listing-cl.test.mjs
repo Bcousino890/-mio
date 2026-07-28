@@ -114,3 +114,64 @@ test('re-upsert idéntico (mismo has_video) → sin changeType', async () => {
   assert.equal(res.changeType, null);
   assert.equal(client.versionLog.length, 0);
 });
+
+// ─── Cambio de precio: solo el PUBLICADO cuenta ──────────────────────────────
+// Blinda el bug de producción: `price` (CLP) de un anuncio en UF es un valor
+// DERIVADO (price_uf × la tasa UF del día). Como la UF sube casi a diario,
+// comparar CLP marcaba "cambio de precio" en TODOS los anuncios en UF en cada
+// refresco, sin que el vendedor tocara nada: 1.979 cambios en 24h, la inmensa
+// mayoría falsos, ahogando las rebajas reales que es justo lo que se quiere ver.
+
+const UF_PARSED = { ...BASE_PARSED, price: 14000, currency: 'UF' };
+
+test('anuncio en UF: subir la tasa UF NO es un cambio de precio', async () => {
+  // Mismo precio publicado (14.000 UF), tasa de ayer 40.000 → hoy 40.844,79.
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 560_000_000, price_uf: 14000, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, UF_PARSED, { ufRate: 40844.79, ufRateDate: '2026-07-28' });
+  assert.equal(changeType, null, 'la UF del día no puede inventar un cambio de precio');
+  assert.equal(client.versionLog.length, 0, 'ni escribir una fila en el histórico');
+});
+
+test('anuncio en UF: una rebaja REAL en UF sí se registra', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 571_827_060, price_uf: 14000, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(
+    client, { ...UF_PARSED, price: 13000 }, { ufRate: 40844.79, ufRateDate: '2026-07-28' },
+  );
+  assert.equal(changeType, 'price_change');
+});
+
+test('anuncio en CLP: el cambio se detecta sobre el CLP publicado', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, price: 480_000_000 });
+  assert.equal(changeType, 'price_change');
+});
+
+test('anuncio en UF sin price_uf previo (fila vieja) → no se inventa un cambio', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 560_000_000, price_uf: null, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, UF_PARSED, { ufRate: 40844.79, ufRateDate: '2026-07-28' });
+  assert.equal(changeType, null);
+});

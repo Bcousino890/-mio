@@ -37,6 +37,29 @@ async function resolveComunaId(client, comunaRaw) {
  * corredora > cambio de precio > actualización genérica. `null` si nada
  * relevante cambió (no se escribe fila en listing_version_log_cl).
  */
+/**
+ * ¿Cambió el precio DE VERDAD? Se compara el precio tal cual lo publica el
+ * anuncio, no el normalizado a CLP.
+ *
+ * `price` (CLP) de un anuncio en UF es un valor DERIVADO: price_uf × la tasa UF
+ * del día. La UF sube casi a diario, así que comparar CLP marcaba "cambio de
+ * precio" en todos los anuncios en UF cada vez que se refrescaban, sin que el
+ * vendedor tocara nada. Medido en producción: 1.979 cambios de precio en 24h,
+ * la inmensa mayoría falsos — justo el dato que sirve para detectar rebajas
+ * reales, ahogado en ruido.
+ */
+function precioCambio(existing, next) {
+  const enUf = (existing.currency ?? next.currency) === 'UF'
+  if (enUf) {
+    // Si el anuncio está en UF, manda el UF publicado. Sin dato previo de UF
+    // (filas viejas) no se puede afirmar que cambió: no se marca.
+    if (existing.price_uf == null || next.price_uf == null) return false
+    return Number(existing.price_uf) !== Number(next.price_uf)
+  }
+  if (existing.price == null || next.price == null) return false
+  return Number(existing.price) !== Number(next.price)
+}
+
 function detectChangeType(existing, next) {
   if (!existing) return 'new'
 
@@ -47,9 +70,7 @@ function detectChangeType(existing, next) {
     return 'agency_change'
   }
 
-  if (existing.price != null && next.price != null && existing.price !== next.price) {
-    return 'price_change'
-  }
+  if (precioCambio(existing, next)) return 'price_change'
 
   const photosCountBefore = Array.isArray(existing.photos) ? existing.photos.length : (existing.photos?.length ?? 0)
   const photosCountAfter = Array.isArray(next.photos) ? next.photos.length : 0
@@ -75,7 +96,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const { ufRate = null, ufRateDate = null, scrapedAt = new Date() } = options
 
   const { rows: existingRows } = await client.query(
-    `SELECT id, price, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
+    `SELECT id, price, price_uf, currency, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
      FROM listings_cl WHERE portal = $1 AND external_id = $2`,
     [parsed.portal ?? 'portalinmobiliario', parsed.external_id]
   )
@@ -94,6 +115,8 @@ export async function upsertListingCl(client, parsed, options = {}) {
 
   const next = {
     price: priceClp,
+    price_uf: priceUf,
+    currency: parsed.currency ?? null,
     advertiser_name: parsed.advertiser_name ?? null,
     photos: parsed.photos ?? [],
     description: parsed.description ?? null,
