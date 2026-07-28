@@ -15,6 +15,15 @@ export type ChileComuna = {
   provincia: string
   /** Localidades/sectores con identidad propia dentro de la comuna (ej. balnearios). */
   localidades?: string[]
+  /**
+   * Grafías alternativas del NOMBRE de la comuna (no sectores dentro de ella).
+   * Portal Inmobiliario no siempre usa la grafía oficial de SUBDERE/BCN: publica
+   * "Tiltil" donde la taxonomía dice "Til Til". Sin el alias, `normalizeComuna`
+   * devolvía null y esos anuncios entraban con `comuna_id` NULL — invisibles
+   * para los filtros por comuna y, peor, fuera del `markDelisted` del discovery
+   * (que filtra por comuna_id), así que se quedaban activos para siempre.
+   */
+  aliases?: string[]
   priority: boolean
 }
 
@@ -31,12 +40,13 @@ const ARAUCANIA = 'Región de la Araucanía'
 // Comunas "barrio alto" — las más caras de la Región Metropolitana.
 const BARRIO_ALTO = new Set(['Vitacura', 'Las Condes', 'Lo Barnechea', 'Providencia', 'La Reina', 'Ñuñoa'])
 
-function comuna(name: string, provincia: string, opts: { region?: string; localidades?: string[]; priority?: boolean } = {}): ChileComuna {
+function comuna(name: string, provincia: string, opts: { region?: string; localidades?: string[]; aliases?: string[]; priority?: boolean } = {}): ChileComuna {
   return {
     name,
     region: opts.region ?? RM,
     provincia,
     localidades: opts.localidades,
+    aliases: opts.aliases,
     priority: opts.priority ?? BARRIO_ALTO.has(name),
   }
 }
@@ -84,7 +94,8 @@ export const CHILE_COMUNAS: ChileComuna[] = [
   // ── Región Metropolitana · Provincia de Chacabuco (3) ───────────────────
   comuna('Colina', 'Chacabuco'),
   comuna('Lampa', 'Chacabuco'),
-  comuna('Til Til', 'Chacabuco'),
+  // Portal Inmobiliario la publica como "Tiltil" (verificado en vivo, 2026-07-28).
+  comuna('Til Til', 'Chacabuco', { aliases: ['Tiltil'] }),
 
   // ── Región Metropolitana · Provincia de Maipo (4) ───────────────────────
   comuna('San Bernardo', 'Maipo'),
@@ -131,6 +142,11 @@ const COMUNA_BY_FOLDED = new Map<string, ChileComuna>()
 const LOCALIDAD_TO_COMUNA = new Map<string, ChileComuna>()
 for (const c of CHILE_COMUNAS) {
   COMUNA_BY_FOLDED.set(fold(c.name), c)
+  // Los alias son la MISMA comuna escrita de otra forma, no un sector dentro de
+  // ella: van al índice de comunas (localidad queda null), no al de localidades.
+  for (const alias of c.aliases ?? []) {
+    COMUNA_BY_FOLDED.set(fold(alias), c)
+  }
   for (const loc of c.localidades ?? []) {
     LOCALIDAD_TO_COMUNA.set(fold(loc), c)
   }

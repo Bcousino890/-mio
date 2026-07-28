@@ -92,7 +92,13 @@ export default function AnunciosHealthClient() {
         if (!d.success) { setError(d.error || 'Error'); return }
         setError(null)
         setData(prev => {
-          if (!prev || d.live_probed) return d
+          // Se conserva el último total del portal conocido SIEMPRE que el nuevo
+          // venga vacío — también en las lecturas con sonda. La sonda en vivo ya
+          // no cubre todos los objetivos (sondear los 104 de la RM a la vez
+          // tumbaría la IP de la VPS): trae un lote acotado y deja el resto en
+          // null. Sin este arrastre, cada sonda borraría el dato de las filas que
+          // esta vez no tocaron el turno.
+          if (!prev) return d
           const previo = new Map(prev.targets.map(t => [`${t.comuna}|${t.operation}|${t.property_type}`, t]))
           return {
             ...d,

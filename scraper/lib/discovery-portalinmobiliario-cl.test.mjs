@@ -14,6 +14,7 @@ import {
   comunaSlug,
   regionSlug,
   buildListUrl,
+  comunaMatchRatio,
   decideContinue,
   discoverTarget,
   subdividePriceBands,
@@ -28,6 +29,42 @@ test('operationSlug / comunaSlug / regionSlug', () => {
   assert.equal(comunaSlug('Ñuñoa'), 'nunoa')
   assert.equal(comunaSlug('La Reina'), 'la-reina')
   assert.equal(regionSlug('Región Metropolitana de Santiago'), 'metropolitana')
+  // Fuera de la RM el portal quita el prefijo "Región de/del" pero CONSERVA el
+  // artículo. Verificado en vivo (2026-07-28): `pucon-la-araucania` → 726
+  // resultados; `pucon-araucania` (lo que devolvía la versión que se quedaba con
+  // la última palabra) → 63.017, o sea el listado nacional SIN filtrar.
+  assert.equal(regionSlug('Región de Valparaíso'), 'valparaiso')
+  assert.equal(regionSlug('Región de la Araucanía'), 'la-araucania')
+  assert.equal(regionSlug('Región de Los Lagos'), 'los-lagos')
+  assert.equal(regionSlug('Región del Biobío'), 'biobio')
+  // Comuna cuya grafía en el portal ("Tiltil") no es la oficial ("Til Til"):
+  // el slug de URL sí es el separado — verificado, 115 resultados.
+  assert.equal(comunaSlug('Til Til'), 'til-til')
+})
+
+test('comunaMatchRatio: distingue una comuna real del listado nacional sin filtrar', () => {
+  const deLasCondes = [
+    { location_text: 'El Golf, Barrio El Golf, Las Condes' },
+    { location_text: 'Cam. Del Valle Alto, Las Condes, San Carlos De Apoquindo, Las Condes' },
+  ]
+  assert.equal(comunaMatchRatio(deLasCondes, 'Las Condes'), 1)
+
+  // Lo que devuelve de verdad un slug inválido: anuncios de todo Chile.
+  const nacional = [
+    { location_text: 'Constancio Vigil 500, Las Condes' },
+    { location_text: 'Juan XXIII, Vitacura' },
+    { location_text: 'Bludenz 4983, Lo Barnechea, La Dehesa, Lo Barnechea' },
+    { location_text: 'Cam. Buin Maipo 1133, Buin, Centro De Buin, Buin' },
+  ]
+  assert.equal(comunaMatchRatio(nacional, 'Pucón'), 0)
+
+  // El alias resuelve la grafía del portal ("Tiltil" → comuna "Til Til").
+  assert.equal(comunaMatchRatio([{ location_text: 'Las Cimas, Tiltil, Alto El Manzano, Tiltil' }], 'Til Til'), 1)
+
+  // Sin nada que medir → null (inerte), NUNCA 0: si un cambio de maquetado
+  // dejara de traer location_text, la guarda no debe apagar todas las comunas.
+  assert.equal(comunaMatchRatio([], 'Las Condes'), null)
+  assert.equal(comunaMatchRatio([{ external_id: 'MLC-1' }], 'Las Condes'), null)
 })
 
 test('buildListUrl: TODOS los modificadores en UN segmento, orden _Desde_/_OrderId_/_PriceRange_', () => {
@@ -190,6 +227,51 @@ test('discoverTarget: pagina, filtra proyectos, encola solo lo nuevo, marca baja
   assert.equal(client.state.stats.completed, true)
   assert.equal(client.state.stats.listingCount, 3)
   assert.equal(client.state.stats.portalTotal, 3)
+})
+
+test('discoverTarget: slug de comuna inválido → corta en p1, NI bisecta NI encola, sin bajas', async () => {
+  // Reproduce el fallo real de `pucon-araucania`: el portal NO da 404 ante un
+  // segmento de comuna que no reconoce — devuelve el listado NACIONAL entero.
+  // Sin la guarda, el total nacional (63.020 > resultsLimit) hacía que
+  // discoverTarget lo tomara por "comuna que topa la paginación" y lo
+  // subdividiera en decenas de bandas de precio, encolando fichas de todo Chile.
+  const nacional = [
+    listing('MLC-1', { location_text: 'El Golf, Las Condes' }),
+    listing('MLC-2', { location_text: 'Juan XXIII, Vitacura' }),
+    listing('MLC-3', { location_text: 'Centro De Buin, Buin' }),
+  ]
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
+
+  const enqueued = []
+  let peticiones = 0
+  const res = await discoverTarget(
+    client,
+    { ...TARGET, comuna_name: 'Pucón', region: 'Región de la Araucanía' },
+    {
+      fetch: async () => { peticiones++; return { ok: true, html: 'NACIONAL' } },
+      parseList: () => nacional,
+      parseMeta: () => ({ total: 63020, pageCount: 1314, resultsLimit: 2000 }),
+      enqueueDetail: async (id) => enqueued.push(id),
+      sleep: async () => {},
+    }
+  )
+
+  assert.equal(res.wrong_comuna, true)
+  assert.equal(res.completed, false)
+  assert.equal(res.exhaustive, false)
+  assert.match(res.reason, /slug de comuna inválido/)
+  // Lo que de verdad importa: ni una ficha encolada, ni una banda de precio,
+  // y UNA sola petición (se corta en la página 1, no pagina 63.000 anuncios).
+  assert.deepEqual(enqueued, [])
+  assert.equal(res.bands, 0)
+  assert.equal(peticiones, 1)
+  // Nada de dar bajas con un barrido que jamás vio la comuna.
+  assert.equal(res.delisted, 0)
+  assert.equal(client.state.delistedIds.length, 0)
+  // Y el total NACIONAL no se guarda como el total del portal para esta comuna.
+  assert.equal(client.state.stats.completed, false)
+  assert.equal(client.state.stats.listingCount, 0)
+  assert.equal(client.state.stats.portalTotal, null)
 })
 
 test('discoverTarget: fetch que falla en página 1 → incompleto, sin bajas', async () => {

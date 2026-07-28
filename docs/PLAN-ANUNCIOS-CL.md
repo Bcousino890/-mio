@@ -229,6 +229,47 @@ Casas usadas RM: piloto Las Condes → comunas prioritarias (Colina, Lo Barneche
 La Reina, Vitacura, Peñalolén) → resto RM. Luego Deptos, luego Terrenos (mismo
 pipeline, cambia el filtro de tipo en discovery).
 
+#### H6.1 — Verificación de las 56 comunas de la taxonomía (2026-07-28)
+
+Antes de activar comunas se sondearon EN VIVO las 56 de `chile-zones.ts`
+(`/venta/casa/propiedades-usadas/<comuna>-<region>`, página 1 real). Resultado y
+correcciones aplicadas:
+
+| Comprobación | Resultado |
+|---|---|
+| Slug de URL válido | 52/52 RM ✅ · Zapallar y Puchuncaví ✅ · **Pucón y Villarrica ❌** (corregido) |
+| Nombre del portal resuelve a la comuna | 55/56 ✅ · **Til Til ❌** (el portal escribe "Tiltil" — corregido con alias) |
+| Anuncios de p1 que son de la comuna | 79–100% en las 56 (mínimo: Estación Central 79%) |
+
+**Modo de fallo descubierto — un slug inválido NO da 404.** Portal Inmobiliario
+ignora en silencio el segmento de comuna que no reconoce y sirve el listado
+**NACIONAL** completo. Medido: `pucon-araucania` → `total=63.017` (todo Chile),
+`pucon-la-araucania` → `total=726` (el real). Sin protección, `discoverTarget`
+leía ese total nacional como "comuna que topa la paginación", la subdividía en
+decenas de bandas de precio y encolaba miles de fichas de todo el país — días de
+cola y GB de proxy para una comuna que nunca se barrió.
+
+Tres correcciones, con test de regresión cada una:
+1. **`regionSlug()`** se quedaba con la última palabra del nombre de región, lo
+   que se comía el artículo ("Región de la Araucanía" → `araucania`). Ahora quita
+   el prefijo "Región de/del" y **conserva el artículo** → `la-araucania`.
+2. **Alias de comuna** (`aliases` en la taxonomía): "Tiltil" → `Til Til`. Sin
+   esto sus anuncios entraban con `comuna_id` NULL, invisibles a los filtros y
+   **fuera del `markDelisted`** (que filtra por comuna_id) — se quedaban activos
+   para siempre. Replicado en `web/lib/chile-zones.ts` y `scraper/lib/chile-comunas.mjs`.
+3. **Guarda `comunaMatchRatio`**: en la página 1 se mide qué fracción de los
+   anuncios pertenece de verdad a la comuna del objetivo. Bajo el 50% se aborta
+   el objetivo sin paginar, sin bisecar, sin encolar y sin dar bajas. Margen
+   medido: comuna válida 79–100%, listado nacional 0–2%. Si `location_text`
+   faltara (cambio de maquetado), la guarda se vuelve **inerte**, no bloqueante.
+
+**Volumen que implica activar la RM entera** (casas en venta, medido el
+2026-07-28): **35.369 anuncios** en 52 comunas — 10× el piloto de Las Condes
+(3.472). Las 4 comunas fuera de la RM suman 2.876 más. A las ~15 fichas/min que
+sostiene hoy la cola `detail-cl`, la puesta al día inicial son **~40 h de cola
+solo para venta**, sin contar arriendo. No es un bloqueante, pero sí obliga a
+escalar por tandas y no de golpe.
+
 ### H7 — Pipeline de media a bucket, con dedup de fotos
 Requisito: **si la misma corredora re-publica las mismas fotos, NO guardarlas dos
 veces** — solo subir las nuevas.

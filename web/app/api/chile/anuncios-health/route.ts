@@ -28,16 +28,42 @@ const PI_HEADERS = {
   'Upgrade-Insecure-Requests': '1',
 }
 
+function fold(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+}
+
 /** "Las Condes" → "las-condes", "Ñuñoa" → "nunoa" (sin acentos, espacios→guiones). */
 function comunaSlug(name: string): string {
-  return name
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  return fold(name).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
+
+/**
+ * Segmento de región de la URL. Espejo de `regionSlug()` del discovery
+ * (scraper/lib/discovery-portalinmobiliario-cl.mjs) — antes esta sonda tenía
+ * "-metropolitana" incrustado, así que en cuanto se activara una comuna fuera de
+ * la RM (Zapallar, Pucón…) la columna "Portal declara" mostraría el total
+ * NACIONAL (~63.000) en vez del de la comuna, y el panel diría que la cobertura
+ * es del 1% cuando en realidad está completa.
+ */
+function regionSlug(region: string): string {
+  const f = fold(region ?? '')
+  if (f.includes('metropolitana')) return 'metropolitana'
+  return (
+    f
+      .replace(/^region\s+/, '')
+      .replace(/^del?\s+/, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'metropolitana'
+  )
+}
+
+// Tope de sondas EN VIVO por lectura del panel, y cuántas van en paralelo.
+// Con un solo objetivo activo daba igual; al activar la RM entera son 104
+// objetivos, y sondear todos a la vez cada 5 min desde la IP de la VPS es
+// exactamente lo que ya provocó un 403 en producción. Los objetivos no sondeados
+// caen a `portal_reported_count` (el total que guardó su último barrido).
+const MAX_LIVE_PROBES = 12
+const PROBE_CONCURRENCY = 4
 
 // Proxy Evomi (residencial CL), mismas variables que usa el worker
 // (scraper/lib/fetch.mjs). El contenedor `app` carga el mismo .env que
@@ -64,10 +90,10 @@ async function fetchWithTimeout(url: string, opts: { dispatcher?: InstanceType<t
  * quede bloqueada (403 — visto en producción tras horas de backfill), reintenta
  * por el proxy residencial Evomi, igual que hace el worker (fetchHtmlPi).
  */
-async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<number | null> {
+async function probeLivePortalTotal(comunaName: string, region: string, operation: string, propertyType: string): Promise<number | null> {
   const opSlug = operation === 'rent' ? 'arriendo' : 'venta'
   const typeSlug = propertyType || 'casa'
-  const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-metropolitana`
+  const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-${regionSlug(region)}`
 
   const extractTotal = async (res: Awaited<ReturnType<typeof undiciFetch>>) => {
     if (!res.ok) return null
@@ -151,7 +177,7 @@ export async function GET(request: Request) {
       `),
       pool.query(`
         SELECT
-          c.name AS comuna, t.operation, t.property_type,
+          c.name AS comuna, c.region, t.operation, t.property_type,
           t.enabled, t.interval_hours, t.force_refetch,
           t.last_run_at, t.last_success_at,
           t.last_listing_count, t.portal_reported_count,
@@ -252,14 +278,33 @@ export async function GET(request: Request) {
       console.warn('[anuncios-health] sin desglose de pendientes:', e instanceof Error ? e.message : e)
     }
 
-    // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
-    // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
-    // quedó guardado la última vez que corrió un barrido (que puede tener horas).
-    const liveTotals = skipLive
-      ? targets.rows.map(() => null)
-      : await Promise.all(
-          targets.rows.map((t) => probeLivePortalTotal(t.comuna, t.operation, t.property_type))
+    // Sonda EN VIVO: fetch real a Portal Inmobiliario para que "Portal declara"
+    // sea el número de AHORA — no el que quedó guardado la última vez que corrió
+    // un barrido (que puede tener horas). ACOTADA en número y en paralelismo (ver
+    // MAX_LIVE_PROBES): se sondean los objetivos cuyo barrido está más atrasado
+    // (el orden del SELECT ya es por comuna, así que se toma por last_run_at), que
+    // son los que de verdad hay que vigilar; el resto conserva su
+    // portal_reported_count. Sondear los 104 objetivos de la RM a la vez cada 5
+    // min es lo que tumbaría la IP de la VPS con un 403.
+    const liveTotals: (number | null)[] = targets.rows.map(() => null)
+    if (!skipLive) {
+      const porAntiguedad = targets.rows
+        .map((t, i) => ({ i, t }))
+        .sort((a, b) => {
+          const ta = a.t.last_run_at ? new Date(a.t.last_run_at).getTime() : 0
+          const tb = b.t.last_run_at ? new Date(b.t.last_run_at).getTime() : 0
+          return ta - tb
+        })
+        .slice(0, MAX_LIVE_PROBES)
+
+      for (let i = 0; i < porAntiguedad.length; i += PROBE_CONCURRENCY) {
+        const lote = porAntiguedad.slice(i, i + PROBE_CONCURRENCY)
+        const totales = await Promise.all(
+          lote.map(({ t }) => probeLivePortalTotal(t.comuna, t.region, t.operation, t.property_type))
         )
+        lote.forEach(({ i: idx }, k) => { liveTotals[idx] = totales[k] })
+      }
+    }
     const probedAt = new Date().toISOString()
 
     return NextResponse.json({
