@@ -986,6 +986,91 @@ export async function findRolAtPoint(lat: number, lng: number): Promise<RolAtPoi
   return (rows[0] as RolAtPoint) ?? null
 }
 
+export interface ResolvedRol {
+  rol: string
+  comuna_name: string
+  sii_comuna_code: string
+  parcel_id: string
+  geojson: unknown
+  direccion: string | null
+  avaluo_fiscal_total: number | null
+  superficie_terreno_m2: number | null
+  codigo_destino_principal: string | null
+}
+
+/** Como findRolAtPoint pero además trae la geometría de la parcela y los datos
+ * SII del rol (dirección exacta, avalúo, superficie). Es lo que necesita la
+ * ficha del inmueble para "completar la info real" al soltar el pin corregido:
+ * el rol de abajo, su dirección exacta y el polígono para resaltarlo en el
+ * mapa igual que el visor de catastro. */
+export async function resolveRolAtPoint(lat: number, lng: number): Promise<ResolvedRol | null> {
+  const { rows } = await pool.query(
+    `SELECT p.id AS parcel_id, p.rol, cc.name AS comuna_name, cc.sii_comuna_code,
+            ST_AsGeoJSON(p.geom)::json AS geojson
+     FROM cadastre_parcels_cl p
+     JOIN chile_comunas cc ON cc.id = p.comuna_id
+     WHERE p.rol IS NOT NULL
+       AND ST_Contains(p.geom, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+     LIMIT 1`,
+    [lng, lat],
+  )
+  const parcel = rows[0]
+  if (!parcel) return null
+
+  // Datos SII del rol (dirección exacta, avalúo). Un mismo rol puede tener >1
+  // fila en sii_roles_cl (reprocesos con distinto padding de ceros): se toma la
+  // más completa, mismo criterio que /api/chile/sii-rol-detail.
+  const { rows: siiRows } = await pool.query(
+    `SELECT direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal
+     FROM sii_roles_cl
+     WHERE sii_comuna_code = $1 AND rol = $2
+     ORDER BY (direccion IS NOT NULL) DESC, avaluo_fiscal_total DESC NULLS LAST
+     LIMIT 1`,
+    [parcel.sii_comuna_code, parcel.rol],
+  )
+  const sii = siiRows[0] ?? {}
+  return {
+    rol: parcel.rol,
+    comuna_name: parcel.comuna_name,
+    sii_comuna_code: parcel.sii_comuna_code,
+    parcel_id: parcel.parcel_id,
+    geojson: parcel.geojson,
+    direccion: sii.direccion ?? null,
+    avaluo_fiscal_total: sii.avaluo_fiscal_total != null ? Number(sii.avaluo_fiscal_total) : null,
+    superficie_terreno_m2: sii.superficie_terreno_m2 != null ? Number(sii.superficie_terreno_m2) : null,
+    codigo_destino_principal: sii.codigo_destino_principal ?? null,
+  }
+}
+
+export interface CrmCaptacion {
+  captacion_id: string
+  owner_name: string | null
+  owner_rut: string | null
+  phones: unknown
+  emails: unknown
+  stage: string
+  dealernet_status: string
+  needs_review: boolean
+  source_url: string
+  updated_at: string
+}
+
+/** Busca si el inmueble (por rol SII) ya está en el CRM de captación
+ * (captaciones_cl) con dueño/teléfonos — para mostrar en la ficha "ya subido,
+ * llamar" sin volver a pegar la URL. Prefiere la captación más completa. */
+export async function findCrmCaptacionByRol(rol: string, siiComunaCode: string): Promise<CrmCaptacion | null> {
+  const { rows } = await pool.query(
+    `SELECT id AS captacion_id, owner_name, owner_rut, phones, emails, stage,
+            dealernet_status, needs_review, source_url, updated_at
+     FROM captaciones_cl
+     WHERE sii_rol = $1 AND sii_comuna_code = $2
+     ORDER BY (owner_name IS NOT NULL) DESC, (phones IS NOT NULL) DESC, updated_at DESC
+     LIMIT 1`,
+    [rol, siiComunaCode],
+  )
+  return (rows[0] as CrmCaptacion) ?? null
+}
+
 /**
  * Fija el rol SII resuelto por geometría (findRolAtPoint) directo sobre la
  * captación — a diferencia de selectRolManual() no exige que el rol esté
