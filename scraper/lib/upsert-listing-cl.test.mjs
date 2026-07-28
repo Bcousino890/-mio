@@ -114,3 +114,69 @@ test('re-upsert idéntico (mismo has_video) → sin changeType', async () => {
   assert.equal(res.changeType, null);
   assert.equal(client.versionLog.length, 0);
 });
+
+// ── Falsos `price_change` (regresión de producción: 1.979 en 24h) ────────────
+//
+// Dos causas distintas, las dos reproducidas aquí con los tipos EXACTOS que
+// devuelve node-postgres, que es donde se escondía el bug:
+//   · `listings_cl.price` es bigint desde la migración 0080 → pg lo devuelve
+//     como STRING. La comparación `existing.price !== next.price` era
+//     '500000000' !== 500000000, o sea SIEMPRE verdadera.
+//   · el CLP de un anuncio en UF se deriva de `price_uf × tasa del día`, y la
+//     UF sube a diario → el CLP cambia solo aunque el precio publicado no.
+
+/** Fila tal como la devuelve pg tras 0080: price (bigint) y price_uf (numeric) como STRINGS. */
+function filaDePg({ price = '500000000', price_uf = null, ...extra } = {}) {
+  return {
+    id: 'listing-1', price, price_uf, advertiser_name: 'Test Corredora', photos: ['a', 'b'],
+    description: 'desc', square_meters: 100, bedrooms: 3, bathrooms: 2,
+    status: 'active', is_active: true, has_video: false, ...extra,
+  };
+}
+
+test('price_change falso #1: price viene como string de pg (bigint) y no cambió → sin cambio', async () => {
+  const client = makeClient({ existing: filaDePg({ price: '500000000' }) });
+  const res = await upsertListingCl(client, BASE_PARSED); // parser da el number 500000000
+  assert.equal(res.changeType, null);
+  assert.equal(client.versionLog.length, 0);
+});
+
+test('price_change falso #2: anuncio en UF cuyo CLP se movió SOLO por la tasa del día → sin cambio', async () => {
+  // Mismo precio publicado (15.000 UF) en las dos pasadas; la tasa UF subió.
+  const client = makeClient({ existing: filaDePg({ price: '612000000', price_uf: '15000' }) });
+  const res = await upsertListingCl(
+    client,
+    { ...BASE_PARSED, price: 15000, currency: 'UF' },
+    { ufRate: 40850, ufRateDate: '2026-07-28' } // 15000 × 40850 = 612.750.000 ≠ 612.000.000
+  );
+  assert.equal(res.changeType, null);
+  assert.equal(client.versionLog.length, 0);
+});
+
+test('price_change REAL en UF: baja de 15.000 a 14.000 UF → sí se registra', async () => {
+  const client = makeClient({ existing: filaDePg({ price: '612750000', price_uf: '15000' }) });
+  const res = await upsertListingCl(
+    client,
+    { ...BASE_PARSED, price: 14000, currency: 'UF' },
+    { ufRate: 40850, ufRateDate: '2026-07-28' }
+  );
+  assert.equal(res.changeType, 'price_change');
+  assert.equal(client.versionLog.length, 1);
+});
+
+test('price_change REAL en CLP: la baja se detecta pese a venir el anterior como string', async () => {
+  const client = makeClient({ existing: filaDePg({ price: '500000000' }) });
+  const res = await upsertListingCl(client, { ...BASE_PARSED, price: 480000000 });
+  assert.equal(res.changeType, 'price_change');
+  assert.equal(client.versionLog.length, 1);
+});
+
+test('cambio de moneda de publicación (CLP → UF) sí es un cambio real', async () => {
+  const client = makeClient({ existing: filaDePg({ price: '500000000', price_uf: null }) });
+  const res = await upsertListingCl(
+    client,
+    { ...BASE_PARSED, price: 12240, currency: 'UF' },
+    { ufRate: 40850, ufRateDate: '2026-07-28' }
+  );
+  assert.equal(res.changeType, 'price_change');
+});

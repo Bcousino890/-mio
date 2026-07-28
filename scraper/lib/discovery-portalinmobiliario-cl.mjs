@@ -27,16 +27,35 @@
 
 import { fetchHtmlResilient, SLEEP } from './fetch.mjs'
 import { parseListPage, parseListMeta } from './parse-portalinmobiliario.mjs'
-import { fold } from './chile-comunas.mjs'
+import { fold, normalizeComuna } from './chile-comunas.mjs'
 
 const PAGE_SIZE = 48 // confirmado en Fase 0: 48 resultados por página (_Desde_49, _Desde_97…)
 
 // Bisección por banda de precio (para comunas que superan el tope de paginación
 // del portal, ~2000). Techo alto que cubre cualquier residencial chileno; el
 // tramo por encima se barre como banda abierta [techo, ∞).
-const PRICE_CEILING_CLP = 10_000_000_000
 const MAX_PRICE_DEPTH = 8            // 2^8 = 256 bandas máx: sobra para cualquier comuna
-const MIN_BAND_WIDTH_CLP = 10_000_000 // no bisecar por debajo de 10M CLP de ancho
+
+// La bisección en CLP se usa SOLO para ARRIENDO (venta va en UF, ver
+// priceUnitFor / PRICE_CEILING_CLF), así que estos dos valores son de renta
+// MENSUAL, no de precio de venta.
+//
+// Estaban puestos como si fueran de venta —techo 10.000 millones, ancho mínimo
+// 10 millones— y eso rompía el arriendo por completo: la bisección arranca en
+// [0, techo] y va partiendo por la mitad, así que con un techo absurdo gastaba
+// los 8 niveles de profundidad bajando desde 10.000M y se rendía en una banda de
+// [0 , 39M] que TODAVÍA contiene el 100% del mercado de arriendo (el arriendo más
+// caro del portal está en ~20M/mes). Simulado sobre 4.392 arriendos con
+// distribución real: cobertura máxima 45,5%, muy por debajo del 98% que exige
+// MIN_SWEEP_COVERAGE → el objetivo NUNCA se marcaba exhaustivo, nunca daba bajas
+// y `last_success_at` quedaba congelado para siempre.
+//
+// Con techo 40M/mes y ancho mínimo 50k: 9 bandas, 0 topadas, 100% de cobertura.
+// Medido en vivo (2026-07-28) que la cola por encima de 40M es ≤21 anuncios en
+// la peor comuna — y aun esos los barre la banda ABIERTA [techo, ∞) que
+// discoverTarget añade siempre, así que el techo no pierde nada.
+const PRICE_CEILING_CLP = 40_000_000  // CLP/mes
+const MIN_BAND_WIDTH_CLP = 50_000     // CLP/mes
 
 // VENTA: el portal filtra y muestra el precio en UF (Unidad de Fomento) — es la
 // moneda en la que casi toda propiedad en venta se publica en Chile. Verificado
@@ -106,17 +125,65 @@ export function comunaSlug(name) {
 }
 
 /**
- * Segmento de región para la URL. El piloto es RM y el portal la escribe
- * "metropolitana" (`las-condes-metropolitana`). Se deriva del nombre de región
- * de chile_comunas; para RM (único scope habilitado) queda confirmado.
+ * Segmento de región para la URL. El portal escribe el nombre de la región SIN
+ * el prefijo "Región de/del", pero CONSERVANDO el artículo cuando lo lleva:
+ * `las-condes-metropolitana`, `zapallar-valparaiso`, `pucon-la-araucania`.
+ *
+ * La versión anterior se quedaba con la ÚLTIMA palabra del nombre de región, lo
+ * que se comía el artículo: "Región de la Araucanía" → `araucania`, y
+ * `pucon-araucania` NO es una URL válida. El fallo era mudo y grave (ver
+ * comunaMatchRatio más abajo): en vez de 404, el portal ignora el segmento
+ * desconocido y devuelve el listado NACIONAL sin filtrar — 63.000 anuncios de
+ * todo Chile. Verificado en vivo (2026-07-28): `pucon-araucania` → total=63.017
+ * (el nacional), `pucon-la-araucania` → total=726 (el real de la comuna).
  */
 export function regionSlug(region) {
   const f = fold(String(region ?? ''))
   if (f.includes('metropolitana')) return 'metropolitana'
-  // Otras regiones aún no validadas contra el portal (fuera del scope del piloto):
-  // se usa la última palabra folded como mejor esfuerzo.
-  const parts = f.replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
-  return parts[parts.length - 1] || 'metropolitana'
+  return (
+    f
+      .replace(/^region\s+/, '')  // "region de la araucania" → "de la araucania"
+      .replace(/^del?\s+/, '')    // → "la araucania"  (el artículo SE QUEDA)
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'metropolitana'
+  )
+}
+
+// Fracción mínima de los anuncios de la PRIMERA página que deben pertenecer a la
+// comuna del objetivo para aceptar el barrido. Ver comunaMatchRatio: por debajo
+// de esto se asume que el portal ignoró el segmento de comuna.
+const MIN_COMUNA_MATCH = 0.5
+
+/**
+ * ¿Los anuncios que devolvió el portal son REALMENTE de la comuna pedida?
+ *
+ * Portal Inmobiliario NO devuelve 404 ante un segmento de comuna que no
+ * reconoce: lo ignora en silencio y sirve el listado NACIONAL completo. Sin esta
+ * comprobación, un slug mal formado (artículo de región comido, comuna
+ * renombrada, errata al dar de alta un objetivo) hace que discoverTarget vea
+ * `total`=63.000, lo dé por "comuna que topa la paginación", lo subdivida en
+ * decenas de bandas de precio y encole miles de fichas de todo Chile — gastando
+ * días de cola y GB de proxy para una comuna que nunca se barrió.
+ *
+ * La señal es directa y gratuita (ya tenemos los anuncios de la página 1): qué
+ * fracción de ellos normaliza a la comuna del objetivo. Con slug bueno es ~1;
+ * con el listado nacional es ~0 (medido: `pucon-araucania` → 0,02).
+ *
+ * Puro y exportado para test. Devuelve null cuando NO hay con qué juzgar: sin
+ * anuncios, o ninguno con `location_text`. Ese null es deliberado y se trata como
+ * "no bloquear": si un cambio de maquetado de ML dejara de traer la ubicación, la
+ * guarda debe volverse inerte, no apagar el barrido de TODAS las comunas a la vez.
+ */
+export function comunaMatchRatio(listings, comunaName) {
+  if (!Array.isArray(listings) || listings.length === 0) return null
+  const medibles = listings.filter((l) => l?.location_text)
+  if (medibles.length === 0) return null
+  const esperado = normalizeComuna(comunaName).comuna?.name ?? comunaName
+  let ok = 0
+  for (const l of medibles) {
+    if (normalizeComuna(l.location_text).comuna?.name === esperado) ok++
+  }
+  return ok / medibles.length
 }
 
 /**
@@ -282,6 +349,8 @@ async function updateTargetStats(client, targetId, { scrapedAt, completed, listi
 async function sweepBand(client, ctx, priceRange, seen) {
   const { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, completed = false, reason = null
+  // Slug que el portal no reconoce → sirve el listado nacional (ver comunaMatchRatio).
+  let wrongComuna = false
   // IDs vistos EN ESTA banda. Se cuenta aparte del `seen` global porque las
   // bandas solapan con el barrido base: contra el global, la primera página de
   // una banda daría "0 nuevos" y cortaría el barrido de inmediato.
@@ -316,6 +385,23 @@ async function sweepBand(client, ctx, priceRange, seen) {
     if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
 
     const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
+
+    // GUARDA DE COMUNA (página 1): si lo que llegó no es de esta comuna, el
+    // portal ignoró el segmento y está sirviendo el listado nacional. Se corta
+    // AQUÍ, antes de paginar y sobre todo antes de que discoverTarget interprete
+    // el total nacional como "comuna que topa" y la subdivida en bandas: eso
+    // encolaría miles de fichas de todo Chile. No se toca nada de la comuna
+    // (ni bajas, ni cobertura) — el objetivo queda marcado como fallido.
+    if (page === 1) {
+      const match = comunaMatchRatio(usable, target.comuna_name)
+      if (match != null && match < MIN_COMUNA_MATCH) {
+        wrongComuna = true
+        completed = false
+        reason = `slug de comuna inválido: solo ${(match * 100).toFixed(0)}% de los anuncios son de ${target.comuna_name} (el portal devolvió el listado sin filtrar, total=${meta.total})`
+        break
+      }
+    }
+
     let newInPage = 0
     for (const l of usable) {
       seen.add(l.external_id)
@@ -356,7 +442,7 @@ async function sweepBand(client, ctx, priceRange, seen) {
       reason = reason ?? `cobertura insuficiente: ${bandSeen.size}/${portalTotal} vistos`
     }
   }
-  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, coverage, reason }
+  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, coverage, reason, wrongComuna }
 }
 
 /**
@@ -455,6 +541,23 @@ export async function discoverTarget(client, target, deps = {}) {
   pages += base.pages; enqueued += base.enqueued
   portalTotal = base.portalTotal; resultsLimit = base.resultsLimit; reason = base.reason
   let completed = base.completed
+
+  // Slug que el portal no reconoce (ver comunaMatchRatio). Se corta ANTES de la
+  // bisección: `portalTotal` aquí es el del listado NACIONAL (~63.000), así que
+  // `base.capped` viene en true y el flujo normal subdividiría la "comuna" en
+  // decenas de bandas de precio, encolando miles de fichas de todo Chile. No se
+  // dan bajas (no se vio la comuna) ni se guarda el total falso como
+  // portal_reported_count — solo queda el motivo, visible en el panel de salud.
+  if (base.wrongComuna) {
+    await updateTargetStats(client, target.id, { scrapedAt, completed: false, listingCount: 0, portalTotal: null })
+    console.error(`[discovery] ${target.comuna_name} ${target.operation}: ${base.reason}`)
+    return {
+      target_id: target.id, pages, seen: 0, enqueued, delisted: 0,
+      portal_total: null, results_limit: resultsLimit, bands: 0,
+      force_refetch: forceRefetch, completed: false, exhaustive: false,
+      capped: false, wrong_comuna: true, reason: base.reason,
+    }
+  }
 
   if (base.capped) {
     // Comuna por encima del tope: subdividir por precio. Cada banda se barre

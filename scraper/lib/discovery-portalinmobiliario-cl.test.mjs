@@ -14,6 +14,7 @@ import {
   comunaSlug,
   regionSlug,
   buildListUrl,
+  comunaMatchRatio,
   decideContinue,
   discoverTarget,
   subdividePriceBands,
@@ -28,6 +29,42 @@ test('operationSlug / comunaSlug / regionSlug', () => {
   assert.equal(comunaSlug('Ñuñoa'), 'nunoa')
   assert.equal(comunaSlug('La Reina'), 'la-reina')
   assert.equal(regionSlug('Región Metropolitana de Santiago'), 'metropolitana')
+  // Fuera de la RM el portal quita el prefijo "Región de/del" pero CONSERVA el
+  // artículo. Verificado en vivo (2026-07-28): `pucon-la-araucania` → 726
+  // resultados; `pucon-araucania` (lo que devolvía la versión que se quedaba con
+  // la última palabra) → 63.017, o sea el listado nacional SIN filtrar.
+  assert.equal(regionSlug('Región de Valparaíso'), 'valparaiso')
+  assert.equal(regionSlug('Región de la Araucanía'), 'la-araucania')
+  assert.equal(regionSlug('Región de Los Lagos'), 'los-lagos')
+  assert.equal(regionSlug('Región del Biobío'), 'biobio')
+  // Comuna cuya grafía en el portal ("Tiltil") no es la oficial ("Til Til"):
+  // el slug de URL sí es el separado — verificado, 115 resultados.
+  assert.equal(comunaSlug('Til Til'), 'til-til')
+})
+
+test('comunaMatchRatio: distingue una comuna real del listado nacional sin filtrar', () => {
+  const deLasCondes = [
+    { location_text: 'El Golf, Barrio El Golf, Las Condes' },
+    { location_text: 'Cam. Del Valle Alto, Las Condes, San Carlos De Apoquindo, Las Condes' },
+  ]
+  assert.equal(comunaMatchRatio(deLasCondes, 'Las Condes'), 1)
+
+  // Lo que devuelve de verdad un slug inválido: anuncios de todo Chile.
+  const nacional = [
+    { location_text: 'Constancio Vigil 500, Las Condes' },
+    { location_text: 'Juan XXIII, Vitacura' },
+    { location_text: 'Bludenz 4983, Lo Barnechea, La Dehesa, Lo Barnechea' },
+    { location_text: 'Cam. Buin Maipo 1133, Buin, Centro De Buin, Buin' },
+  ]
+  assert.equal(comunaMatchRatio(nacional, 'Pucón'), 0)
+
+  // El alias resuelve la grafía del portal ("Tiltil" → comuna "Til Til").
+  assert.equal(comunaMatchRatio([{ location_text: 'Las Cimas, Tiltil, Alto El Manzano, Tiltil' }], 'Til Til'), 1)
+
+  // Sin nada que medir → null (inerte), NUNCA 0: si un cambio de maquetado
+  // dejara de traer location_text, la guarda no debe apagar todas las comunas.
+  assert.equal(comunaMatchRatio([], 'Las Condes'), null)
+  assert.equal(comunaMatchRatio([{ external_id: 'MLC-1' }], 'Las Condes'), null)
 })
 
 test('buildListUrl: TODOS los modificadores en UN segmento, orden _Desde_/_OrderId_/_PriceRange_', () => {
@@ -190,6 +227,51 @@ test('discoverTarget: pagina, filtra proyectos, encola solo lo nuevo, marca baja
   assert.equal(client.state.stats.completed, true)
   assert.equal(client.state.stats.listingCount, 3)
   assert.equal(client.state.stats.portalTotal, 3)
+})
+
+test('discoverTarget: slug de comuna inválido → corta en p1, NI bisecta NI encola, sin bajas', async () => {
+  // Reproduce el fallo real de `pucon-araucania`: el portal NO da 404 ante un
+  // segmento de comuna que no reconoce — devuelve el listado NACIONAL entero.
+  // Sin la guarda, el total nacional (63.020 > resultsLimit) hacía que
+  // discoverTarget lo tomara por "comuna que topa la paginación" y lo
+  // subdividiera en decenas de bandas de precio, encolando fichas de todo Chile.
+  const nacional = [
+    listing('MLC-1', { location_text: 'El Golf, Las Condes' }),
+    listing('MLC-2', { location_text: 'Juan XXIII, Vitacura' }),
+    listing('MLC-3', { location_text: 'Centro De Buin, Buin' }),
+  ]
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
+
+  const enqueued = []
+  let peticiones = 0
+  const res = await discoverTarget(
+    client,
+    { ...TARGET, comuna_name: 'Pucón', region: 'Región de la Araucanía' },
+    {
+      fetch: async () => { peticiones++; return { ok: true, html: 'NACIONAL' } },
+      parseList: () => nacional,
+      parseMeta: () => ({ total: 63020, pageCount: 1314, resultsLimit: 2000 }),
+      enqueueDetail: async (id) => enqueued.push(id),
+      sleep: async () => {},
+    }
+  )
+
+  assert.equal(res.wrong_comuna, true)
+  assert.equal(res.completed, false)
+  assert.equal(res.exhaustive, false)
+  assert.match(res.reason, /slug de comuna inválido/)
+  // Lo que de verdad importa: ni una ficha encolada, ni una banda de precio,
+  // y UNA sola petición (se corta en la página 1, no pagina 63.000 anuncios).
+  assert.deepEqual(enqueued, [])
+  assert.equal(res.bands, 0)
+  assert.equal(peticiones, 1)
+  // Nada de dar bajas con un barrido que jamás vio la comuna.
+  assert.equal(res.delisted, 0)
+  assert.equal(client.state.delistedIds.length, 0)
+  // Y el total NACIONAL no se guarda como el total del portal para esta comuna.
+  assert.equal(client.state.stats.completed, false)
+  assert.equal(client.state.stats.listingCount, 0)
+  assert.equal(client.state.stats.portalTotal, null)
 })
 
 test('discoverTarget: fetch que falla en página 1 → incompleto, sin bajas', async () => {
@@ -427,7 +509,10 @@ test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso 
     if (span > 2_000_000_000) return 3000 // bandas anchas todavía topan
     return 1200 // bandas ya estrechas caben
   }
-  const bands = await subdividePriceBands(probe, 2000)
+  // Rango EXPLÍCITO: estos totales son de venta en CLP y el techo por defecto
+  // en CLP ya es el de arriendo (renta mensual). Se fija aquí para seguir
+  // probando el algoritmo, no la constante.
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
   assert.ok(bands.length >= 2, 'debe partir la comuna en varias bandas')
   // Cubren [0, techo] sin huecos ni solapes (contiguas y ordenadas).
   const sorted = [...bands].sort((a, b) => a.min - b.min)
@@ -438,7 +523,7 @@ test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso 
 
 test('subdividePriceBands: comuna bajo el tope → una sola banda, sin bisecar', async () => {
   const probe = async () => 900
-  const bands = await subdividePriceBands(probe, 2000)
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
   assert.equal(bands.length, 1)
   assert.deepEqual(bands[0], { min: 0, max: 10_000_000_000, unit: 'CLP' })
 })
@@ -457,7 +542,7 @@ test('subdividePriceBands: Las Condes casa/venta REAL en CLP (verificado en vivo
     '1250000000-2500000000': 428, '2500000000-5000000000': 46, '5000000000-10000000000': 3,
   }
   const probe = async ({ min, max }) => REAL_TOTALS[`${min}-${max}`] ?? null
-  const bands = await subdividePriceBands(probe, 2000)
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
 
   const sorted = [...bands].sort((a, b) => a.min - b.min)
   assert.equal(sorted[0].min, 0)
@@ -514,4 +599,31 @@ test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna',
   assert.equal(res.seen, 0)
   assert.equal(res.delisted, 0) // guardado: seen.size === 0 → no marca bajas
   assert.equal(client.state.delistedIds.length, 0)
+})
+
+test('subdividePriceBands (ARRIENDO/CLP): cubre el mercado real de renta mensual', async () => {
+  // Regresión: el techo y el ancho mínimo en CLP estaban puestos como si fueran
+  // de VENTA (10.000 millones / 10 millones). Como la bisección arranca en
+  // [0, techo] y parte por la mitad, los 8 niveles de profundidad se gastaban
+  // bajando desde 10.000M y se rendía en [0 , 39M] — una banda que TODAVÍA
+  // contiene el 100% del arriendo (el más caro del portal ronda 20M/mes). El
+  // objetivo jamás alcanzaba el 98% de MIN_SWEEP_COVERAGE, así que nunca se
+  // marcaba exhaustivo ni daba de baja.
+  const N = 4392
+  const precios = Array.from({ length: N }, (_, i) => 250_000 + Math.round((i / N) ** 1.6 * 1_800_000))
+  const probe = async ({ min, max }) => precios.filter((p) => p >= min && (max === 0 || p < max)).length
+
+  const bands = await subdividePriceBands(probe, 2000)
+
+  // Ninguna banda hoja puede seguir por encima del tope del portal.
+  for (const b of bands) {
+    assert.ok(await probe(b) <= 2000, `banda [${b.min}, ${b.max}] sigue topando`)
+  }
+  // Y su unión tiene que cubrir el mercado entero, no un 45%.
+  const vistos = new Set()
+  for (const b of bands) {
+    precios.forEach((p, i) => { if (p >= b.min && (b.max === 0 || p < b.max)) vistos.add(i) })
+  }
+  assert.equal(vistos.size, N)
+  assert.equal(bands.every((b) => b.unit === 'CLP'), true)
 })

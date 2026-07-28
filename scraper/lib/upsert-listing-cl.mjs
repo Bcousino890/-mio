@@ -31,6 +31,35 @@ async function resolveComunaId(client, comunaRaw) {
 }
 
 /**
+ * Precio COMPARABLE de un anuncio entre dos pasadas: el que el anuncio publica,
+ * no el derivado. Devuelve { unit, value } con `value` ya numérico.
+ *
+ * Dos motivos, y los dos producían `price_change` falsos:
+ *
+ * 1. **La columna `price` llega como STRING.** La migración 0080 la pasó de
+ *    `integer` a `bigint` para que no se desbordaran las propiedades caras, y
+ *    node-postgres devuelve `bigint` (int8) como string — no como number, porque
+ *    int64 no cabe en un double. Así que `existing.price` ('450000000') nunca era
+ *    `===` a `next.price` (450000000), y CADA refresco de CADA anuncio con precio
+ *    se registraba como cambio de precio. Es la causa dominante: afecta al 100%
+ *    de los refrescos, también a los publicados en CLP.
+ *
+ * 2. **El CLP de un anuncio en UF se recalcula cada pasada.** `resolvePriceClp`
+ *    lo deriva como `price_uf × tasa UF del día`, y la UF cambia A DIARIO. Un
+ *    anuncio en UF cuyo precio publicado no se tocó cambiaba igual de CLP. Por eso
+ *    se compara en UF cuando el anuncio se publica en UF: es la cifra que fija el
+ *    vendedor y la única estable entre pasadas.
+ *
+ * Casi toda la venta en Chile se publica en UF, así que sin esto el histórico de
+ * precios —el dato que justifica el barrido periódico— era casi todo ruido.
+ */
+function comparablePrice(row) {
+  if (row?.price_uf != null) return { unit: 'UF', value: Number(row.price_uf) }
+  if (row?.price != null) return { unit: 'CLP', value: Number(row.price) }
+  return { unit: null, value: null }
+}
+
+/**
  * Decide el `change_type` más significativo entre la fila existente y los
  * datos nuevos. Un solo valor por fila (limitación del enum de 0034) — se
  * prioriza lo más operativamente relevante: reactivación > cambio de
@@ -47,7 +76,15 @@ function detectChangeType(existing, next) {
     return 'agency_change'
   }
 
-  if (existing.price != null && next.price != null && existing.price !== next.price) {
+  const antes = comparablePrice(existing)
+  const ahora = comparablePrice(next)
+  if (
+    antes.value != null && ahora.value != null &&
+    Number.isFinite(antes.value) && Number.isFinite(ahora.value) &&
+    // Un cambio de moneda de publicación (CLP↔UF) SÍ es un cambio real del
+    // anuncio, no ruido: comparar sus cifras entre sí no tendría sentido.
+    (antes.unit !== ahora.unit || antes.value !== ahora.value)
+  ) {
     return 'price_change'
   }
 
@@ -75,7 +112,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const { ufRate = null, ufRateDate = null, scrapedAt = new Date() } = options
 
   const { rows: existingRows } = await client.query(
-    `SELECT id, price, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
+    // price_uf entra aquí porque es la moneda REAL de publicación de casi toda
+    // la venta en Chile y la única cifra estable entre pasadas (ver comparablePrice).
+    `SELECT id, price, price_uf, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
      FROM listings_cl WHERE portal = $1 AND external_id = $2`,
     [parsed.portal ?? 'portalinmobiliario', parsed.external_id]
   )
@@ -94,6 +133,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
 
   const next = {
     price: priceClp,
+    price_uf: priceUf,
     advertiser_name: parsed.advertiser_name ?? null,
     photos: parsed.photos ?? [],
     description: parsed.description ?? null,

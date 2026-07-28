@@ -130,12 +130,18 @@ export function consolidateFields(rows: ConsolidationRow[]): ConsolidatedFields 
 
   // "Precio de mercado": el mínimo entre los anuncios ACTIVOS (si ninguno lo
   // está, el mínimo histórico del grupo).
+  // El `<` va sobre Number(), no sobre el valor crudo: `listings_cl.price` es
+  // bigint desde 0080 y node-postgres devuelve bigint como STRING, así que la
+  // comparación era LEXICOGRÁFICA. '9000000' < '10000000' es false (gana '9'
+  // sobre '1'), o sea que 10 millones se elegía como "más barato" que 9.
   const activeRows = rows.filter(r => r.is_active)
   const priceSource = activeRows.length > 0 ? activeRows : rows
+  const numPrice = (r: ConsolidationRow | undefined) => (r?.price == null ? null : Number(r.price))
   const cheapest = priceSource.reduce((a, b) => {
-    if (a.price == null) return b
-    if (b.price == null) return a
-    return b.price < a.price ? b : a
+    const pa = numPrice(a), pb = numPrice(b)
+    if (pa == null) return b
+    if (pb == null) return a
+    return pb < pa ? b : a
   }, priceSource[0])
 
   const portals = [...new Set(rows.map(r => r.portal).filter((v): v is string => !!v))]

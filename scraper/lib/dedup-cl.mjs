@@ -71,10 +71,18 @@ export function consolidateFields(rows) {
 
   const activeRows = rows.filter((r) => r.is_active);
   const priceSource = activeRows.length > 0 ? activeRows : rows;
+  // El `<` va sobre Number(), no sobre el valor crudo: `listings_cl.price` es
+  // bigint desde 0080 y node-postgres devuelve bigint como STRING, así que la
+  // comparación era LEXICOGRÁFICA. '9000000' < '10000000' es false (gana '9'
+  // sobre '1'), o sea que 10 millones se elegía como "más barato" que 9 —
+  // el canonical_price de cualquier ficha con varios anuncios a distinto precio
+  // quedaba mal, y ese es el "precio de mercado" que se muestra y se ordena.
+  const numPrice = (r) => (r?.price == null ? null : Number(r.price));
   const cheapest = priceSource.reduce((a, b) => {
-    if (a.price == null) return b;
-    if (b.price == null) return a;
-    return b.price < a.price ? b : a;
+    const pa = numPrice(a), pb = numPrice(b);
+    if (pa == null) return b;
+    if (pb == null) return a;
+    return pb < pa ? b : a;
   }, priceSource[0]);
 
   const portals = [...new Set(rows.map((r) => r.portal).filter(Boolean))];

@@ -229,6 +229,96 @@ Casas usadas RM: piloto Las Condes → comunas prioritarias (Colina, Lo Barneche
 La Reina, Vitacura, Peñalolén) → resto RM. Luego Deptos, luego Terrenos (mismo
 pipeline, cambia el filtro de tipo en discovery).
 
+#### H6.1 — Verificación de las 56 comunas de la taxonomía (2026-07-28)
+
+Antes de activar comunas se sondearon EN VIVO las 56 de `chile-zones.ts`
+(`/venta/casa/propiedades-usadas/<comuna>-<region>`, página 1 real). Resultado y
+correcciones aplicadas:
+
+| Comprobación | Resultado |
+|---|---|
+| Slug de URL válido | 52/52 RM ✅ · Zapallar y Puchuncaví ✅ · **Pucón y Villarrica ❌** (corregido) |
+| Nombre del portal resuelve a la comuna | 55/56 ✅ · **Til Til ❌** (el portal escribe "Tiltil" — corregido con alias) |
+| Anuncios de p1 que son de la comuna | 79–100% en las 56 (mínimo: Estación Central 79%) |
+
+**Modo de fallo descubierto — un slug inválido NO da 404.** Portal Inmobiliario
+ignora en silencio el segmento de comuna que no reconoce y sirve el listado
+**NACIONAL** completo. Medido: `pucon-araucania` → `total=63.017` (todo Chile),
+`pucon-la-araucania` → `total=726` (el real). Sin protección, `discoverTarget`
+leía ese total nacional como "comuna que topa la paginación", la subdividía en
+decenas de bandas de precio y encolaba miles de fichas de todo el país — días de
+cola y GB de proxy para una comuna que nunca se barrió.
+
+Tres correcciones, con test de regresión cada una:
+1. **`regionSlug()`** se quedaba con la última palabra del nombre de región, lo
+   que se comía el artículo ("Región de la Araucanía" → `araucania`). Ahora quita
+   el prefijo "Región de/del" y **conserva el artículo** → `la-araucania`.
+2. **Alias de comuna** (`aliases` en la taxonomía): "Tiltil" → `Til Til`. Sin
+   esto sus anuncios entraban con `comuna_id` NULL, invisibles a los filtros y
+   **fuera del `markDelisted`** (que filtra por comuna_id) — se quedaban activos
+   para siempre. Replicado en `web/lib/chile-zones.ts` y `scraper/lib/chile-comunas.mjs`.
+3. **Guarda `comunaMatchRatio`**: en la página 1 se mide qué fracción de los
+   anuncios pertenece de verdad a la comuna del objetivo. Bajo el 50% se aborta
+   el objetivo sin paginar, sin bisecar, sin encolar y sin dar bajas. Margen
+   medido: comuna válida 79–100%, listado nacional 0–2%. Si `location_text`
+   faltara (cambio de maquetado), la guarda se vuelve **inerte**, no bloqueante.
+
+#### H6.2 — Bugs de pipeline encontrados en la misma revisión (2026-07-28)
+
+Ninguno es específico de una comuna, pero los tres se agravan al escalar.
+
+**a) `price_change` casi todo falso (1.979 en 24h).** Dos causas sumadas:
+- La migración `0080` pasó `listings_cl.price` de `integer` a `bigint`, y
+  node-postgres devuelve `bigint` como **string** (int64 no cabe en un double).
+  `existing.price !== next.price` era `'500000000' !== 500000000` → **siempre
+  verdadero**: cada refresco de cada anuncio con precio se registraba como cambio
+  de precio. Es la causa dominante — afecta también a los publicados en CLP.
+- El CLP de un anuncio en UF se deriva de `price_uf × tasa del día`, y la UF sube
+  a diario → el CLP cambiaba solo, sin que el vendedor tocara nada.
+
+Corregido comparando **en la moneda de publicación** (UF si el anuncio está en UF)
+y siempre vía `Number()`. Un cambio de moneda CLP↔UF sí cuenta como cambio real.
+
+**b) `canonical_price` elegido alfabéticamente.** Misma raíz (bigint→string): el
+`b.price < a.price` que escogía el anuncio más barato de una ficha comparaba
+strings. `'9000000' < '10000000'` es **false**, así que 10 millones ganaba a 9. El
+"precio de mercado" de toda ficha con varios anuncios a distinto precio estaba mal.
+Estaba duplicado en `scraper/lib/dedup-cl.mjs` y `web/lib/property-cl-merge.ts`.
+
+**c) El scheduler de discovery re-encolaba sin `singletonKey`.** `last_run_at` solo
+se actualiza cuando el barrido **corre**, no cuando se encola, y el scheduler mira
+ese campo cada 15 min. Con una comuna daba igual (barrido ~7 min); con la RM entera
+un ciclo dura ~2h, así que el scheduler vuelve a pasar ~8 veces mientras los mismos
+objetivos siguen en cola: **~400 barridos encolados para 104 objetivos**, cada
+duplicado re-barriendo una comuna entera. Es el atasco que ya costó 46.797 jobs en
+`detail-cl`, pero con jobs cientos de veces más caros. `discovery-cl` y
+`corredora-web-crawl-cl` pasan a política `short` + `singletonKey` por objetivo.
+
+**d) La bisección en CLP no cubría el arriendo.** El techo (10.000 millones) y el
+ancho mínimo de banda (10 millones) estaban puestos como si fueran de venta, pero
+la ruta CLP se usa **solo para arriendo** (venta bisecta en UF). Como la bisección
+arranca en `[0, techo]` y parte por la mitad, los 8 niveles se gastaban bajando
+desde 10.000M y se rendía en `[0, 39M]` — una banda que todavía contiene el 100%
+del arriendo. Simulado sobre 4.392 arriendos: **45,5% de cobertura máxima**, muy
+por debajo del 98% que exige `MIN_SWEEP_COVERAGE` → el objetivo nunca se marcaba
+exhaustivo, nunca daba bajas y `last_success_at` quedaba congelado. Con techo 40M
+y ancho mínimo 50k: 9 bandas, 0 topadas, 100%. **No bloquea casas** (ninguna comuna
+supera el tope en arriendo/casa: máx. 720 en Colina) — sí bloqueaba
+departamentos/terrenos, que sí topan (Santiago: 4.392 arriendo, 10.890 venta).
+
+**e) Pipeline de fotos parado por configuración, no por código.** Sin las
+`HETZNER_S3_*`, `worker-cl` no registra el worker de `media-sync-cl` y los jobs
+encolados se quedan parados indefinidamente. El panel solo mostraba "0 fotos" con
+miles de pendientes, sin pista de la causa. Ahora `/api/chile/anuncios-health`
+expone `media_s3_configured` y el panel lo avisa explícitamente.
+
+**Volumen que implica activar la RM entera** (casas en venta, medido el
+2026-07-28): **35.369 anuncios** en 52 comunas — 10× el piloto de Las Condes
+(3.472). Las 4 comunas fuera de la RM suman 2.876 más. A las ~15 fichas/min que
+sostiene hoy la cola `detail-cl`, la puesta al día inicial son **~40 h de cola
+solo para venta**, sin contar arriendo. No es un bloqueante, pero sí obliga a
+escalar por tandas y no de golpe.
+
 ### H7 — Pipeline de media a bucket, con dedup de fotos
 Requisito: **si la misma corredora re-publica las mismas fotos, NO guardarlas dos
 veces** — solo subir las nuevas.
