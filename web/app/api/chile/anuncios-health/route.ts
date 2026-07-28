@@ -219,6 +219,20 @@ export async function GET(request: Request) {
     const c = counts.rows[0]
     const num = (v: unknown) => Number(v ?? 0)
 
+    // ¿Está configurado el bucket de fotos? Sin las HETZNER_S3_*, worker-cl NO
+    // registra el worker de media-sync-cl (ver worker-cl.mjs): los jobs ya
+    // encolados se quedan ahí para siempre y no se sube ni una foto. Eso se veía
+    // en el panel como "media_assets_total: 0" con miles de pendientes, sin
+    // ninguna pista de que la causa era configuración y no un fallo del pipeline.
+    // El contenedor `app` carga el mismo .env que `worker-cl`, así que puede
+    // responder la pregunta. Solo se informa SI están puestas — nunca su valor.
+    const mediaS3Configured = Boolean(
+      process.env.HETZNER_S3_ENDPOINT &&
+      process.env.HETZNER_S3_BUCKET &&
+      process.env.HETZNER_S3_ACCESS_KEY &&
+      process.env.HETZNER_S3_SECRET_KEY
+    )
+
     // Profundidad de las colas de pg-boss. Sin esto no hay forma de distinguir
     // "el barrido no ve los anuncios" de "los ve, los encola y la cola no avanza"
     // — que es justo la duda cuando el nº de anuncios crudos se queda clavado
@@ -359,6 +373,9 @@ export async function GET(request: Request) {
       detail_outcomes: detailOutcomes,
       // Pendientes: cuántos harían crecer el catálogo y con qué prioridad.
       pending_split: pendingSplit,
+      // false = faltan las HETZNER_S3_* en el .env del VPS → el worker no
+      // procesa media-sync-cl y las fotos nunca llegan al bucket.
+      media_s3_configured: mediaS3Configured,
     })
   } catch (error) {
     console.error('Error en anuncios-health:', error)

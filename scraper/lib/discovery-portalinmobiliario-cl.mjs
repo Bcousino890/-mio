@@ -34,9 +34,28 @@ const PAGE_SIZE = 48 // confirmado en Fase 0: 48 resultados por página (_Desde_
 // Bisección por banda de precio (para comunas que superan el tope de paginación
 // del portal, ~2000). Techo alto que cubre cualquier residencial chileno; el
 // tramo por encima se barre como banda abierta [techo, ∞).
-const PRICE_CEILING_CLP = 10_000_000_000
 const MAX_PRICE_DEPTH = 8            // 2^8 = 256 bandas máx: sobra para cualquier comuna
-const MIN_BAND_WIDTH_CLP = 10_000_000 // no bisecar por debajo de 10M CLP de ancho
+
+// La bisección en CLP se usa SOLO para ARRIENDO (venta va en UF, ver
+// priceUnitFor / PRICE_CEILING_CLF), así que estos dos valores son de renta
+// MENSUAL, no de precio de venta.
+//
+// Estaban puestos como si fueran de venta —techo 10.000 millones, ancho mínimo
+// 10 millones— y eso rompía el arriendo por completo: la bisección arranca en
+// [0, techo] y va partiendo por la mitad, así que con un techo absurdo gastaba
+// los 8 niveles de profundidad bajando desde 10.000M y se rendía en una banda de
+// [0 , 39M] que TODAVÍA contiene el 100% del mercado de arriendo (el arriendo más
+// caro del portal está en ~20M/mes). Simulado sobre 4.392 arriendos con
+// distribución real: cobertura máxima 45,5%, muy por debajo del 98% que exige
+// MIN_SWEEP_COVERAGE → el objetivo NUNCA se marcaba exhaustivo, nunca daba bajas
+// y `last_success_at` quedaba congelado para siempre.
+//
+// Con techo 40M/mes y ancho mínimo 50k: 9 bandas, 0 topadas, 100% de cobertura.
+// Medido en vivo (2026-07-28) que la cola por encima de 40M es ≤21 anuncios en
+// la peor comuna — y aun esos los barre la banda ABIERTA [techo, ∞) que
+// discoverTarget añade siempre, así que el techo no pierde nada.
+const PRICE_CEILING_CLP = 40_000_000  // CLP/mes
+const MIN_BAND_WIDTH_CLP = 50_000     // CLP/mes
 
 // VENTA: el portal filtra y muestra el precio en UF (Unidad de Fomento) — es la
 // moneda en la que casi toda propiedad en venta se publica en Chile. Verificado

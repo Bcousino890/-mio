@@ -25,6 +25,8 @@ type Health = {
   activity_1h?: Pulse[]
   activity_timeline?: { hora: string; change_type: string; count: number }[]
   live_probed?: boolean
+  queues?: { queue: string; state: string; count: number }[]
+  media_s3_configured?: boolean
 }
 
 function ago(iso: string | null): string {
@@ -139,6 +141,11 @@ export default function AnunciosHealthClient() {
     return () => clearInterval(id)
   }, [])
 
+  // Trabajos de fotos esperando (cualquier estado pendiente de la cola).
+  const mediaPendientes = (data?.queues ?? [])
+    .filter(q => q.queue === 'media-sync-cl' && (q.state === 'created' || q.state === 'retry'))
+    .reduce((n, q) => n + q.count, 0)
+
   const t = data?.totals
   const fresh = t?.last_seen_at ? ago(t.last_seen_at) : 'sin datos'
   const scraping = t ? t.listings_total > 0 : false
@@ -201,8 +208,26 @@ export default function AnunciosHealthClient() {
               <Tile icon={<Store size={16} />} label="Corredoras" value={t.corredoras_total.toLocaleString('es-CL')}
                 hint={`${t.listings_agency_web} anuncios de web propia · ${t.corredora_webs_enabled} webs activas`} accent="bg-purple-500/15 text-purple-400" />
               <Tile icon={<Images size={16} />} label="Fotos en bucket" value={t.media_assets_total.toLocaleString('es-CL')}
-                hint="dedup por contenido" accent="bg-teal-500/15 text-teal-400" />
+                hint={data?.media_s3_configured === false ? 'bucket SIN configurar' : 'dedup por contenido'}
+                accent={data?.media_s3_configured === false ? 'bg-red-500/15 text-red-400' : 'bg-teal-500/15 text-teal-400'} />
             </div>
+
+            {/* Sin credenciales del bucket, worker-cl NO registra el worker de
+                media-sync-cl: los jobs encolados se quedan parados para siempre y
+                no sube ni una foto. Antes esto solo se veía como "0 fotos" con
+                miles de pendientes, sin pista de que la causa era configuración. */}
+            {data?.media_s3_configured === false && mediaPendientes > 0 && (
+              <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-5 text-sm">
+                <AlertTriangle size={16} className="text-red-400 mt-0.5 shrink-0" />
+                <div className="text-slate-300">
+                  <span className="font-semibold text-red-400">Pipeline de fotos detenido: falta configurar el bucket.</span>{' '}
+                  Hay {mediaPendientes.toLocaleString('es-CL')} trabajos de <code className="text-slate-400">media-sync-cl</code> esperando
+                  y no se procesará ninguno hasta que estén las variables{' '}
+                  <code className="text-slate-400">HETZNER_S3_ENDPOINT / _BUCKET / _ACCESS_KEY / _SECRET_KEY</code>{' '}
+                  en el <code className="text-slate-400">.env</code> del VPS. No se pierde nada: los trabajos siguen en cola.
+                </div>
+              </div>
+            )}
 
             {/* Objetivos de barrido */}
             <h2 className="text-sm font-semibold text-slate-300 mb-2">Objetivos de barrido activos</h2>

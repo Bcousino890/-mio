@@ -295,7 +295,19 @@ async function main() {
   // pendientes para ~3.700 anuncios reales y un anuncio nuevo quedaba enterrado
   // días detrás de sus propios duplicados — la razón de que el contador de
   // anuncios crudos no subiera. Verificado: con 'short', 5 envíos = 1 job.
-  const DEDUPED_QUEUES = new Set([QUEUES.DETAIL, QUEUES.MEDIA_SYNC])
+  // DISCOVERY y CORREDORA_WEB entran aquí por el mismo motivo que DETAIL, y el
+  // fallo escala con el número de comunas activas. `last_run_at` solo se
+  // actualiza cuando el barrido CORRE, no cuando se encola; el scheduler mira
+  // `last_run_at` cada 15 min. Con una comuna daba igual (barrido ~7 min), pero
+  // con la RM entera un ciclo completo dura ~2h, así que el scheduler vuelve a
+  // pasar ~8 veces mientras los mismos objetivos siguen esperando en la cola y
+  // los re-encola cada vez: ~400 barridos encolados para 104 objetivos. Cada
+  // duplicado re-barre una comuna ENTERA — peticiones y GB de proxy tirados, y
+  // 4× de carga sobre el portal. Es el mismo atasco que ya costó 46.797 jobs en
+  // detail-cl, solo que aquí cada job es cientos de veces más caro.
+  // El scheduler de webs propias es peor en proporción: cadencia 24h, scheduler
+  // cada hora → hasta 24 encolados del mismo dominio.
+  const DEDUPED_QUEUES = new Set([QUEUES.DETAIL, QUEUES.MEDIA_SYNC, QUEUES.DISCOVERY, QUEUES.CORREDORA_WEB])
   for (const queueName of Object.values(QUEUES)) {
     const policy = DEDUPED_QUEUES.has(queueName) ? 'short' : 'standard'
     await boss.createQueue(queueName, { name: queueName, policy })
@@ -384,7 +396,8 @@ async function main() {
 
   await boss.work(QUEUES.DISCOVERY_SCHEDULER, async () => {
     await handleDiscoverySchedulerJob(dbClient, {
-      enqueueDiscovery: (target) => boss.send(QUEUES.DISCOVERY, { target }),
+      // UN barrido pendiente por objetivo (comuna × tipo × operación).
+      enqueueDiscovery: (target) => boss.send(QUEUES.DISCOVERY, { target }, { singletonKey: String(target.id) }),
     })
   })
   await boss.schedule(QUEUES.DISCOVERY_SCHEDULER, '*/15 * * * *')
@@ -403,7 +416,8 @@ async function main() {
 
   await boss.work(QUEUES.CORREDORA_WEB_SCHEDULER, async () => {
     await handleCorredoraWebSchedulerJob(dbClient, {
-      enqueueCrawl: (target) => boss.send(QUEUES.CORREDORA_WEB, { target }),
+      // UN crawl pendiente por web de corredora.
+      enqueueCrawl: (target) => boss.send(QUEUES.CORREDORA_WEB, { target }, { singletonKey: String(target.id) }),
     })
   })
   // Cada hora basta: la cadencia real la pone interval_hours de cada target (24h).

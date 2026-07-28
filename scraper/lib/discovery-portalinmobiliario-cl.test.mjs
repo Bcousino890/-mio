@@ -509,7 +509,10 @@ test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso 
     if (span > 2_000_000_000) return 3000 // bandas anchas todavía topan
     return 1200 // bandas ya estrechas caben
   }
-  const bands = await subdividePriceBands(probe, 2000)
+  // Rango EXPLÍCITO: estos totales son de venta en CLP y el techo por defecto
+  // en CLP ya es el de arriendo (renta mensual). Se fija aquí para seguir
+  // probando el algoritmo, no la constante.
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
   assert.ok(bands.length >= 2, 'debe partir la comuna en varias bandas')
   // Cubren [0, techo] sin huecos ni solapes (contiguas y ordenadas).
   const sorted = [...bands].sort((a, b) => a.min - b.min)
@@ -520,7 +523,7 @@ test('subdividePriceBands: bisección recursiva hasta quedar bajo el tope (caso 
 
 test('subdividePriceBands: comuna bajo el tope → una sola banda, sin bisecar', async () => {
   const probe = async () => 900
-  const bands = await subdividePriceBands(probe, 2000)
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
   assert.equal(bands.length, 1)
   assert.deepEqual(bands[0], { min: 0, max: 10_000_000_000, unit: 'CLP' })
 })
@@ -539,7 +542,7 @@ test('subdividePriceBands: Las Condes casa/venta REAL en CLP (verificado en vivo
     '1250000000-2500000000': 428, '2500000000-5000000000': 46, '5000000000-10000000000': 3,
   }
   const probe = async ({ min, max }) => REAL_TOTALS[`${min}-${max}`] ?? null
-  const bands = await subdividePriceBands(probe, 2000)
+  const bands = await subdividePriceBands(probe, 2000, 0, 10_000_000_000, 'CLP')
 
   const sorted = [...bands].sort((a, b) => a.min - b.min)
   assert.equal(sorted[0].min, 0)
@@ -596,4 +599,31 @@ test('discoverTarget: barrido completo con 0 vistos NO da de baja media comuna',
   assert.equal(res.seen, 0)
   assert.equal(res.delisted, 0) // guardado: seen.size === 0 → no marca bajas
   assert.equal(client.state.delistedIds.length, 0)
+})
+
+test('subdividePriceBands (ARRIENDO/CLP): cubre el mercado real de renta mensual', async () => {
+  // Regresión: el techo y el ancho mínimo en CLP estaban puestos como si fueran
+  // de VENTA (10.000 millones / 10 millones). Como la bisección arranca en
+  // [0, techo] y parte por la mitad, los 8 niveles de profundidad se gastaban
+  // bajando desde 10.000M y se rendía en [0 , 39M] — una banda que TODAVÍA
+  // contiene el 100% del arriendo (el más caro del portal ronda 20M/mes). El
+  // objetivo jamás alcanzaba el 98% de MIN_SWEEP_COVERAGE, así que nunca se
+  // marcaba exhaustivo ni daba de baja.
+  const N = 4392
+  const precios = Array.from({ length: N }, (_, i) => 250_000 + Math.round((i / N) ** 1.6 * 1_800_000))
+  const probe = async ({ min, max }) => precios.filter((p) => p >= min && (max === 0 || p < max)).length
+
+  const bands = await subdividePriceBands(probe, 2000)
+
+  // Ninguna banda hoja puede seguir por encima del tope del portal.
+  for (const b of bands) {
+    assert.ok(await probe(b) <= 2000, `banda [${b.min}, ${b.max}] sigue topando`)
+  }
+  // Y su unión tiene que cubrir el mercado entero, no un 45%.
+  const vistos = new Set()
+  for (const b of bands) {
+    precios.forEach((p, i) => { if (p >= b.min && (b.max === 0 || p < b.max)) vistos.add(i) })
+  }
+  assert.equal(vistos.size, N)
+  assert.equal(bands.every((b) => b.unit === 'CLP'), true)
 })
