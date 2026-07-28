@@ -255,6 +255,9 @@ export async function GET(request: NextRequest) {
         p.manual_latitude,
         p.manual_longitude,
         p.manual_pin_set_at,
+        -- Marca manual "ya subida al CRM externo (Smart)" — para no duplicar el
+        -- alta comercial; se enciende/apaga desde la ficha (0082).
+        p.smart_crm_at,
         -- Sello de la última unión/separación MANUAL (0079): la ficha lleva el
         -- distintivo "unido a mano" para no confundir un grupo curado por el
         -- equipo con uno propuesto por el score del dedup.
@@ -322,11 +325,30 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, latitude, longitude, source_url } = body ?? {}
+    const { id, latitude, longitude, source_url, smart_crm } = body ?? {}
 
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
     }
+
+    // Marca manual "ya subida al CRM externo (Smart)" — independiente del pin.
+    // Body: { id, smart_crm: true } para marcar, { id, smart_crm: false } para
+    // desmarcar. No es una integración con Smart: solo el estado que declara el
+    // equipo para no duplicar el alta comercial.
+    if (typeof smart_crm === 'boolean') {
+      const { rows } = await pool.query(
+        `UPDATE property_cl
+           SET smart_crm_at = CASE WHEN $2 THEN now() ELSE NULL END, updated_at = now()
+         WHERE id = $1
+         RETURNING id, smart_crm_at`,
+        [id, smart_crm],
+      )
+      if (rows.length === 0) {
+        return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
+      }
+      return NextResponse.json({ success: true, data: rows[0] })
+    }
+
     const clearing = latitude == null && longitude == null
     if (!clearing && (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude))) {
       return NextResponse.json({ success: false, error: 'latitude/longitude deben ser números (o ambos null para borrar)' }, { status: 400 })

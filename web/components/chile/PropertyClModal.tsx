@@ -58,6 +58,7 @@ export type Property = {
   bedrooms: number | null
   bathrooms: number | null
   comuna_name: string | null
+  sii_comuna_code: string | null
   location_confidence: string
   listing_count: number
   corredora_count: number
@@ -69,6 +70,8 @@ export type Property = {
   // Sello de la última unión/separación manual (0079) — distingue un grupo
   // curado por el equipo de uno propuesto por el score del dedup.
   manual_merge_at: string | null
+  // Marca manual "ya subida al CRM externo (Smart)" (0082): fecha = ya está.
+  smart_crm_at?: string | null
   // Rol SII + dirección exacta resueltos para el inmueble (se llenan al
   // confirmar el pin real; ver PATCH /api/chile/property-cl).
   rol_matriz?: string | null
@@ -260,6 +263,26 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // ficha muestra lo YA guardado (p.rol_matriz / p.crm).
   const [resolved, setResolved] = useState<{ parcel: ResolvedParcel | null; crm: CrmInfo | null } | null>(null)
   const [resolving, setResolving] = useState(false)
+
+  // Marca "ya subida al CRM externo (Smart)": estado manual del equipo para no
+  // duplicar el alta comercial. fecha = ya está; null = falta.
+  const [smartAt, setSmartAt] = useState<string | null>(p.smart_crm_at ?? null)
+  const [savingSmart, setSavingSmart] = useState(false)
+  const toggleSmart = useCallback(async () => {
+    const next = !smartAt
+    setSavingSmart(true)
+    try {
+      const res = await fetch('/api/chile/property-cl', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, smart_crm: next }),
+      })
+      const data = await res.json()
+      if (data.success) setSmartAt(data.data?.smart_crm_at ?? (next ? new Date().toISOString() : null))
+    } finally {
+      setSavingSmart(false)
+    }
+  }, [smartAt, p.id])
 
   // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
   // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
@@ -507,9 +530,26 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                 {[priceAlt(p), p.price_sqm ? `${clpShort(p.price_sqm)}/m²` : null].filter(Boolean).join(' · ')}
               </div>
             </div>
-            <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border ${conf.badge}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {conf.t}
-            </span>
+            <div className="flex flex-col items-end gap-2">
+              <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border ${conf.badge}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {conf.t}
+              </span>
+              {/* CRM externo (Smart): marca manual "ya la subí" para no duplicar
+                  el alta comercial. */}
+              <button onClick={toggleSmart} disabled={savingSmart}
+                title={smartAt ? 'Ya marcada como subida al CRM externo (Smart). Clic para desmarcar.' : 'Marcar como ya subida al CRM externo (Smart)'}
+                className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${
+                  smartAt
+                    ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-500'
+                    : 'bg-slate-700/60 text-slate-200 border-slate-600 hover:border-emerald-500/60 hover:text-emerald-300'
+                }`}>
+                {savingSmart
+                  ? 'Guardando…'
+                  : smartAt
+                    ? <><BadgeCheck size={14} /> Ya en Smart (CRM)</>
+                    : <><Plus size={14} /> Agregar a Smart</>}
+              </button>
+            </div>
           </div>
 
           {/* Ficha — grid de características (estilo bcousinoprop) */}
@@ -616,6 +656,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             onRealPinChange={handleRealPinChange}
                             highlightGeojson={resolved?.parcel?.geojson ?? null}
                             showParcels={showParcels}
+                            comunaCode={p.sii_comuna_code}
                           />
                           <button onClick={(e) => { e.stopPropagation(); setMapExpanded((v) => !v) }}
                             title={mapExpanded ? 'Achicar mapa' : 'Agrandar mapa'}

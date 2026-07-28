@@ -37,6 +37,8 @@ interface Props {
   highlightGeojson?: object | null
   /** Dibuja las parcelas del catastro (polígonos naranja) al hacer zoom. */
   showParcels?: boolean
+  /** Código de comuna SII: las parcelas se cargan ya filtradas por comuna. */
+  comunaCode?: string | null
 }
 
 const MIN_ZOOM_PARCELS = 16
@@ -47,7 +49,7 @@ const PARCEL_STYLE = { color: '#fbbf24', weight: 1, fillColor: '#fbbf24', fillOp
 const HIGHLIGHT_STYLE = { color: '#22c55e', weight: 3, fillColor: '#22c55e', fillOpacity: 0.28, opacity: 1 }
 
 export default function PropertyLocationMap({
-  latitude, longitude, corredoraPins, realPin, onRealPinChange, highlightGeojson, showParcels = false,
+  latitude, longitude, corredoraPins, realPin, onRealPinChange, highlightGeojson, showParcels = false, comunaCode,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -73,6 +75,8 @@ export default function PropertyLocationMap({
   realPinRef.current = realPin
   const showParcelsRef = useRef(showParcels)
   showParcelsRef.current = showParcels
+  const comunaCodeRef = useRef(comunaCode)
+  comunaCodeRef.current = comunaCode
 
   async function loadParcels() {
     const map = mapRef.current
@@ -80,9 +84,12 @@ export default function PropertyLocationMap({
     if (!map || !L || !showParcelsRef.current || map.getZoom() < MIN_ZOOM_PARCELS || loadingRef.current) return
     const b = map.getBounds()
     const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
+    // Con la comuna, las parcelas vienen ya filtradas por comuna (más rápido y
+    // sin predios de comunas vecinas en el borde del viewport).
+    const comuna = comunaCodeRef.current
     loadingRef.current = true
     try {
-      const res = await fetch(`/api/chile/parcels-bbox?bbox=${bbox}`)
+      const res = await fetch(`/api/chile/parcels-bbox?bbox=${bbox}${comuna ? `&comuna=${comuna}` : ''}`)
       const data = await res.json()
       if (!data.success || !data.features?.length) return
       if (parcelLayerRef.current) { parcelLayerRef.current.remove(); parcelLayerRef.current = null }
