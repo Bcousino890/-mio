@@ -120,7 +120,7 @@ async function rescrapeListing(client, { externalId, sourceUrl }) {
   const uf = await getUfRateCl()
   const opts = uf.ok ? { ufRate: uf.rate, ufRateDate: uf.date } : {}
   const { listingId, changeType } = await upsertListingCl(client, parsed, opts)
-  return { ok: true, listingId, changeType }
+  return { ok: true, listingId, changeType, propertyCode: parsed.property_code ?? null }
 }
 
 /** Candidatos con superficie sospechosa (terreno filtrado como m²) o, con `all`, todos los activos. */
@@ -180,6 +180,55 @@ export async function backfillSuperficieFotosCl(client, {
   }
   log(`[backfill] listo: ${ok} re-scrapeados, ${failed} fallidos, ${refreshed} property_cl refrescados`)
   return { candidates: candidates.length, ok, failed, refreshed }
+}
+
+/**
+ * Re-scrapea fichas de Portal Inmobiliario que quedaron SIN `property_code`
+ * ("Código de la propiedad") para que el parser corregido —que ahora también lo
+ * lee del DOM, no solo del blob Nordic— lo rellene, y refresca los agregados del
+ * property_cl afectado. Rate-limited (sleepMs). Idempotente: el set de
+ * candidatos (property_code IS NULL) se encoge solo a medida que se rellenan.
+ *
+ * NOTA: el enlace por property_code (Nivel 1) lo hace el pipeline de dedup
+ * aparte; este backfill solo repuebla el dato crudo del anuncio.
+ */
+export async function backfillPropertyCodeCl(client, {
+  limit = null, sleepMs = 1500, log = NOOP_LOG,
+} = {}) {
+  const { rows: candidates } = await client.query(
+    `SELECT id, external_id, source_url, property_cl_id
+     FROM listings_cl
+     WHERE portal = 'portalinmobiliario' AND is_active
+       AND source_url IS NOT NULL AND property_code IS NULL
+     ORDER BY last_seen_at DESC NULLS LAST ${limit ? 'LIMIT $1' : ''}`,
+    limit ? [limit] : [],
+  )
+  log(`[backfill-code] ${candidates.length} ficha(s) sin property_code a re-scrapear`)
+
+  let ok = 0, failed = 0, filled = 0
+  const touchedProps = new Set()
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i]
+    try {
+      const res = await rescrapeListing(client, { externalId: c.external_id, sourceUrl: c.source_url })
+      if (res.ok) {
+        ok++
+        if (res.propertyCode != null) { filled++; if (c.property_cl_id) touchedProps.add(c.property_cl_id) }
+      } else {
+        failed++; log(`[backfill-code] ${c.external_id}: ${res.reason}`)
+      }
+    } catch (e) {
+      failed++; log(`[backfill-code] ${c.external_id}: ${e.message}`)
+    }
+    if (i < candidates.length - 1) await SLEEP(sleepMs)
+  }
+
+  let refreshed = 0
+  for (const pid of touchedProps) {
+    try { await refreshPropertyClAggregates(client, pid); refreshed++ } catch { /* grupo pudo desaparecer */ }
+  }
+  log(`[backfill-code] listo: ${ok} re-scrapeados, ${filled} con código nuevo, ${failed} fallidos, ${refreshed} property_cl refrescados`)
+  return { candidates: candidates.length, ok, filled, failed, refreshed }
 }
 
 // ─── Orquestador de arranque (una sola vez, marcado en data_fixes_cl) ─────────

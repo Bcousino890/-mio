@@ -171,6 +171,13 @@ tenían fichas de detalle pre-descargadas:
 - ✅ `property_code` ("Código de la propiedad") vive en
   `seller_profile(.rex)?.bottom_extra_info[]`, formato variable (numérico o hash
   alfanumérico según el sistema interno de cada corredora — confirmado, no es un bug).
+  ⚠️ El blob **no siempre** lo trae (varía por layout; frecuente en tiendas
+  oficiales `seller_profile_rex`): en esas fichas el código solo aparece
+  renderizado en el DOM, en "Información de la corredora"
+  (`.ui-seller-info__status-info__title` = etiqueta,
+  `.ui-seller-info__status-info__subtitle` = valor). Por eso `parseDetailPage`
+  cae a ese DOM cuando el blob no da nada (fallback añadido tras detectar muchas
+  fichas sin código en el CRM).
 - ✅ El video **nunca** viaja embebido como archivo en el HTML estático de la ficha: solo
   existe `gallery_mosaic.has_video` (booleano) y una URL de modal
   (`gallery_mosaic.media_counters[type=video].url`,
