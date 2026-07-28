@@ -51,22 +51,42 @@ export async function GET(request: NextRequest) {
     }
 
     const conditions: string[] = []
-    if (q) conditions.push(`name_normalized ILIKE ${addParam(`%${q}%`)}`)
-    if (crmPlatform) conditions.push(`crm_platform = ${addParam(crmPlatform)}`)
-    if (comuna) conditions.push(`${addParam(comuna)} = ANY(comunas_operated)`)
-    if (onlyWithWeb) conditions.push('web_propia_url IS NOT NULL')
-    if (onlyActive) conditions.push('active_listings_count > 0')
+    if (q) conditions.push(`c.name_normalized ILIKE ${addParam(`%${q}%`)}`)
+    if (crmPlatform) conditions.push(`c.crm_platform = ${addParam(crmPlatform)}`)
+    if (comuna) conditions.push(`${addParam(comuna)} = ANY(c.comunas_operated)`)
+    if (onlyWithWeb) conditions.push('c.web_propia_url IS NOT NULL')
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
+    // "Solo con stock activo" se aplica DESPUÉS de sumar el grupo y con el
+    // conteo en vivo: una cuenta puede estar a 0 y la corredora seguir teniendo
+    // stock en otra, y la métrica guardada va con retraso.
+    const havingActive = onlyActive ? 'WHERE active_listings_count > 0' : ''
 
     // La corredora agrupada (por nombre normalizado) es la unidad de esta lista:
     // cuenta corredoras reales, no cuentas de vendedor.
     // `array_agg` no puede acumular arrays de distinta longitud, así que las
     // comunas y los teléfonos se desanidan ANTES de agrupar, en su propio CTE.
     const groupedCte = `
-      WITH base AS (
-        SELECT *, COALESCE(name_normalized, name_raw) AS gname
-        FROM corredoras_cl
+      WITH stock AS (
+        -- Conteo EN VIVO desde los anuncios. active_listings_count/
+        -- total_listings_seen de corredoras_cl son una foto del último paso del
+        -- job de dedup y se quedan atrás: para Property Partners marcaban 263
+        -- cuando el real era 288 (el portal declara 290). Además dejaban al
+        -- directorio y a la ficha —que sí cuenta en vivo— diciendo cosas
+        -- distintas de la misma corredora.
+        SELECT corredora_id,
+               count(*) FILTER (WHERE is_active)::int AS activos,
+               count(*)::int AS vistos
+        FROM listings_cl
+        WHERE corredora_id IS NOT NULL
+        GROUP BY corredora_id
+      ),
+      base AS (
+        SELECT c.*, COALESCE(c.name_normalized, c.name_raw) AS gname,
+               COALESCE(s.activos, 0) AS activos_vivo,
+               COALESCE(s.vistos, 0) AS vistos_vivo
+        FROM corredoras_cl c
+        LEFT JOIN stock s ON s.corredora_id = c.id
         ${whereClause}
       ),
       comunas AS (
@@ -84,26 +104,26 @@ export async function GET(request: NextRequest) {
           b.gname AS name,
           -- id representativo: la cuenta con más stock (la "principal"), para
           -- que el enlace a la ficha lleve a la más relevante del grupo.
-          (array_agg(b.id ORDER BY b.active_listings_count DESC NULLS LAST))[1] AS id,
+          (array_agg(b.id ORDER BY b.activos_vivo DESC NULLS LAST))[1] AS id,
           array_agg(DISTINCT b.advertiser_id) FILTER (WHERE b.advertiser_id IS NOT NULL) AS advertiser_ids,
           count(*)::int AS accounts,
-          (array_agg(b.logo_url ORDER BY b.active_listings_count DESC NULLS LAST)
+          (array_agg(b.logo_url ORDER BY b.activos_vivo DESC NULLS LAST)
              FILTER (WHERE b.logo_url IS NOT NULL))[1] AS logo_url,
           (array_agg(b.web_propia_url) FILTER (WHERE b.web_propia_url IS NOT NULL))[1] AS web_propia_url,
           (array_agg(b.crm_platform ORDER BY (b.crm_platform <> 'unknown') DESC))[1] AS crm_platform,
-          COALESCE(sum(b.active_listings_count), 0)::int AS active_listings_count,
-          COALESCE(sum(b.total_listings_seen), 0)::int AS total_listings_seen,
+          COALESCE(sum(b.activos_vivo), 0)::int AS active_listings_count,
+          COALESCE(sum(b.vistos_vivo), 0)::int AS total_listings_seen,
           co.comunas_operated,
           te.phones,
           -- Medias PONDERADAS por stock: sin peso, una cuenta de 3 anuncios
           -- pesaría igual que una de 164.
-          CASE WHEN sum(b.active_listings_count) FILTER (WHERE b.avg_days_on_market IS NOT NULL) > 0
-               THEN sum(b.avg_days_on_market * b.active_listings_count) FILTER (WHERE b.avg_days_on_market IS NOT NULL)
-                    / sum(b.active_listings_count) FILTER (WHERE b.avg_days_on_market IS NOT NULL)
+          CASE WHEN sum(b.activos_vivo) FILTER (WHERE b.avg_days_on_market IS NOT NULL) > 0
+               THEN sum(b.avg_days_on_market * b.activos_vivo) FILTER (WHERE b.avg_days_on_market IS NOT NULL)
+                    / sum(b.activos_vivo) FILTER (WHERE b.avg_days_on_market IS NOT NULL)
           END AS avg_days_on_market,
-          CASE WHEN sum(b.active_listings_count) FILTER (WHERE b.exclusivity_ratio IS NOT NULL) > 0
-               THEN sum(b.exclusivity_ratio * b.active_listings_count) FILTER (WHERE b.exclusivity_ratio IS NOT NULL)
-                    / sum(b.active_listings_count) FILTER (WHERE b.exclusivity_ratio IS NOT NULL)
+          CASE WHEN sum(b.activos_vivo) FILTER (WHERE b.exclusivity_ratio IS NOT NULL) > 0
+               THEN sum(b.exclusivity_ratio * b.activos_vivo) FILTER (WHERE b.exclusivity_ratio IS NOT NULL)
+                    / sum(b.activos_vivo) FILTER (WHERE b.exclusivity_ratio IS NOT NULL)
           END AS exclusivity_ratio,
           max(b.metrics_updated_at) AS metrics_updated_at,
           min(b.first_seen_at) AS first_seen_at,
@@ -115,7 +135,7 @@ export async function GET(request: NextRequest) {
       )`
 
     const countResult = await pool.query(
-      `${groupedCte} SELECT COUNT(*) AS total FROM agrupadas`,
+      `${groupedCte} SELECT COUNT(*) AS total FROM agrupadas ${havingActive}`,
       params
     )
     const total = Number(countResult.rows[0]?.total ?? 0)
@@ -129,6 +149,7 @@ export async function GET(request: NextRequest) {
               crm_platform, active_listings_count, total_listings_seen,
               comunas_operated, avg_days_on_market, exclusivity_ratio
        FROM agrupadas
+       ${havingActive}
        ORDER BY ${SORT_CLAUSES[sort]}
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams
