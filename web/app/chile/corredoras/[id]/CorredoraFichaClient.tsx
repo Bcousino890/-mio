@@ -39,7 +39,12 @@ type Ficha = {
   exclusivity_ratio: number | null
   inventory: InventoryItem[]
   inventory_count: number
+  active_count: number
   shared_count: number
+  // Una corredora opera con VARIAS cuentas de vendedor en el portal (Property
+  // Partners tiene 3): la ficha las agrupa siempre.
+  advertiser_ids: string[] | null
+  accounts: number
 }
 
 const CRM_LABELS: Record<string, string> = { convecta: 'Convecta', ofinet: 'Ofinet', other: 'Otro CRM', unknown: 'Sin detectar' }
@@ -160,7 +165,16 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-slate-400">
-                  {ficha.advertiser_id && <span>ML seller: <code className="bg-slate-800 px-1 rounded">{ficha.advertiser_id}</code></span>}
+                  {(ficha.advertiser_ids ?? []).length > 0 && (
+                    <span title={ficha.accounts > 1
+                      ? `Esta corredora publica con ${ficha.accounts} cuentas de vendedor distintas en el portal; la ficha las suma todas.`
+                      : undefined}>
+                      ML seller{ficha.accounts > 1 ? 's' : ''}:{' '}
+                      {(ficha.advertiser_ids ?? []).map(a => (
+                        <code key={a} className="bg-slate-800 px-1 rounded mr-1">{a}</code>
+                      ))}
+                    </span>
+                  )}
                   {ficha.web_propia_url && (
                     <a href={ficha.web_propia_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300">
                       <Globe size={12} /> {ficha.web_propia_url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
@@ -182,7 +196,7 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
 
             {/* Métricas */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-              <Stat icon={<Package size={14} />} label="Stock activo" value={String(ficha.active_listings_count)} accent="bg-blue-500/15 text-blue-400" />
+              <Stat icon={<Package size={14} />} label="Stock activo" value={String(ficha.active_count ?? ficha.active_listings_count)} hint="publicados ahora" accent="bg-blue-500/15 text-blue-400" />
               <Stat icon={<History size={14} />} label="Histórico" value={String(ficha.total_listings_seen)} hint="anuncios vistos" accent="bg-slate-600/40 text-slate-300" />
               <Stat icon={<Timer size={14} />} label="Rotación" value={days(ficha.avg_days_on_market)} hint="promedio en mercado" accent="bg-teal-500/15 text-teal-400" />
               <Stat icon={<ShieldCheck size={14} />} label="Exclusividad" value={pct(ficha.exclusivity_ratio)} hint="solo ella publica" accent="bg-emerald-500/15 text-emerald-400" />
@@ -193,6 +207,11 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
             <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
               <h2 className="text-sm font-semibold text-slate-300">
                 Inventario · {ficha.inventory_count} {ficha.inventory_count === 1 ? 'propiedad' : 'propiedades'}
+                {ficha.inventory_count > (ficha.active_count ?? 0) && (
+                  <span className="ml-1 font-normal text-slate-500">
+                    ({ficha.active_count} publicadas ahora · {ficha.inventory_count - (ficha.active_count ?? 0)} dadas de baja)
+                  </span>
+                )}
               </h2>
               <div className="flex gap-1 bg-slate-800 border border-slate-700 rounded-lg p-0.5">
                 {([['all', 'Todas'], ['shared', 'En canje'], ['exclusive', 'Exclusivas']] as [InvFilter, string][]).map(([k, lbl]) => (

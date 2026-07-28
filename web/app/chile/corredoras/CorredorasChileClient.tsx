@@ -17,6 +17,11 @@ type Corredora = {
   comunas_operated: string[] | null
   avg_days_on_market: number | null
   exclusivity_ratio: number | null
+  // Cuentas de vendedor del portal que la corredora usa. Se agrupan siempre en
+  // una sola fila: si no, Property Partners salía partida en 3 (164/50/47)
+  // mientras el portal la muestra entera.
+  advertiser_ids: string[] | null
+  accounts: number
 }
 
 type SortKey = 'stock' | 'total' | 'rotacion' | 'exclusividad' | 'nombre'
@@ -301,6 +306,12 @@ export default function CorredorasChileClient() {
                         <div className="min-w-0">
                           <Link href={`/chile/corredoras/${c.id}`} className="font-medium text-slate-100 group-hover:text-amber-400 capitalize block truncate">
                             {c.name || '(sin nombre)'}
+                            {c.accounts > 1 && (
+                              <span className="ml-1.5 align-middle text-[10px] font-normal px-1.5 py-0.5 rounded-full bg-slate-700/70 border border-slate-600 text-slate-300"
+                                title={`Publica con ${c.accounts} cuentas de vendedor distintas en el portal. La ficha y estas cifras las suman todas.`}>
+                                {c.accounts} cuentas
+                              </span>
+                            )}
                           </Link>
                           {c.web_propia_url && (
                             <a href={c.web_propia_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
