@@ -11,18 +11,24 @@ name: Watchdog + ingesta de predios SII mapasui
 # INSERT ... ON CONFLICT DO UPDATE de sii-mapasui-cl.mjs lo hace seguro de
 # re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo,
 # y solo consume líneas ya terminadas en \n, nunca una a medio escribir).
+#
+# ⚠ ESTE WORKFLOW YA NO TIENE `schedule:`. El watchdog + ingesta periódicos
+# corren ahora en el CRON DEL VPS, cada 10 min:
+#   scraper/sii-scraper/watchdog-ingest-sii-mapasui.sh
+#   (lo instala infra/install-crons.sh en cada deploy)
+#
+# Por qué se movió: este job no hacía más que levantar un runner Ubuntu —
+# facturado por minuto empezado, y el repo es privado — para abrir un SSH al
+# VPS y lanzar un script que ya vivía en el VPS. 48 arranques de runner al día
+# como mando a distancia. Encima GitHub descarta y retrasa los scheduled runs
+# (huecos reales de 2-3 h pidiendo cada 30 min), mientras que el cron local no
+# deriva: ahora corre cada 10 min, va más al día y no cuesta nada.
+#
+# Lo que queda acá es el DISPARO MANUAL — el botón de "ingestar ahora" y el
+# push al centinela. Solo gastan cuando alguien los aprieta, y llaman al mismo
+# script del VPS, así que no hay dos copias de la lógica que se desincronicen.
 on:
   workflow_dispatch: {}
-  # Respaldo cada 30 min: la ingesta incremental de run-sii-mapasui.sh (cada 10
-  # min) es el camino normal, pero este pipeline ya se murió en silencio dos
-  # veces (rsync --delete, corrida lanzada con script viejo). Re-ingestar el
-  # JSONL existente es idempotente y tarda ~30 s. Se pide cada 30 min (no cada
-  # hora) porque GitHub Actions descarta/retrasa mucho los scheduled runs: aun
-  # a esta cadencia se ven gaps reales de ~2-3 h, así que pedir más seguido es
-  # la única forma de que sii_mapasui_predios_cl no quede horas por detrás del
-  # disco (y de que el latido de sii-mapasui-stats no salte a "estancado").
-  schedule:
-    - cron: '*/30 * * * *'
   push:
     branches:
       - main
@@ -54,121 +60,19 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      # ── Watchdog del scrape ──────────────────────────────────────────────
-      # El scrape es un nohup suelto en el VPS: si muere (OOM, reboot, crash
-      # tras 3 reintentos internos) nadie lo relanzaba y el pipeline requería
-      # monitoreo humano. Este paso lo hace autónomo:
-      #   - proceso vivo y con progreso           → no tocar
-      #   - proceso vivo pero SIN progreso en 6 h → colgado: matar y relanzar
-      #   - muerto y .sii-mapasui-complete existe → comuna completa, todo bien
-      #   - muerto sin marcador                   → murió a medias: relanzar
-      # El relanzamiento reutiliza los parámetros de la corrida original
-      # (.sii-mapasui-params) y retoma desde los checkpoints, sin perder nada.
-      - name: Watchdog — relanzar scrape si murió o se colgó
-        run: |
-          ssh $SSH_OPTS -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
-            set -e
-            cd /opt/casafari
-            LOCK=/tmp/casafari-scrape-sii-mapasui.lock
-            OUT=scraper/sii-scraper/output
-
-            # Pausa manual (stop-sii-mapasui.yml): mientras exista el flag, el
-            # watchdog NO relanza. Se limpia al apretar el botón de launch.
-            if [ -f "$OUT/.sii-mapasui-paused" ]; then
-              echo "⏸ Scrape SII PAUSADO ($(cat "$OUT/.sii-mapasui-paused")) — el watchdog no relanza."
-              exit 0
-            fi
-
-            necesita_relanzar=""
-            PID=$(cat "$LOCK" 2>/dev/null || true)
-            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-              # Vivo. ¿Progresa? Checkpoints o JSONL tocados en las últimas 6 h.
-              # (Los backoffs anti-429 duran minutos; 6 h sin escribir = colgado.)
-              if [ -d "$OUT" ] && [ -n "$(find "$OUT/checkpoints" "$OUT/predios" -newermt '-6 hours' -print -quit 2>/dev/null)" ]; then
-                echo "✓ Scrape vivo y con progreso (PID $PID) — nada que hacer."
-              elif [ -n "$(find "$LOCK" -newermt '-6 hours' -print -quit 2>/dev/null)" ]; then
-                # Corrida joven (<6 h): aún puede estar en venv/descubrimiento
-                # sin haber escrito nada — no juzgarla todavía.
-                echo "✓ Scrape vivo, corrida reciente (PID $PID) — esperando progreso."
-              elif [ -f "$OUT/.sii-mapasui-complete" ]; then
-                # Vivo sin escribir pero ya completó antes (p. ej. corrida de
-                # verificación); no es un cuelgue.
-                echo "✓ Scrape vivo, comuna ya completa — nada que hacer."
-              else
-                echo "⚠ Scrape vivo pero sin progreso en 6 h (PID $PID) — colgado. Matando..."
-                pkill -9 -f "run-sii-mapasui.sh" || true
-                # Los workers corren como "./venv/bin/python run.py <etapa> ..."
-                # (ruta relativa): "sii-scraper/run.py" no matchea su cmdline.
-                pkill -9 -f "run\.py (regiones|manzanas|predios)" || true
-                pkill -9 -f "sii-scraper/run.py" || true
-                rm -f "$LOCK"
-                necesita_relanzar=1
-              fi
-            elif [ -f "$OUT/.sii-mapasui-complete" ]; then
-              echo "✓ Scrape terminado ($(cat "$OUT/.sii-mapasui-complete")) — comuna completa, nada que relanzar."
-              rm -f "$LOCK"
-            else
-              echo "⚠ Scrape muerto sin completar — relanzando..."
-              rm -f "$LOCK"
-              necesita_relanzar=1
-            fi
-
-            if [ -n "$necesita_relanzar" ]; then
-              # Velocidad de la corrida original si quedó en disco (RPS/concurrencia).
-              # NO se fija SII_COMUNA_CODE: run-sii-mapasui.sh cae en modo COLA y
-              # retoma la primera comuna pendiente de comunas-queue.json desde sus
-              # checkpoints (salta las ya marcadas .complete-<code>), de modo que
-              # el relanzamiento continúa hacia Vitacura sin intervención humana.
-              if [ -f "$OUT/.sii-mapasui-params" ]; then
-                set -a; source "$OUT/.sii-mapasui-params"; set +a
-                echo "  (params: ${SII_RPS:-?} rps × ${SII_CONCURRENCY:-?} · modo cola)"
-              fi
-              mkdir -p scraper/output
-              chmod +x scraper/sii-scraper/run-sii-mapasui.sh
-              nohup bash scraper/sii-scraper/run-sii-mapasui.sh \
-                > "scraper/output/watchdog-relaunch-$(date +%Y%m%d_%H%M%S).log" 2>&1 < /dev/null &
-              NEWPID=$!
-              disown
-              sleep 3
-              if kill -0 "$NEWPID" 2>/dev/null; then
-                echo "▶ Scrape relanzado por el watchdog (PID $NEWPID)."
-              else
-                echo "✗ El relanzamiento no arrancó — revisar scraper/output/ en el VPS."
-                exit 1
-              fi
-            fi
-          EOF
-
-      # La ingesta es incremental (checkpoint por archivo en
-      # sii_mapasui_ingest_state_cl, migración 0082) y upsertea por lotes, así
-      # que una corrida normal solo lee las líneas nuevas y tarda segundos —
-      # antes releía los 455k predios línea a línea y no cabía en la vida útil
-      # del túnel SSH. El flock la serializa con la ingesta incremental que
-      # run-sii-mapasui.sh corre cada 10 min: si esa está trabajando, esta
-      # espera en vez de pelear por la misma tabla.
-      - name: Ingestar output/predios/*.jsonl existente
+      # Un solo paso: llama al MISMO script que corre el cron del VPS cada 10
+      # min. Antes esta lógica estaba duplicada acá dentro en dos bloques de
+      # bash heredoc, que es como se desincronizan las cosas.
+      - name: Watchdog + ingesta en el VPS
         timeout-minutes: 30
         run: |
           ssh $SSH_OPTS -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
-            cd /opt/casafari/scraper
-            if [ ! -d sii-scraper/output/predios ]; then
-              echo "○ No existe sii-scraper/output/predios en el VPS — nada que ingestar (salida limpia para el cron)."
-              exit 0
-            fi
-            if [ -f ../.env ]; then set -a; source ../.env; set +a; fi
-            if [ -z "${POSTGRES_PASSWORD:-}" ]; then
-              echo "✗ Falta POSTGRES_PASSWORD (revisa .env)"
-              exit 1
-            fi
-            export DATABASE_URL="postgres://casafari:${POSTGRES_PASSWORD}@127.0.0.1:5433/casafari"
-            if [ ! -d node_modules/pg ]; then
-              echo "▶ Instalando dependencias Node del scraper (pg)..."
-              npm install --omit=dev --no-audit --no-fund
-            fi
-            echo "▶ Ingestando sii-scraper/output/predios/ en sii_mapasui_predios_cl..."
-            flock -w 900 /tmp/casafari-ingest-sii-mapasui.lock \
-              node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
+            cd /opt/casafari
+            chmod +x scraper/sii-scraper/watchdog-ingest-sii-mapasui.sh
+            # Disparo manual: esperar el lock en vez de saltarse la vuelta. Si
+            # alguien aprieta el botón es porque quiere el dato ahora.
+            export SII_INGEST_FLOCK_OPTS="-w 900"
+            bash scraper/sii-scraper/watchdog-ingest-sii-mapasui.sh
           EOF

@@ -159,7 +159,7 @@ PY
   echo "▶ Modo COLA — ${#COMUNA_CODES[@]} comuna(s): ${COMUNA_NOMBRES[*]}"
 fi
 
-# Estado en disco para el watchdog (ingest-sii-mapasui-now.yml).
+# Estado en disco para el watchdog (watchdog-ingest-sii-mapasui.sh).
 cat > "$PARAMS_FILE" <<PARAMS
 SII_RPS=${SII_RPS}
 SII_CONCURRENCY=${SII_CONCURRENCY}
@@ -212,8 +212,9 @@ fi
 # CONFLICT DO UPDATE es idempotente, así que re-ingestar archivos en
 # crecimiento es seguro.
 #
-# El flock la serializa con el cron de respaldo (ingest-sii-mapasui-now.yml,
-# cada 30 min): sin él, dos ingestas podían solaparse sobre la misma tabla. Acá
+# El flock la serializa con el watchdog del cron del VPS
+# (watchdog-ingest-sii-mapasui.sh, cada 10 min): sin él, dos ingestas podían
+# solaparse sobre la misma tabla. Acá
 # es -n (si el cron ya está ingestando, esta vuelta se salta: la siguiente
 # recoge igual lo que falte gracias al checkpoint de la migración 0082).
 SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"

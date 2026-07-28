@@ -100,6 +100,12 @@ fi
 echo "▶ [5/6] Aplicando migraciones SQL..."
 bash "$REPO_DIR/infra/post-deploy.sh" || true
 
+# Cron local del VPS (watchdog + ingesta de predios SII). Vivía en un scheduled
+# workflow de GitHub que solo servía de mando a distancia por SSH y facturaba
+# un runner cada media hora en un repo privado. `|| true`: un fallo instalando
+# el cron no debe revertir un deploy que ya sirve tráfico.
+bash "$REPO_DIR/infra/install-crons.sh" || true
+
 # Worker 24/7 de Anuncios CL (H2): se construye AQUÍ, en el VPS, a diferencia
 # de `app` — su Dockerfile es liviano (node:20-bookworm-slim + npm ci, sin
 # chromium/geopandas) y no arriesga el OOM que obligó a mover el build de la
