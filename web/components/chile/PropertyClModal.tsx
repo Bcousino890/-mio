@@ -17,9 +17,10 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
+  Phone, Layers, Landmark, MessageCircle, BadgeCheck,
 } from 'lucide-react'
 
-const DetailMap = dynamic(() => import('@/components/map/DetailMap'), { ssr: false })
+const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
 
 export type Listing = {
   listing_id: string
@@ -68,6 +69,42 @@ export type Property = {
   // Sello de la última unión/separación manual (0079) — distingue un grupo
   // curado por el equipo de uno propuesto por el score del dedup.
   manual_merge_at: string | null
+  // Rol SII + dirección exacta resueltos para el inmueble (se llenan al
+  // confirmar el pin real; ver PATCH /api/chile/property-cl).
+  rol_matriz?: string | null
+  exact_address?: string | null
+  // ¿Ya está el inmueble en el CRM de captación (por su rol), con dueño y
+  // teléfonos para llamar? Lo trae el GET cuando rol_matriz está resuelto.
+  crm?: CrmInfo | null
+}
+
+// Teléfono de contacto del dueño (DealerNet). Misma forma que captaciones_cl.phones.
+export type CrmPhone = { numero: string; tipo?: string; whatsapp?: boolean; fuente?: string; calidad?: number }
+// El inmueble ya presente en el CRM de captación (captaciones_cl), resuelto por rol.
+export type CrmInfo = {
+  captacion_id: string
+  owner_name: string | null
+  owner_rut: string | null
+  phones: CrmPhone[] | null
+  emails: unknown
+  stage: string
+  dealernet_status: string
+  needs_review: boolean
+  source_url: string
+  updated_at: string
+}
+// Parcela SII resuelta bajo el pin real (respuesta de /api/chile/rol-at-point y
+// del campo `rol` del PATCH).
+export type ResolvedParcel = {
+  rol: string
+  comuna_name: string
+  sii_comuna_code: string
+  parcel_id: string
+  geojson: object
+  direccion: string | null
+  avaluo_fiscal_total: number | null
+  superficie_terreno_m2: number | null
+  codigo_destino_principal: string | null
 }
 
 export const CRM_LABELS: Record<string, string> = { convecta: 'Convecta', ofinet: 'Ofinet', other: 'Otro CRM', unknown: '—' }
@@ -214,6 +251,54 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // Mapa en overlay de pantalla completa ("agrandar") — el recuadro chico de
   // la ficha no alcanza para ubicar bien un pin en una zona densa.
   const [mapExpanded, setMapExpanded] = useState(false)
+  // Mostrar las parcelas del catastro sobre el satélite (como /chile/catastro):
+  // la guía para colocar el pin real sobre el predio correcto. Encendido por
+  // defecto — es justo lo que se pidió ver en la ficha.
+  const [showParcels, setShowParcels] = useState(true)
+  // Rol resuelto EN VIVO bajo el pin real (parcela + si ya está en el CRM). Se
+  // recalcula al mover el pin; null hasta que hay pin. Antes de tocar nada, la
+  // ficha muestra lo YA guardado (p.rol_matriz / p.crm).
+  const [resolved, setResolved] = useState<{ parcel: ResolvedParcel | null; crm: CrmInfo | null } | null>(null)
+  const [resolving, setResolving] = useState(false)
+
+  // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
+  // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
+  // para no apilar pines idénticos).
+  const corredoraPins = useMemo(() => {
+    const seen = new Set<string>()
+    const pins: { latitude: number; longitude: number; label: string }[] = []
+    for (const l of p.listings) {
+      if (l.latitude == null || l.longitude == null) continue
+      const key = `${l.latitude.toFixed(6)},${l.longitude.toFixed(6)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      pins.push({ latitude: l.latitude, longitude: l.longitude, label: l.advertiser_name || 'Corredora' })
+    }
+    return pins
+  }, [p.listings])
+
+  // Poner/mover el pin real (arrastre, clic en el mapa o en una parcela).
+  const handleRealPinChange = useCallback((pos: { latitude: number; longitude: number }) => {
+    setManualPin(pos)
+    setManualPinDirty(true)
+  }, [])
+
+  // Resolver el rol de abajo cada vez que se mueve el pin real (debounced): da
+  // feedback inmediato del rol/dirección/CRM antes de "Guardar ubicación".
+  useEffect(() => {
+    if (!manualPin) { setResolved(null); return }
+    let cancelled = false
+    setResolving(true)
+    const t = setTimeout(() => {
+      fetch(`/api/chile/rol-at-point?lat=${manualPin.latitude}&lng=${manualPin.longitude}`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled && d.success) setResolved({ parcel: d.parcel ?? null, crm: d.crm ?? null }) })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setResolving(false) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualPin?.latitude, manualPin?.longitude])
 
   const addManualPin = useCallback((baseLat: number, baseLng: number) => {
     // Offset pequeño para que el pin nuevo no quede exactamente encima del
@@ -237,6 +322,8 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
       })
       const data = await res.json()
       setManualPinDirty(false)
+      // Reflejar de una la info resuelta y persistida (rol + parcela + CRM).
+      if (data.rol) setResolved({ parcel: data.rol, crm: data.crm ?? null })
       if (data.captacion?.sii_rol) {
         setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación`, captacionId: data.captacion.id })
       } else if (data.captacion_error) {
@@ -452,24 +539,33 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                   <div className="mt-5">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold text-slate-300 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
-                      {geo && !manualPin && (
-                        <button onClick={() => addManualPin(geo.latitude!, geo.longitude!)}
-                          className="text-xs text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
-                          <Plus size={12} /> Agregar pin
-                        </button>
-                      )}
-                      {manualPin && (
-                        <div className="flex items-center gap-2">
-                          {manualPinDirty && (
-                            <button onClick={saveManualPin} disabled={savingPin}
-                              className="text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
-                              {savingPin ? 'Guardando…' : 'Guardar ubicación'}
-                            </button>
-                          )}
-                          <button onClick={removeManualPin} disabled={savingPin}
-                            className="text-xs text-slate-500 hover:text-rose-400 disabled:opacity-50">Quitar</button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2.5">
+                        {geo && (
+                          <button onClick={() => setShowParcels(v => !v)}
+                            title="Mostrar las parcelas del catastro SII sobre el satélite (como en /chile/catastro)"
+                            className={`text-xs inline-flex items-center gap-1 ${showParcels ? 'text-amber-400 hover:text-amber-300' : 'text-slate-500 hover:text-slate-300'}`}>
+                            <Layers size={12} /> Parcelas
+                          </button>
+                        )}
+                        {geo && !manualPin && (
+                          <button onClick={() => addManualPin(geo.latitude!, geo.longitude!)}
+                            className="text-xs text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
+                            <Plus size={12} /> Agregar pin real
+                          </button>
+                        )}
+                        {manualPin && (
+                          <>
+                            {manualPinDirty && (
+                              <button onClick={saveManualPin} disabled={savingPin}
+                                className="text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
+                                {savingPin ? 'Guardando…' : 'Guardar ubicación'}
+                              </button>
+                            )}
+                            <button onClick={removeManualPin} disabled={savingPin}
+                              className="text-xs text-slate-500 hover:text-rose-400 disabled:opacity-50">Quitar</button>
+                          </>
+                        )}
+                      </div>
                     </div>
                     {captacionMsg && (
                       captacionMsg.captacionId ? (
@@ -494,9 +590,10 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       // del equipo, aparte del declarado por el anuncio, para comparar.
                       // Botón "agrandar": el recuadro chico no alcanza para ubicar
                       // un pin con precisión en zonas densas. Agrandamos el MISMO
-                      // contenedor del ÚNICO mapa (no montamos un segundo DetailMap
-                      // en el overlay: ese arrancaba con un tamaño transitorio y
-                      // Leaflet lo dibujaba cortado — bug "solo agranda una parte").
+                      // contenedor del ÚNICO mapa (no montamos un segundo
+                      // PropertyLocationMap en el overlay: ese arrancaría con un
+                      // tamaño transitorio y Leaflet lo dibujaría cortado — bug
+                      // "solo agranda una parte").
                       // Al alternar las clases, el contenedor del mapa que ya está
                       // montado cambia de tamaño y su ResizeObserver interno redibuja
                       // Leaflet al tamaño nuevo, conservando el centro.
@@ -512,11 +609,13 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             : 'relative w-full h-full'}
                           onClick={mapExpanded ? (e) => e.stopPropagation() : undefined}
                         >
-                          <DetailMap
-                            latitude={geo.latitude!} longitude={geo.longitude!} exact
-                            tileStyle="satellite"
-                            secondPin={manualPin}
-                            onSecondPinDrag={(pos) => { setManualPin(pos); setManualPinDirty(true) }}
+                          <PropertyLocationMap
+                            latitude={geo.latitude!} longitude={geo.longitude!}
+                            corredoraPins={corredoraPins}
+                            realPin={manualPin}
+                            onRealPinChange={handleRealPinChange}
+                            highlightGeojson={resolved?.parcel?.geojson ?? null}
+                            showParcels={showParcels}
                           />
                           <button onClick={(e) => { e.stopPropagation(); setMapExpanded((v) => !v) }}
                             title={mapExpanded ? 'Achicar mapa' : 'Agrandar mapa'}
@@ -524,6 +623,13 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             {mapExpanded ? <Minimize2 size={16} /> : <Maximize2 size={14} />}
                           </button>
                         </div>
+                      </div>
+                    )}
+                    {geo && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-[11px] text-slate-400">
+                        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-white/70" /> Pin de cada corredora ({corredoraPins.length})</span>
+                        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white/70" /> Pin real {manualPin ? '· arrástralo' : ''}</span>
+                        {showParcels && <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm border border-amber-400" /> Parcela catastro · clic para fijar</span>}
                       </div>
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
@@ -537,6 +643,84 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                           className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
                       )}
                     </div>
+
+                    {/* Predio real (rol SII + dirección exacta) resuelto bajo el
+                        pin — el "completa toda la info de esa prop real". */}
+                    {(() => {
+                      const rp = resolved?.parcel ?? null
+                      const shownRol = rp?.rol ?? p.rol_matriz ?? null
+                      const shownAddress = rp?.direccion ?? p.exact_address ?? null
+                      // CRM en vivo cuando ya se tocó el pin; si no, lo guardado.
+                      const shownCrm = resolved ? resolved.crm : (p.crm ?? null)
+                      const noParcel = resolved != null && resolved.parcel == null
+                      if (!shownRol && !resolving && !noParcel) return null
+                      return (
+                        <>
+                          <div className="mt-2 bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3">
+                            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">
+                              <Landmark size={13} className="text-amber-400" /> Predio real (catastro SII)
+                              {resolving && <RefreshCw size={11} className="animate-spin text-slate-500" />}
+                            </div>
+                            {shownRol ? (
+                              <div className="space-y-0.5">
+                                <div className="text-sm text-slate-100">
+                                  <span className="text-slate-400">Rol </span>
+                                  <span className="font-mono font-semibold text-amber-300">{shownRol}</span>
+                                  {rp?.comuna_name && <span className="text-slate-500"> · {rp.comuna_name}</span>}
+                                </div>
+                                {shownAddress && <div className="text-sm text-slate-200">{shownAddress}</div>}
+                                {(rp?.superficie_terreno_m2 || rp?.avaluo_fiscal_total) && (
+                                  <div className="text-xs text-slate-500">
+                                    {rp?.superficie_terreno_m2 ? `Terreno ${rp.superficie_terreno_m2.toLocaleString('es-CL')} m²` : ''}
+                                    {rp?.superficie_terreno_m2 && rp?.avaluo_fiscal_total ? ' · ' : ''}
+                                    {rp?.avaluo_fiscal_total ? `Avalúo fiscal ${clpShort(rp.avaluo_fiscal_total)}` : ''}
+                                  </div>
+                                )}
+                              </div>
+                            ) : noParcel ? (
+                              <div className="text-xs text-slate-500">Sin parcela SII bajo el pin (catastro sin cargar en esa zona). Arrastra el pin sobre el predio.</div>
+                            ) : (
+                              <div className="text-xs text-slate-500">Coloca el pin real sobre el predio para resolver su rol y dirección exacta.</div>
+                            )}
+                          </div>
+
+                          {/* ¿Ya está el inmueble en el CRM de captación? Dueño +
+                              teléfonos para llamar, sin re-pegar la URL. */}
+                          {shownRol && (
+                            shownCrm ? (
+                              <div className="mt-2 bg-emerald-500/5 border border-emerald-500/30 rounded-xl px-4 py-3">
+                                <div className="flex items-center justify-between gap-2 mb-1.5">
+                                  <span className="text-[11px] uppercase tracking-wide text-emerald-300 inline-flex items-center gap-1.5"><BadgeCheck size={13} /> Ya en el CRM · llamar</span>
+                                  <a href={`/chile/captacion?id=${shownCrm.captacion_id}`} target="_blank" rel="noopener noreferrer" className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">Abrir captación <ExternalLink size={11} /></a>
+                                </div>
+                                {shownCrm.owner_name && (
+                                  <div className="text-sm text-slate-100 font-medium">{shownCrm.owner_name}
+                                    {shownCrm.owner_rut && <span className="text-slate-500 font-normal text-xs"> · {shownCrm.owner_rut}</span>}
+                                  </div>
+                                )}
+                                {shownCrm.phones && shownCrm.phones.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                    {shownCrm.phones.map((ph, i) => (
+                                      <span key={i} className="inline-flex items-center gap-1.5 text-xs bg-slate-800 border border-slate-600/50 rounded-full pl-2 pr-2 py-0.5">
+                                        <a href={`tel:${ph.numero.replace(/[^\d+]/g, '')}`} className="font-mono text-slate-100 hover:text-emerald-300 inline-flex items-center gap-1"><Phone size={11} /> {ph.numero}</a>
+                                        {ph.whatsapp && <a href={`https://wa.me/${ph.numero.replace(/[^\d]/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300" title="WhatsApp"><MessageCircle size={12} /></a>}
+                                        {ph.tipo && <span className="text-[10px] text-slate-500">{ph.tipo}</span>}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — {shownCrm.owner_name ? 'contacto pendiente (DealerNet)' : 'dueño pendiente (TGR)'}.</div>
+                                )}
+                              </div>
+                            ) : !resolving ? (
+                              <div className="mt-2 text-xs text-slate-500 bg-slate-900/40 border border-slate-700/60 rounded-xl px-4 py-2.5">
+                                Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (crea la ficha con dueño vía TGR y teléfonos vía DealerNet).
+                              </div>
+                            ) : null
+                          )}
+                        </>
+                      )
+                    })()}
                   </div>
                 )}
 
