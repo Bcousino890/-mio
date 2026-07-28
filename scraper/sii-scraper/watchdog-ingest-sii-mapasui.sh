@@ -31,7 +31,7 @@
 #      El relanzamiento reutiliza los parámetros de la corrida original
 #      (.sii-mapasui-params) y retoma desde los checkpoints, sin perder nada.
 #   2. Ingesta de output/predios/*.jsonl en sii_mapasui_predios_cl. Es
-#      incremental (checkpoint por archivo, migración 0082): solo lee las
+#      incremental (checkpoint por archivo, migración 0083): solo lee las
 #      líneas nuevas, así que una corrida normal tarda segundos.
 #
 # Uso:  bash /opt/casafari/scraper/sii-scraper/watchdog-ingest-sii-mapasui.sh
@@ -137,7 +137,7 @@ ingesta() {
 
   echo "▶ Ingestando $OUT/predios/ en sii_mapasui_predios_cl..."
   # Por defecto -n (no bloqueante): si run-sii-mapasui.sh está en su ingesta
-  # incremental, esta vuelta se salta y con el checkpoint de 0082 no se pierde
+  # incremental, esta vuelta se salta y con el checkpoint de 0083 no se pierde
   # nada — la próxima pasada del cron (10 min) recoge lo que falte. Una corrida
   # lanzada A MANO sí espera el lock (el workflow pasa "-w 900"): si alguien
   # aprieta el botón es porque quiere el dato ahora, no un "vuelvo luego".
