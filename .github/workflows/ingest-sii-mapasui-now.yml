@@ -9,7 +9,8 @@ name: Watchdog + ingesta de predios SII mapasui
 # Este workflow ingesta ESE output ya existente ahora mismo, sin tocar el
 # proceso del scrape en curso (ingest-sii-mapasui.mjs solo lee los .jsonl; el
 # INSERT ... ON CONFLICT DO UPDATE de sii-mapasui-cl.mjs lo hace seguro de
-# re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo).
+# re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo,
+# y solo consume líneas ya terminadas en \n, nunca una a medio escribir).
 on:
   workflow_dispatch: {}
   # Respaldo cada 30 min: la ingesta incremental de run-sii-mapasui.sh (cada 10
@@ -31,6 +32,20 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    env:
+      # Keepalives del túnel SSH. La ingesta pasa minutos trabajando sin
+      # imprimir nada y el canal quedaba mudo: a los ~5 min exactos el NAT/
+      # firewall del camino lo cortaba y el job moría con
+      # "client_loop: send disconnect: Broken pipe" (exit 255), matando de paso
+      # el `node` remoto a media ingesta. Con ServerAlive* el cliente manda
+      # tráfico cada 20 s y la conexión aguanta hasta ~5 min de silencio REAL
+      # del servidor antes de darla por muerta.
+      SSH_OPTS: >-
+        -o ServerAliveInterval=20
+        -o ServerAliveCountMax=15
+        -o TCPKeepAlive=yes
+        -o ConnectTimeout=30
+        -o BatchMode=yes
     steps:
       - name: Configurar SSH
         run: |
@@ -51,7 +66,7 @@ jobs:
       # (.sii-mapasui-params) y retoma desde los checkpoints, sin perder nada.
       - name: Watchdog — relanzar scrape si murió o se colgó
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+          ssh $SSH_OPTS -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
             cd /opt/casafari
@@ -125,9 +140,17 @@ jobs:
             fi
           EOF
 
+      # La ingesta es incremental (checkpoint por archivo en
+      # sii_mapasui_ingest_state_cl, migración 0082) y upsertea por lotes, así
+      # que una corrida normal solo lee las líneas nuevas y tarda segundos —
+      # antes releía los 455k predios línea a línea y no cabía en la vida útil
+      # del túnel SSH. El flock la serializa con la ingesta incremental que
+      # run-sii-mapasui.sh corre cada 10 min: si esa está trabajando, esta
+      # espera en vez de pelear por la misma tabla.
       - name: Ingestar output/predios/*.jsonl existente
+        timeout-minutes: 30
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+          ssh $SSH_OPTS -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
             set -e
             cd /opt/casafari/scraper
@@ -146,5 +169,6 @@ jobs:
               npm install --omit=dev --no-audit --no-fund
             fi
             echo "▶ Ingestando sii-scraper/output/predios/ en sii_mapasui_predios_cl..."
-            node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
+            flock -w 900 /tmp/casafari-ingest-sii-mapasui.lock \
+              node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
           EOF
