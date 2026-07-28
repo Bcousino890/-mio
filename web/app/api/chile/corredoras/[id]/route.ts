@@ -10,8 +10,10 @@ import { pool } from '@/lib/db'
 //
 // UNA CORREDORA, N CUENTAS: corredoras_cl guarda una fila por cuenta de
 // vendedor de Mercado Libre, pero una corredora opera con varias (Property
-// Partners tiene 3). La ficha SIEMPRE agrupa todas las cuentas que comparten
-// nombre normalizado — si no, mostraba 164 anuncios de los 261 que tiene.
+// Partners usa 4). La ficha agrupa las cuentas de las corredoras listadas en
+// corredora_merge_names_cl (fusión EXPLÍCITA, migración 0081) — si no, mostraba
+// 164 anuncios de los 288 que tiene. Lo que no está en esa lista NO se fusiona:
+// las franquicias comparten nombre y son oficinas independientes.
 //
 // Y las cifras se calculan EN VIVO desde los anuncios, no se leen de las
 // métricas guardadas: esas son una foto del último paso del job de dedup y se
@@ -36,7 +38,9 @@ export async function GET(
        ),
        grupo AS (
          SELECT c.* FROM corredoras_cl c, objetivo o
-         WHERE COALESCE(c.name_normalized, c.name_raw) = o.gname
+         WHERE c.id = $1
+            OR (EXISTS (SELECT 1 FROM corredora_merge_names_cl m WHERE m.name_normalized = o.gname)
+                AND COALESCE(c.name_normalized, c.name_raw) = o.gname)
        )
        SELECT
          (SELECT id FROM grupo ORDER BY active_listings_count DESC NULLS LAST LIMIT 1) AS id,
@@ -71,7 +75,9 @@ export async function GET(
          SELECT COALESCE(name_normalized, name_raw) AS gname FROM corredoras_cl WHERE id = $1
        )
        SELECT c.id FROM corredoras_cl c, objetivo o
-       WHERE COALESCE(c.name_normalized, c.name_raw) = o.gname`,
+       WHERE c.id = $1
+          OR (EXISTS (SELECT 1 FROM corredora_merge_names_cl m WHERE m.name_normalized = o.gname)
+              AND COALESCE(c.name_normalized, c.name_raw) = o.gname)`,
       [id]
     )
     const groupIds: string[] = groupRes.rows.map((r) => r.id)

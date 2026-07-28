@@ -6,7 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
-  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers,
+  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers, Wand2,
 } from 'lucide-react'
 
 // La ficha (modal) y sus tipos/helpers viven en un módulo compartido: la misma
@@ -379,6 +379,24 @@ export default function PropiedadesChileClient() {
   // con el mismo código interno). APAGADO por defecto: la lista enseña un
   // anuncio = una ficha, para que el recuento cuadre con el del portal.
   const [grouped, setGrouped] = useState(initial.get('agrupar') === '1')
+  const [dedupRunning, setDedupRunning] = useState(false)
+
+  // Lanza la deduplicación (corredora + código interno) sin esperar al ciclo de
+  // 15 min del worker. Útil justo después de un barrido, cuando hay anuncios
+  // nuevos aún sin ficha asignada.
+  const runDedup = useCallback(async () => {
+    setDedupRunning(true)
+    try {
+      const r = await fetch('/api/chile/dedup-cl', { method: 'POST' }).then(x => x.json())
+      setToast({ text: r.message ?? (r.success ? 'Deduplicación lanzada' : 'Error'), ok: !!r.success })
+      // Se recarga a los 20s: el job tarda un poco en pasar por la cola.
+      setTimeout(() => setReloadKey(k => k + 1), 20000)
+    } catch {
+      setToast({ text: 'No se pudo lanzar la deduplicación', ok: false })
+    } finally {
+      setDedupRunning(false)
+    }
+  }, [])
   const [sortBy, setSortBy] = useState<SortKey>((initial.get('sort') as SortKey) in SORT_LABELS ? (initial.get('sort') as SortKey) : 'recent')
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [showFilters, setShowFilters] = useState(true)
@@ -498,6 +516,11 @@ export default function PropiedadesChileClient() {
           </button>
           {/* Matching manual: el modo selección. El arrastre funciona siempre,
               con o sin este modo activo. */}
+          <button onClick={runDedup} disabled={dedupRunning}
+            title="Agrupa los anuncios que comparten corredora Y código interno (ej. KD92695) bajo una misma ficha — incluidos venta y arriendo del mismo inmueble. Es la única regla de deduplicación: si no coinciden ambos, no se agrupan."
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border bg-slate-800 text-slate-300 border-slate-700 hover:border-emerald-500/60 hover:text-emerald-300 disabled:opacity-50 transition-colors">
+            <Wand2 size={14} className={dedupRunning ? 'animate-pulse' : ''} /> {dedupRunning ? 'Lanzando…' : 'Deduplicar'}
+          </button>
           <button onClick={() => setGrouped(g => !g)}
             title={grouped
               ? 'Mostrando 1 ficha por inmueble: los anuncios de la misma corredora con el mismo código interno (incluidos venta y arriendo del mismo inmueble) van juntos.'

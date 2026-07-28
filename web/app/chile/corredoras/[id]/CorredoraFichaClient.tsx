@@ -1,5 +1,6 @@
 'use client'
 
+import PropertyModal, { type Property } from '@/components/chile/PropertyClModal'
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Globe, Phone, ExternalLink, Package, History, Timer, ShieldCheck, GitCompareArrows, ImageOff } from 'lucide-react'
@@ -124,6 +125,22 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
   const [ficha, setFicha] = useState<Ficha | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Ficha del inmueble: se abre al pinchar una tarjeta del inventario. Se pide
+  // por property_cl_id (la tarjeta ya lo trae), así se reutiliza el mismo modal
+  // que /chile/propiedades en vez de duplicar la vista.
+  const [selected, setSelected] = useState<Property | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [loadingFicha, setLoadingFicha] = useState<string | null>(null)
+  const abrirFicha = async (propertyClId: string) => {
+    setLoadingFicha(propertyClId)
+    try {
+      const r = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(propertyClId)}`).then(x => x.json())
+      if (r.success && r.data) setSelected(r.data)
+    } finally {
+      setLoadingFicha(null)
+    }
+  }
+
   const [invFilter, setInvFilter] = useState<InvFilter>('all')
 
   useEffect(() => {
@@ -133,7 +150,7 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
       .then(data => { if (data.success) setFicha(data.data); else setError(data.error || 'No encontrada') })
       .catch(e => setError(e instanceof Error ? e.message : 'Error'))
       .finally(() => setLoading(false))
-  }, [id])
+  }, [id, reloadKey])
 
   const inventory = useMemo(() => {
     if (!ficha) return []
@@ -230,7 +247,12 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {inventory.map(it => (
-                  <div key={it.property_cl_id} className="bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden hover:border-amber-500/40 transition-colors flex flex-col">
+                  <div key={it.property_cl_id}
+                    role="button" tabIndex={0}
+                    onClick={() => abrirFicha(it.property_cl_id)}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrirFicha(it.property_cl_id) } }}
+                    title="Abrir la ficha del inmueble"
+                    className={`bg-slate-800/60 border border-slate-700 rounded-xl overflow-hidden hover:border-amber-500/40 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/30 transition-all cursor-pointer flex flex-col ${loadingFicha === it.property_cl_id ? 'opacity-60' : ''}`}>
                     <div className="relative aspect-[16/10] bg-slate-900">
                       <InvThumb src={it.own_cover_photo} />
                       <span className="absolute top-2 left-2 text-[10px] px-2 py-0.5 rounded-full bg-black/60 text-slate-200 backdrop-blur-sm capitalize">
@@ -265,7 +287,9 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
                       <div className="mt-auto pt-2.5 flex items-center justify-between gap-2">
                         <span className="text-[11px] text-slate-500 font-mono truncate">{it.seller_reference ? `ref. ${it.seller_reference}` : '—'}</span>
                         {it.own_source_url && (
-                          <a href={it.own_source_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 shrink-0" title="Ver anuncio original">
+                          <a href={it.own_source_url} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="text-[11px] text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 shrink-0" title="Ver anuncio original en el portal">
                             Ver aviso <ExternalLink size={12} />
                           </a>
                         )}
@@ -278,6 +302,17 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
           </>
         )}
       </div>
+
+      {/* Ficha del inmueble — el mismo modal que /chile/propiedades */}
+      {selected && (
+        <PropertyModal
+          p={selected}
+          onClose={() => setSelected(null)}
+          onRefetched={setSelected}
+          // Separar un aviso cambia el inventario de la corredora: se recarga.
+          onSplit={() => { setSelected(null); setReloadKey(k => k + 1) }}
+        />
+      )}
     </div>
   )
 }

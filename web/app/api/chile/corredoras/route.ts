@@ -9,11 +9,15 @@ import { pool } from '@/lib/db'
 //
 // UNA CORREDORA, N CUENTAS. corredoras_cl guarda una fila por `advertiser_id`
 // (cuenta de vendedor de Mercado Libre), pero una misma corredora opera con
-// VARIAS: Property Partners tiene 3 (2395596940, 2373529389, 2360757719) y
-// aparecía partida en 3 fichas de 164/50/47 mientras el portal la muestra
-// entera. Esta lista agrupa por nombre normalizado y suma, para que el número
-// sea el de la corredora real y cuadre con el del portal. `accounts` dice
-// cuántas cuentas hay detrás.
+// VARIAS: Property Partners usa 4 y aparecía partida en fichas de 288/50/47/…
+// mientras el portal la muestra entera.
+//
+// La fusión es EXPLÍCITA (corredora_merge_names_cl, migración 0081): solo se
+// unifican las corredoras listadas ahí. Fusionar por nombre automáticamente
+// parece obvio y es un error — probado sobre los datos reales unía "Sin
+// Información" (3 vendedores sin relación), nombres de pila como "Felipe" o
+// "Cristian", y sobre todo rompería las franquicias (Coldwell Banker, Engel &
+// Völkers), que son oficinas independientes con el mismo nombre.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SORT_CLAUSES: Record<string, string> = {
@@ -82,11 +86,19 @@ export async function GET(request: NextRequest) {
         GROUP BY corredora_id
       ),
       base AS (
-        SELECT c.*, COALESCE(c.name_normalized, c.name_raw) AS gname,
+        -- gname = clave de agrupación. Solo las corredoras de la lista explícita
+        -- comparten clave entre cuentas; el resto se agrupa consigo misma (su
+        -- propio id), así que sigue siendo una fila por cuenta.
+        SELECT c.*,
+               CASE WHEN m.name_normalized IS NOT NULL
+                    THEN COALESCE(c.name_normalized, c.name_raw)
+                    ELSE c.id::text END AS gname,
                COALESCE(s.activos, 0) AS activos_vivo,
                COALESCE(s.vistos, 0) AS vistos_vivo
         FROM corredoras_cl c
         LEFT JOIN stock s ON s.corredora_id = c.id
+        LEFT JOIN corredora_merge_names_cl m
+          ON m.name_normalized = COALESCE(c.name_normalized, c.name_raw)
         ${whereClause}
       ),
       comunas AS (
@@ -101,7 +113,7 @@ export async function GET(request: NextRequest) {
       ),
       agrupadas AS (
         SELECT
-          b.gname AS name,
+          (array_agg(COALESCE(b.name_normalized, b.name_raw) ORDER BY b.activos_vivo DESC NULLS LAST))[1] AS name,
           -- id representativo: la cuenta con más stock (la "principal"), para
           -- que el enlace a la ficha lleve a la más relevante del grupo.
           (array_agg(b.id ORDER BY b.activos_vivo DESC NULLS LAST))[1] AS id,
