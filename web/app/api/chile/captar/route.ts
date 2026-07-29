@@ -56,15 +56,26 @@ export async function GET(request: NextRequest) {
   // Detalle por id (deep-link desde la ficha de Propiedades: al guardar el pin
   // manual se crea/actualiza una captación y se enlaza a ?id=<id>). Ignora el
   // resto de filtros — se pide UNA captación puntual.
-  if (id) conditions.push(`id = ${add(id)}`)
-  if (stage) conditions.push(`stage = ${add(stage)}`)
-  if (review === 'true') conditions.push(`needs_review = true`)
-  if (comuna) conditions.push(`sii_comuna_code = ${add(comuna)}`)
+  if (id) conditions.push(`cap.id = ${add(id)}`)
+  if (stage) conditions.push(`cap.stage = ${add(stage)}`)
+  if (review === 'true') conditions.push(`cap.needs_review = true`)
+  if (comuna) conditions.push(`cap.sii_comuna_code = ${add(comuna)}`)
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   try {
+    // Se arrastra la ficha de Propiedades que originó la captación (0083) para
+    // que la lista pueda volver al inmueble y mostrar su estado comercial: sin
+    // esto el pipeline se veía como una tabla suelta, desconectada de la
+    // propiedad que se está trabajando.
     const { rows } = await pool.query(
-      `SELECT * FROM captaciones_cl ${where} ORDER BY updated_at DESC LIMIT ${limit}`,
+      `SELECT cap.*,
+              pc.ref_code     AS property_ref_code,
+              pc.smart_crm_at AS property_smart_crm_at
+         FROM captaciones_cl cap
+         LEFT JOIN property_cl pc ON pc.id = cap.property_cl_id
+         ${where}
+        ORDER BY cap.updated_at DESC
+        LIMIT ${limit}`,
       params,
     )
     return NextResponse.json({ success: true, captaciones: rows, count: rows.length })
