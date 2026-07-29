@@ -16,7 +16,10 @@ import PropertyModal, {
   marketTime, priceSpread, CorredoraThumb,
 } from '@/components/chile/PropertyClModal'
 
-type Stats = { total: number; multi_corredora: number; confirmed: number; median_price: number | null }
+type Stats = {
+  total: number; multi_corredora: number; confirmed: number; median_price: number | null
+  captadas?: number; smart?: number
+}
 
 type SortKey = 'recent' | 'price_asc' | 'price_desc' | 'corredoras' | 'sqm'
 const SORT_LABELS: Record<SortKey, string> = {
@@ -55,6 +58,9 @@ function PropertyCardCl({
   const conf = CONF[p.location_confidence] ?? CONF.none
   const sp = priceSpread(p)
   const multi = p.corredora_count > 1
+  // Misma definición que el filtro y el contador del API: el enlace guardado.
+  const captada = Boolean(p.captacion_id)
+  const phoneCount = p.crm?.phones?.length ?? 0
   const isDragging = dragId === p.id
   const canDrop = dragId != null && dragId !== p.id
 
@@ -108,6 +114,23 @@ function PropertyCardCl({
               <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-600/90 text-white backdrop-blur-sm shadow"
                 title="Agrupada a mano por el equipo — el dedup automático ya no la reagrupa">
                 <Link2 size={10} /> unida a mano
+              </span>
+            )}
+            {/* Estado de captación — el trabajo ya hecho sobre el inmueble tiene
+                que verse SIN abrir la ficha: si no, no hay forma de saber qué
+                queda por trabajar y se repite el mismo inmueble. */}
+            {captada && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/90 text-white backdrop-blur-sm shadow"
+                title={phoneCount > 0
+                  ? `Captada · ${phoneCount} teléfono${phoneCount === 1 ? '' : 's'} del dueño`
+                  : 'Captada — dueño/teléfonos pendientes'}>
+                <BadgeCheck size={10} /> {phoneCount > 0 ? `captada · ${phoneCount} tel.` : 'captada'}
+              </span>
+            )}
+            {p.smart_crm_at && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-violet-600/90 text-white backdrop-blur-sm shadow"
+                title="Ya subida al CRM externo (Smart)">
+                <Trophy size={10} /> en Smart
               </span>
             )}
           </div>
@@ -355,6 +378,30 @@ export default function PropiedadesChileClient() {
     }
   }, [mergeDialog, selected, showToast, clearSelection])
 
+  // La ficha abierta cambió (pin guardado, captación creada, marca de Smart):
+  // hay que reflejarlo TAMBIÉN en la tarjeta de la grilla. Sin esto el modal se
+  // actualizaba solo por dentro y, al cerrarlo, la lista seguía mostrando el
+  // estado viejo — y al reabrir la ficha desde esa tarjeta el botón volvía a
+  // "Agregar a Smart", que es lo que se leía como "no se guarda".
+  //
+  // Se copian solo los campos de ESTADO del inmueble: en la vista sin agrupar
+  // una fila es un anuncio, y volcar la ficha entera le pisaría su precio,
+  // foto y recuentos propios.
+  const handlePropertyChange = useCallback((next: Property) => {
+    setSelected(next)
+    setItems(prev => prev.map(it => it.id === next.id ? {
+      ...it,
+      smart_crm_at: next.smart_crm_at,
+      crm: next.crm,
+      captacion_id: next.captacion_id,
+      manual_latitude: next.manual_latitude,
+      manual_longitude: next.manual_longitude,
+      location_confidence: next.location_confidence,
+      rol_matriz: next.rol_matriz,
+      exact_address: next.exact_address,
+    } : it))
+  }, [])
+
   const handleSplit = useCallback((message: string) => {
     setReloadKey(k => k + 1)
     showToast(message)
@@ -375,6 +422,9 @@ export default function PropiedadesChileClient() {
   const [bedroomsMin, setBedroomsMin] = useState<number | null>(initial.get('dorm') ? Number(initial.get('dorm')) : null)
   const [onlyMulti, setOnlyMulti] = useState(initial.get('canje') === '1')
   const [onlyConfirmed, setOnlyConfirmed] = useState(initial.get('conf') === '1')
+  // Estado de captación: "lo que ya trabajé" vs "lo que falta".
+  const [onlyCaptadas, setOnlyCaptadas] = useState(initial.get('captada') === '1')
+  const [onlySmart, setOnlySmart] = useState(initial.get('smart') === '1')
   // Agrupar = 1 ficha por INMUEBLE (junta venta+arriendo de la misma corredora
   // con el mismo código interno). APAGADO por defecto: la lista enseña un
   // anuncio = una ficha, para que el recuento cuadre con el del portal.
@@ -408,7 +458,7 @@ export default function PropiedadesChileClient() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [searchInput])
 
-  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, sortBy, grouped])
+  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, sortBy, grouped])
 
   // Sincroniza el estado a la URL sin recargar (history.replaceState). Incluye
   // la ficha abierta (?p=<id>) — URL específica y compartible por propiedad,
@@ -424,13 +474,15 @@ export default function PropiedadesChileClient() {
     if (bedroomsMin != null) qs.set('dorm', String(bedroomsMin))
     if (onlyMulti) qs.set('canje', '1')
     if (onlyConfirmed) qs.set('conf', '1')
+    if (onlyCaptadas) qs.set('captada', '1')
+    if (onlySmart) qs.set('smart', '1')
     if (grouped) qs.set('agrupar', '1')
     if (sortBy !== 'recent') qs.set('sort', sortBy)
     if (page > 1) qs.set('page', String(page))
     if (selected) qs.set('p', selected.id)
     const s = qs.toString()
     window.history.replaceState(null, '', s ? `?${s}` : window.location.pathname)
-  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, grouped, sortBy, page, selected])
+  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, sortBy, page, selected])
 
   // Al montar: si la URL trae ?p=<id> (link compartido/bookmark de una ficha
   // específica), abre esa ficha directo — sin depender de que esté en la
@@ -456,6 +508,8 @@ export default function PropiedadesChileClient() {
     if (bedroomsMin != null) params.append('bedrooms_min', String(bedroomsMin))
     if (onlyMulti) params.append('only_multi_corredora', 'true')
     if (onlyConfirmed) params.append('only_confirmed', 'true')
+    if (onlyCaptadas) params.append('only_captadas', 'true')
+    if (onlySmart) params.append('only_smart', 'true')
     if (grouped) params.append('grouped', '1')
 
     fetch(`/api/chile/property-cl?${params.toString()}`)
@@ -466,11 +520,12 @@ export default function PropiedadesChileClient() {
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, grouped, reloadKey])
+  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, reloadKey])
 
-  const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0)
+  const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0) + (onlyCaptadas ? 1 : 0) + (onlySmart ? 1 : 0)
   const clearAll = () => {
     setPriceMin(null); setPriceMax(null); setSqmMin(null); setBedroomsMin(null); setOnlyMulti(false); setOnlyConfirmed(false)
+    setOnlyCaptadas(false); setOnlySmart(false)
     setComuna(''); setSearchInput('')
   }
 
@@ -493,11 +548,16 @@ export default function PropiedadesChileClient() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
           <StatTile icon={<Home size={16} />} label="Propiedades" value={loading ? '…' : (stats?.total ?? total).toLocaleString('es-CL')} accent="bg-amber-500/15 text-amber-400" />
           <StatTile icon={<GitCompareArrows size={16} />} label="En canje (multi-corredora)" value={loading ? '…' : String(stats?.multi_corredora ?? 0)} accent="bg-purple-500/15 text-purple-400" />
           <StatTile icon={<TrendingDown size={16} />} label="Precio mediano" value={loading ? '…' : clpShort(stats?.median_price ?? null)} accent="bg-blue-500/15 text-blue-400" />
           <StatTile icon={<BadgeCheck size={16} />} label="Ubicación confirmada" value={loading ? '…' : String(stats?.confirmed ?? 0)} accent="bg-emerald-500/15 text-emerald-400" />
+          {/* Cuánto del inventario ya pasó por Captación (y cuánto de eso ya
+              está en Smart): el avance del trabajo, no solo el stock. */}
+          <StatTile icon={<Users size={16} />}
+            label={`Captadas${stats?.smart ? ` · ${stats.smart} en Smart` : ''}`}
+            value={loading ? '…' : String(stats?.captadas ?? 0)} accent="bg-teal-500/15 text-teal-400" />
         </div>
 
         {/* Búsqueda + comuna chips */}
@@ -574,6 +634,8 @@ export default function PropiedadesChileClient() {
             <div className="flex flex-col justify-center gap-1.5">
               <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={onlyMulti} onChange={e => setOnlyMulti(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-amber-500" /> Solo en canje</label>
               <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={onlyConfirmed} onChange={e => setOnlyConfirmed(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-amber-500" /> Ubicación confirmada</label>
+              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer" title="Solo las que ya tienen ficha en el CRM de Captación"><input type="checkbox" checked={onlyCaptadas} onChange={e => setOnlyCaptadas(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-emerald-500" /> Solo captadas</label>
+              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer" title="Solo las marcadas como ya subidas al CRM externo (Smart)"><input type="checkbox" checked={onlySmart} onChange={e => setOnlySmart(e.target.checked)} className="w-4 h-4 rounded bg-slate-700 border-slate-600 text-violet-500" /> Ya en Smart</label>
             </div>
             <div className="flex items-end">
               {activeFilters > 0 && <button onClick={clearAll} className="text-xs text-slate-400 hover:text-amber-400 underline">Limpiar filtros</button>}
@@ -657,7 +719,7 @@ export default function PropiedadesChileClient() {
           onCancel={() => setMergeDialog(null)} onMerged={handleMerged} />
       )}
 
-      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} onRefetched={setSelected} onSplit={handleSplit} />}
+      {selected && <PropertyModal p={selected} onClose={() => setSelected(null)} onRefetched={handlePropertyChange} onSplit={handleSplit} />}
     </div>
   )
 }

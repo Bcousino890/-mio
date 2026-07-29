@@ -5,7 +5,7 @@ import Link from 'next/link'
 import PageShell from '@/components/PageShell'
 import {
   Users, Phone, RefreshCw, AlertCircle, CheckCircle2, ExternalLink,
-  Link2, ShieldCheck, Clock, MessageCircle, X,
+  Link2, ShieldCheck, Clock, MessageCircle, X, Home,
 } from 'lucide-react'
 import CaptacionDetail, { type Captacion } from '@/components/chile/CaptacionDetail'
 
@@ -30,6 +30,11 @@ interface CaptacionRow {
   tgr_status: string
   dealernet_status: string
   updated_at: string
+  // Ficha de Propiedades que originó la captación (0083). Cierra el círculo:
+  // desde el pipeline se vuelve al inmueble, y se ve si ya está en Smart.
+  property_cl_id: string | null
+  property_ref_code: string | null
+  property_smart_crm_at: string | null
 }
 
 const STAGE_META: Record<string, { label: string; cls: string }> = {
@@ -308,6 +313,24 @@ export default function CaptacionChilePage() {
                       <p className="text-slate-600 text-[11px]">
                         {r.comuna_label ?? ''}{r.price_raw ? ` · ${Number(r.price_raw).toLocaleString('es-CL')} ${r.currency ?? ''}` : ''}
                       </p>
+                      {r.property_cl_id && (
+                        <p className="flex items-center gap-1.5 mt-1">
+                          <a
+                            href={`/chile/propiedades?p=${r.property_cl_id}`}
+                            target="_blank" rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Abrir la ficha del inmueble en Propiedades"
+                            className="text-[10px] font-mono text-amber-400/90 hover:text-amber-300 inline-flex items-center gap-1"
+                          >
+                            <Home size={9} /> {r.property_ref_code ?? 'ficha'}
+                          </a>
+                          {r.property_smart_crm_at && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300">
+                              en Smart
+                            </span>
+                          )}
+                        </p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {r.sii_rol ? (
