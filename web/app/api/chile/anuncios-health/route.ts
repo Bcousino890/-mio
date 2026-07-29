@@ -313,6 +313,13 @@ export async function GET(request: Request) {
       // Colas de trabajo: `created` pendiente creciendo = el cuello de botella
       // está en la descarga de fichas, no en el barrido.
       queues,
+      // Qué proxy hay configurado (solo el hecho, nunca las credenciales). Sin
+      // proxy, un 403 del portal a la IP de la VPS no tiene salida: los barridos
+      // vuelven a 0 y las fotos se quedan en las 5 del blob.
+      proxy: {
+        evomi: Boolean(process.env.EVOMI_PROXY_USER && process.env.EVOMI_PROXY_HOST),
+        smartproxy_cl: Boolean(process.env.SMARTPROXY_CL_USER && process.env.SMARTPROXY_CL_HOST),
+      },
       // Qué devolvieron las fichas procesadas en la última hora: "completado" no
       // implica "guardado".
       detail_outcomes: detailOutcomes,
