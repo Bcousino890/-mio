@@ -72,7 +72,11 @@ const NAMED = {
 // exactamente el síntoma reportado ("solo scrapea 5 fotos"). `fetchGalleryHtml`
 // replica el mismo criterio directo-primero + proxy-fallback ya validado para
 // la ficha principal.
-async function fetchGalleryHtml(url) {
+async function fetchGalleryHtml(url, { forceProxy = false } = {}) {
+  if (forceProxy) {
+    const only = await fetchHtml(url, { useProxy: true, profile: 'portalinmobiliario' })
+    return only.ok ? only.html : null
+  }
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
@@ -89,11 +93,7 @@ async function fetchGalleryHtml(url) {
   return proxied.ok ? proxied.html : null
 }
 
-async function fetchGalleryPhotos(galleryUrl) {
-  try {
-    const html = await fetchGalleryHtml(galleryUrl)
-    if (!html) return []
-
+function extraerFotosDeGaleria(html) {
     const photos = new Set()
     // Patrón 1: data-zoom
     for (const m of html.matchAll(/data-zoom="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp))"/gi)) photos.add(m[1])
@@ -109,6 +109,22 @@ async function fetchGalleryPhotos(galleryUrl) {
       }
     }
     return Array.from(photos)
+}
+
+/**
+ * Fotos del modal de galería. Reintenta por proxy si la respuesta DIRECTA no
+ * trae ninguna: un bloqueo suele llegar como 200 con una página vacía, que no
+ * lanza excepción ni es `!response.ok`, así que se daba por buena y el anuncio
+ * se quedaba con las 5 del blob. Es la diferencia entre sacar 20 fotos desde
+ * fuera y guardar 5 desde la VPS.
+ */
+async function fetchGalleryPhotos(galleryUrl) {
+  try {
+    let fotos = extraerFotosDeGaleria(await fetchGalleryHtml(galleryUrl))
+    if (fotos.length === 0) {
+      fotos = extraerFotosDeGaleria(await fetchGalleryHtml(galleryUrl, { forceProxy: true }))
+    }
+    return fotos
   } catch (e) {
     console.warn('Error fetching gallery photos:', e.message)
     return []
@@ -123,12 +139,17 @@ async function fetchGalleryByItemId(externalId) {
   try {
     const id = String(externalId).replace(/[^A-Z0-9]/gi, '') // "MLC-123" → "MLC123"
     if (!/^MLC\d+$/i.test(id)) return []
-    const html = await fetchGalleryHtml(`https://www.portalinmobiliario.com/vis-modals/gallery/${id}`)
-    if (!html) return []
-    const ids = []
-    for (const m of html.matchAll(/\d{6}-MLC\d+(?:_\d{6})?/g)) {
-      if (!ids.includes(m[0])) ids.push(m[0])
+    const url = `https://www.portalinmobiliario.com/vis-modals/gallery/${id}`
+    const idsDe = (html) => {
+      const ids = []
+      if (!html) return ids
+      for (const m of html.matchAll(/\d{6}-MLC\d+(?:_\d{6})?/g)) {
+        if (!ids.includes(m[0])) ids.push(m[0])
+      }
+      return ids
     }
+    let ids = idsDe(await fetchGalleryHtml(url))
+    if (ids.length === 0) ids = idsDe(await fetchGalleryHtml(url, { forceProxy: true }))
     return ids.map((pid) => `https://http2.mlstatic.com/D_NQ_NP_${pid}-O.webp`)
   } catch (e) {
     console.warn('Error fetching gallery by item id:', e.message)
@@ -563,7 +584,12 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // Galería completa por item_id (más fiable): el blob suele traer solo 5
     // fotos y no siempre el media_counters.url. Si seguimos con pocas, pedimos
     // el modal /vis-modals/gallery/{itemId} y sumamos TODAS las que falten.
-    if (external_id && photos.length < (photosTotalCount ?? 6)) {
+    // El blob sirve COMO MUCHO 5 fotos, así que tener 5 nunca significa
+    // "están todas". Y `photosTotalCount` se rellena con la propia longitud
+    // cuando el blob no declara total, dejando la condición en 5 < 5 = falso y
+    // saltándose el modal justo en las fichas que más lo necesitan.
+    const BLOB_PHOTO_CAP = 5
+    if (external_id && (photos.length <= BLOB_PHOTO_CAP || photos.length < (photosTotalCount ?? 0))) {
       const byId = await fetchGalleryById(external_id)
       for (const photo of byId) addPhoto(photo)
     }
