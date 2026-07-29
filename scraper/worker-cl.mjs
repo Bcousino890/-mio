@@ -47,7 +47,7 @@ import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
 import { runNivel1DedupCl, runCorredoraConsolidationCl, reconcilePropertyClDerivedCl } from './lib/dedup-cl.mjs'
-import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl } from './lib/queue-maintenance-cl.mjs'
+import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl, reenqueueStaleListingsCl } from './lib/queue-maintenance-cl.mjs'
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
@@ -165,6 +165,7 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     reconcile = reconcilePropertyClDerivedCl,
     pruneJobs = pruneDuplicateJobsCl,
     prioritizeJobs = prioritizeMissingDetailJobsCl,
+    reenqueueStale = reenqueueStaleListingsCl,
   } = deps
   const res = {
     nivel1: await nivel1(dbClient),
@@ -187,6 +188,9 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     // refrescan lo ya guardado: si no, el catálogo no crece hasta drenar horas
     // de cola vieja.
     priorizar: await prioritizeJobs(dbClient),
+    // Re-baja por tandas las fichas con datos viejos (5 fotos del blob, nombre
+    // de corredora genérico) para que el parser actual las complete.
+    refrescar: await reenqueueStale(dbClient),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res

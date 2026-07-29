@@ -88,3 +88,53 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
   }
   return deleted
 }
+
+/**
+ * Re-encola las fichas cuyos datos GUARDADOS quedaron viejos, para que el parser
+ * actual las vuelva a bajar.
+ *
+ * Dos rastros de anuncios scrapeados antes de arreglar el parser:
+ *   · Exactamente 5 fotos — el blob de la ficha siempre trae 5, sin importar
+ *     cuántas tenga de verdad; el resto vive detrás del modal de galería, que
+ *     antes no se pedía. Verificado en vivo: MLC-4112445332 guarda 5 y el
+ *     anuncio tiene 20.
+ *   · advertiser_name genérico ("Corredora") o vacío, en vez del nombre real
+ *     ("Josefina Fdez B") — visto en el mismo anuncio.
+ *
+ * Se encolan con prioridad NORMAL (0), por debajo de los anuncios que aún no
+ * existen en la base (prioridad 100): completar el catálogo va antes que
+ * refrescar lo que ya está. Y por tandas, para no ahogar la cola ni el portal.
+ *
+ * Idempotente: no re-encola lo que ya está pendiente o ejecutándose.
+ */
+export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
+  try {
+    const { rowCount } = await client.query(
+      `INSERT INTO pgboss.job (name, data, priority)
+       SELECT 'detail-cl',
+              jsonb_build_object('externalId', l.external_id, 'sourceUrl', l.source_url),
+              0
+       FROM listings_cl l
+       WHERE l.portal = 'portalinmobiliario'
+         AND l.is_active
+         AND l.source_url IS NOT NULL
+         AND (
+           (jsonb_typeof(l.photos) = 'array' AND jsonb_array_length(l.photos) <= 5)
+           OR l.advertiser_name IS NULL
+           OR btrim(l.advertiser_name) = ''
+           OR lower(btrim(l.advertiser_name)) = 'corredora'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM pgboss.job j
+           WHERE j.name = 'detail-cl' AND j.state IN ('created', 'active')
+             AND j.data->>'externalId' = l.external_id
+         )
+       ORDER BY l.last_seen_at ASC
+       LIMIT $1`,
+      [limit]
+    )
+    return { reenqueued: rowCount ?? 0 }
+  } catch (e) {
+    return { error: e.message }
+  }
+}
