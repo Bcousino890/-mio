@@ -9,7 +9,7 @@
 //   node scraper/ingest-sii-mapasui.mjs --dir ... --full   # ignora checkpoints
 //
 // La ingesta es INCREMENTAL: cada archivo recuerda en
-// `sii_mapasui_ingest_state_cl` (migración 0083) hasta qué byte se leyó, así
+// `sii_mapasui_ingest_state_cl` (migración 0084) hasta qué byte se leyó, así
 // que una corrida normal solo procesa las líneas nuevas y tarda segundos. Con
 // --full se releen los archivos enteros (útil tras vaciar la tabla a mano).
 //

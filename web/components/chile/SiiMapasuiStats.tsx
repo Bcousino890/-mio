@@ -35,7 +35,7 @@ interface IngestaStatus {
 }
 
 // Estado por archivo JSONL del VPS (sii_mapasui_ingest_state_cl, migración
-// 0083). Es lo que responde "¿qué falta?": cuánto del output en disco ya está
+// 0084). Es lo que responde "¿qué falta?": cuánto del output en disco ya está
 // en la BD y si el último barrido quedó a medias.
 interface ArchivoRow {
   archivo: string
