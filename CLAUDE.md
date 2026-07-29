@@ -26,6 +26,7 @@ Responder siempre en español al usuario.
 - `web/app/api/chile/` — API routes for Chile cadastral data
 - `docs/SII-ENRICHMENT-ROADMAP.md` — current enrichment plan
 - `docs/PLAN-ANUNCIOS-CL.md` — plan del módulo "Anuncios": scraping 24/7, dedup y trazabilidad de corredoras (Portal Inmobiliario, Chile)
+- `docs/CONTACTO-CORREDORAS-CL.md` — ficha de empresa de la corredora (teléfono, email, equipo): qué fuentes funcionan y cuáles no
 - `scraper/lib/sii-catastro-cl.mjs` — parser for official SII CSV files
 
 ## Environment variables

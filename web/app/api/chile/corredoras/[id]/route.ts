@@ -52,6 +52,21 @@ export async function GET(
          (SELECT web_propia_url FROM grupo WHERE web_propia_url IS NOT NULL LIMIT 1) AS web_propia_url,
          (SELECT crm_platform FROM grupo ORDER BY (crm_platform <> 'unknown') DESC LIMIT 1) AS crm_platform,
          (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.phones,'{}')) t) AS phones,
+         -- Ficha de empresa (0083): contacto scrapeado de la web propia. Va
+         -- aparte de la columna phones (que sale de los anuncios) porque son dos
+         -- procedencias distintas; la UI las muestra juntas pero el dato de
+         -- dónde salió cada número se conserva.
+         (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.contact_phones,'{}')) t) AS contact_phones,
+         (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.contact_whatsapp,'{}')) t) AS contact_whatsapp,
+         (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.contact_emails,'{}')) t) AS contact_emails,
+         (SELECT contact_address FROM grupo WHERE contact_address IS NOT NULL LIMIT 1) AS contact_address,
+         (SELECT contact_socials FROM grupo WHERE contact_socials <> '{}'::jsonb LIMIT 1) AS contact_socials,
+         (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.contact_source_urls,'{}')) t) AS contact_source_urls,
+         -- Estado del enriquecimiento: 'ok' | 'empty' (la web no publica nada) |
+         -- 'no_web' | 'error' | 'pending'. La ficha explica el hueco en vez de
+         -- mostrar un espacio en blanco.
+         (SELECT contact_status FROM grupo ORDER BY (contact_status = 'ok') DESC LIMIT 1) AS contact_status,
+         (SELECT max(contact_updated_at) FROM grupo) AS contact_updated_at,
          (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.comunas_operated,'{}')) t) AS comunas_operated,
          (SELECT max(metrics_updated_at) FROM grupo) AS metrics_updated_at,
          (SELECT min(first_seen_at) FROM grupo) AS first_seen_at,
@@ -118,6 +133,17 @@ export async function GET(
       [groupIds]
     )
 
+    // Equipo publicado por la corredora en su web (0083). Primero las
+    // jefaturas: en una ficha comercial lo primero que se busca es con quién
+    // hay que hablar. `last_seen_at` deja ver quién sigue y quién ya no.
+    const personasResult = await pool.query(
+      `SELECT full_name, role_raw, role_kind, email, phone, source_url, last_seen_at
+         FROM corredora_personas_cl
+        WHERE corredora_id = ANY($1::uuid[])
+        ORDER BY (role_kind = 'jefatura') DESC, (role_kind = 'ejecutivo') DESC, full_name ASC`,
+      [groupIds]
+    )
+
     const inventory = inventoryResult.rows
     // Stock activo EN VIVO, del mismo conjunto que se está listando: así el
     // titular y el inventario no pueden decir cosas distintas.
@@ -129,6 +155,7 @@ export async function GET(
         // Sustituyen a las métricas guardadas (que iban con retraso).
         active_listings_count: activos.length,
         total_listings_seen: Number(totalSeen),
+        personas: personasResult.rows,
         inventory,
         inventory_count: inventory.length,
         active_count: activos.length,
