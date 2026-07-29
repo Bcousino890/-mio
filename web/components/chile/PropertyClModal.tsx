@@ -17,7 +17,7 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
-  Phone, Layers, Landmark, MessageCircle, BadgeCheck,
+  Phone, Layers, Landmark, MessageCircle, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
@@ -702,8 +702,12 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                         {manualPin && (
                           <>
                             {manualPinDirty && (
+                              // Botón sólido, no un enlace de texto: era el paso
+                              // que decide si la propiedad queda captada o no, y
+                              // pasaba desapercibido entre "Parcelas" y "Quitar".
                               <button onClick={saveManualPin} disabled={savingPin}
-                                className="text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
+                                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 shadow-lg shadow-emerald-900/40 ring-2 ring-emerald-400/30">
+                                <Save size={13} className={savingPin ? 'animate-pulse' : ''} />
                                 {savingPin ? 'Guardando…' : 'Guardar ubicación'}
                               </button>
                             )}
@@ -722,6 +726,19 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       ) : (
                         <div className={`text-xs mb-2 ${captacionMsg.ok ? 'text-emerald-400' : 'text-slate-500'}`}>{captacionMsg.text}</div>
                       )
+                    )}
+                    {/* Clicar una parcela solo MUEVE el pin y previsualiza el rol
+                        en vivo: hasta guardar no hay nada en la base ni ficha en
+                        Captación. Sin este aviso, el rol resuelto en pantalla
+                        daba a entender que ya estaba hecho. */}
+                    {manualPinDirty && !savingPin && (
+                      <div className="flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-2">
+                        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                        <span>
+                          Pin sin guardar — la propiedad <strong className="font-semibold">todavía no queda captada</strong>.
+                          Pulsa <span className="text-emerald-300 font-semibold">Guardar ubicación</span> para fijar el rol y crear su ficha en Captación (dueño y teléfonos).
+                        </span>
+                      </div>
                     )}
                     {geo && (
                       // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
@@ -814,6 +831,15 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   <span className="text-slate-400">Rol </span>
                                   <span className="font-mono font-semibold text-amber-300">{shownRol}</span>
                                   {rp?.comuna_name && <span className="text-slate-500"> · {rp.comuna_name}</span>}
+                                  {/* El rol de abajo se resuelve EN VIVO al mover
+                                      el pin. Mientras no se guarde es solo una
+                                      previsualización, y verlo resuelto hacía
+                                      creer que el trabajo ya estaba hecho. */}
+                                  {manualPinDirty && (
+                                    <span className="ml-2 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 align-middle">
+                                      sin guardar
+                                    </span>
+                                  )}
                                 </div>
                                 {shownAddress && <div className="text-sm text-slate-200">{shownAddress}</div>}
                                 {(rp?.superficie_terreno_m2 || rp?.avaluo_fiscal_total) && (
