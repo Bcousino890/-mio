@@ -136,6 +136,16 @@ jobs:
               mv .env.tmp .env
               echo "${key}=${val}" >> .env
             }
+            # Evomi (residencial CL) es el proxy ACTIVO del plan (H10) y el que
+            # scraper/lib/fetch.mjs prefiere para Portal Inmobiliario — pero NUNCA
+            # se sincronizaba, así que en la VPS no existía y el fallback a proxy
+            # no podía salvar los 403 que el portal devuelve a la IP del servidor
+            # (visto en producción: "falló: HTTP 403" y circuit_open). Sin estos
+            # secrets definidos no se toca nada y sigue el fallback legacy.
+            upsert_env "EVOMI_PROXY_HOST" "${{ secrets.EVOMI_PROXY_HOST }}"
+            upsert_env "EVOMI_PROXY_PORT" "${{ secrets.EVOMI_PROXY_PORT }}"
+            upsert_env "EVOMI_PROXY_USER" "${{ secrets.EVOMI_PROXY_USER }}"
+            upsert_env "EVOMI_PROXY_PASS" "${{ secrets.EVOMI_PROXY_PASS }}"
             upsert_env "SMARTPROXY_CL_HOST" "${{ secrets.SMARTPROXY_CL_HOST }}"
             upsert_env "SMARTPROXY_CL_PORT" "${{ secrets.SMARTPROXY_CL_PORT }}"
             upsert_env "SMARTPROXY_CL_USER" "${{ secrets.SMARTPROXY_CL_USER }}"

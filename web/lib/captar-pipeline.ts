@@ -1093,8 +1093,66 @@ export async function setRolFromPin(captacionId: string, rol: string, siiComunaC
   return rows[0] as CaptacionRow
 }
 
+/**
+ * Deja el enlace ficha ↔ captación guardado en las DOS direcciones (0083).
+ *
+ * Sin esto, el único puente entre /chile/propiedades y /chile/captacion era la
+ * coincidencia de rol + comuna calculada al vuelo: la tarjeta de la grilla no
+ * podía marcar "ya captada" y la fila de captación no sabía volver al inmueble.
+ * Es best-effort — si la columna no existe todavía (base sin migrar), el pin y
+ * la captación igual quedan guardados.
+ */
+export async function linkCaptacionToProperty(captacionId: string, propertyId: string): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE property_cl SET captacion_id = $2, updated_at = now() WHERE id = $1`,
+      [propertyId, captacionId],
+    )
+    await pool.query(
+      `UPDATE captaciones_cl SET property_cl_id = $2, updated_at = now() WHERE id = $1`,
+      [captacionId, propertyId],
+    )
+  } catch {
+    // La captación ya quedó creada y con su rol: el enlace es un extra.
+  }
+}
+
+/**
+ * Enlaza la captación con la ficha de Propiedades a través de SU anuncio: el
+ * aviso captado (listings_cl) ya pertenece a un property_cl por el dedup, así
+ * que el inmueble es el mismo sin adivinar nada por rol.
+ *
+ * Cubre el camino que NO pasa por la ficha (pegar la URL en /chile/captar-url):
+ * sin esto, esas captaciones nunca marcaban la propiedad como captada en
+ * /chile/propiedades. No pisa un enlace existente.
+ */
+async function linkCaptacionByListing(c: CaptacionRow): Promise<void> {
+  if (!c.listing_cl_id) return
+  try {
+    const { rows } = await pool.query(
+      `UPDATE property_cl p
+          SET captacion_id = $1, updated_at = now()
+         FROM listings_cl l
+        WHERE l.id = $2 AND p.id = l.property_cl_id AND p.captacion_id IS NULL
+      RETURNING p.id`,
+      [c.id, c.listing_cl_id],
+    )
+    const propertyId = rows[0]?.id
+    if (propertyId) {
+      await pool.query(
+        `UPDATE captaciones_cl SET property_cl_id = $2, updated_at = now()
+          WHERE id = $1 AND property_cl_id IS NULL`,
+        [c.id, propertyId],
+      )
+    }
+  } catch {
+    // Base sin migrar (0083): la captación sigue siendo válida sin el enlace.
+  }
+}
+
 /** Propaga el match al anuncio en listings_cl (dirección exacta + rol). */
 async function syncListingIdentity(c: CaptacionRow): Promise<void> {
+  await linkCaptacionByListing(c)
   if (!c.listing_cl_id || !c.sii_rol) return
   try {
     await pool.query(

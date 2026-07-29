@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl } from './queue-maintenance-cl.mjs'
+import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl, reenqueueStaleListingsCl } from './queue-maintenance-cl.mjs'
 
 /** Cliente falso: registra las consultas y devuelve el rowCount programado. */
 function fakeClient(rowCountByQueue) {
@@ -102,4 +102,41 @@ test('prioritizeMissingDetailJobsCl: un fallo no tumba el pipeline que lo invoca
   const client = { async query() { throw new Error('pgboss.job no existe') } }
   const res = await prioritizeMissingDetailJobsCl(client)
   assert.match(res.error, /pgboss\.job no existe/)
+})
+
+// ─── re-scrapeo de fichas con datos viejos ───────────────────────────────────
+
+test('reenqueueStaleListingsCl: re-encola las fichas con datos de antes del fix del parser', async () => {
+  // Dos rastros del parser viejo, ambos vistos en el mismo anuncio real
+  // (MLC-4112445332): guardaba 5 fotos cuando tiene 20 —el blob siempre trae 5
+  // y el resto vive tras el modal de galería, que antes no se pedía— y el
+  // nombre de la corredora como "Corredora" en vez de "Josefina Fdez B".
+  let sql = null, params = null
+  const client = { async query(s, p) { sql = s.replace(/\s+/g, ' ').trim(); params = p; return { rowCount: 400 } } }
+
+  const res = await reenqueueStaleListingsCl(client)
+  assert.deepEqual(res, { reenqueued: 400 })
+  assert.deepEqual(params, [400])
+  assert.match(sql, /jsonb_array_length\(l\.photos\) <= 5/)
+  assert.match(sql, /'corredora'/)
+  // Solo lo publicado ahora: re-bajar bajas no aporta.
+  assert.match(sql, /l\.is_active/)
+  // Prioridad 0: por debajo de los anuncios que aún NO están en la base (100).
+  // Completar el catálogo va antes que refrescar lo que ya está.
+  assert.match(sql, /jsonb_build_object\('externalId', l\.external_id, 'sourceUrl', l\.source_url\), 0/)
+  // Sin duplicar lo que ya está en cola o ejecutándose.
+  assert.match(sql, /NOT EXISTS/)
+  assert.match(sql, /state IN \('created', 'active'\)/)
+})
+
+test('reenqueueStaleListingsCl: acepta un tamaño de tanda propio', async () => {
+  let params = null
+  const client = { async query(_s, p) { params = p; return { rowCount: 7 } } }
+  assert.deepEqual(await reenqueueStaleListingsCl(client, { limit: 50 }), { reenqueued: 7 })
+  assert.deepEqual(params, [50])
+})
+
+test('reenqueueStaleListingsCl: un fallo no tumba el pipeline que lo invoca', async () => {
+  const client = { async query() { throw new Error('pgboss.job no existe') } }
+  assert.match((await reenqueueStaleListingsCl(client)).error, /pgboss\.job no existe/)
 })
