@@ -198,6 +198,29 @@ export interface DealernetPhone {
   product_code: string
 }
 
+// Mismo teléfono puede salir de varios productos (3407/3408/3410) — para la
+// UI lo mostramos una vez, marcando todas las fuentes que lo confirmaron.
+// Compartido por dealernet-lookup (ficha Dealer) y captar-pipeline
+// (Captación), para que ambas fichas muestren exactamente los mismos datos.
+export function dedupePhones(phones: DealernetPhone[]): (DealernetPhone & { sources: string[] })[] {
+  const map = new Map<string, DealernetPhone & { sources: string[] }>()
+  for (const p of phones) {
+    const existing = map.get(p.phone_e164)
+    if (!existing) {
+      map.set(p.phone_e164, { ...p, sources: [p.product_code] })
+      continue
+    }
+    existing.sources.push(p.product_code)
+    if (p.categoria === 'probable') existing.categoria = 'probable'
+    existing.ranking = Math.max(existing.ranking ?? 0, p.ranking ?? 0)
+    existing.calidad = Math.max(existing.calidad ?? 0, p.calidad ?? 0)
+    existing.ind_whatsapp = existing.ind_whatsapp || p.ind_whatsapp
+    existing.idimagen = existing.idimagen ?? p.idimagen
+    existing.relacion = existing.relacion ?? p.relacion
+  }
+  return Array.from(map.values())
+}
+
 export interface DealernetAddress {
   direccion: string
   ubicacion: string | null

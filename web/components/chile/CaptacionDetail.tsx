@@ -5,12 +5,13 @@ import dynamic from 'next/dynamic'
 import {
   MapPin, Layers, ExternalLink, AlertCircle, CheckCircle2,
   RefreshCw, Phone, User, FileCheck2, Landmark, ShieldCheck, Copy,
-  MessageCircle, ChevronRight, Clock, ChevronLeft, Sparkles, Waves,
+  ChevronRight, Clock, ChevronLeft, Sparkles, Waves,
   Building, Compass, Calendar, Car, Archive, Home, Check, Plus,
   X, Search, FileText, Store, Images, Tag,
 } from 'lucide-react'
 
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
+import { PhoneRow, useCopy } from '@/components/chile/DealerFicha'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
 
@@ -76,7 +77,10 @@ export interface Captacion {
   owner_rut: string | null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   owner_rut_candidates: any[] | null
-  phones: Array<{ numero: string; tipo?: string; whatsapp?: boolean; fuente?: string; calidad?: number }> | null
+  phones: Array<{
+    numero: string; tipo?: string | null; whatsapp?: boolean | null; fuente?: string; calidad?: number | null
+    categoria?: string; idimagen?: string | null; relacion?: string | null; ranking?: number | null
+  }> | null
   emails: Array<{ email: string }> | null
   dealernet_error: string | null
   stage: string
@@ -233,6 +237,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   const [dnRunning, setDnRunning] = useState(false)
   const [selectedRol, setSelectedRol] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const { copiedKey: copiedPhoneKey, copy: copyPhone } = useCopy()
   const [photoIdx, setPhotoIdx] = useState(0)
   const [visualRunning, setVisualRunning] = useState(false)
   const [visualError, setVisualError] = useState<string | null>(null)
@@ -548,25 +553,36 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
           </div>
 
           {phones.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {phones.map((p) => (
-                <div key={p.numero} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/50 border border-slate-700/40">
-                  <Phone size={12} className="text-emerald-400" />
-                  <button onClick={() => copyText(p.numero)} className="text-sm font-mono text-slate-100 hover:text-emerald-300">
-                    {copied === p.numero ? '¡Copiado!' : p.numero}
-                  </button>
-                  {p.whatsapp && (
-                    <a
-                      href={`https://wa.me/${p.numero.replace(/[^\d]/g, '')}`}
-                      target="_blank" rel="noopener noreferrer"
-                      className="text-emerald-400 hover:text-emerald-300"
-                    >
-                      <MessageCircle size={13} />
-                    </a>
-                  )}
-                  {p.tipo && <span className="text-[10px] text-slate-600">{p.tipo}</span>}
-                </div>
-              ))}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Teléfonos <span className="text-slate-600">({phones.length})</span>
+                </p>
+                <button
+                  onClick={() => copyPhone('all-phones', phones.map((p) => p.numero).join('\n'))}
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 px-1.5 py-0.5 rounded border border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors"
+                >
+                  {copiedPhoneKey === 'all-phones' ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                  Copiar todos
+                </button>
+              </div>
+              <div className="space-y-1">
+                {phones.map((p, i) => (
+                  <PhoneRow
+                    key={`${p.numero}-${i}`}
+                    phone={{
+                      phone_e164: p.numero,
+                      categoria: p.categoria ?? 'alternativo',
+                      clasificacion: p.tipo ?? null,
+                      ind_whatsapp: p.whatsapp ?? null,
+                      idimagen: p.idimagen ?? null,
+                      relacion: p.relacion ?? null,
+                    }}
+                    copied={copiedPhoneKey === `phone-${i}`}
+                    onCopy={() => copyPhone(`phone-${i}`, p.numero)}
+                  />
+                ))}
+              </div>
             </div>
           )}
           {captacion.dealernet_status === 'ok' && phones.length === 0 && (
