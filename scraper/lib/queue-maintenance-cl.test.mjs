@@ -113,8 +113,11 @@ test('reenqueueStaleListingsCl: re-encola las fichas que llevan más tiempo sin 
   const res = await reenqueueStaleListingsCl(client)
   assert.deepEqual(res, { reenqueued: 400 })
   assert.deepEqual(params, [400])
-  // Las del parser viejo (detail_parsed_at NULL) entran primero.
-  assert.match(sql, /ORDER BY l\.detail_parsed_at ASC NULLS FIRST/)
+  // Primero las que tienen MENOS fotos guardadas que las que declara el portal
+  // (comprobación exacta, no un umbral inventado), y dentro de eso las que
+  // llevan más tiempo sin bajarse — las del parser viejo tienen NULL.
+  assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
+  assert.match(sql, /l\.detail_parsed_at ASC NULLS FIRST/)
   // Solo lo publicado ahora: re-bajar bajas no aporta.
   assert.match(sql, /l\.is_active/)
   // Prioridad 0: por debajo de los anuncios que aún NO están en la base (100).
@@ -138,8 +141,12 @@ test('reenqueueStaleListingsCl: NO elige por "tiene pocas fotos" — ese criteri
   const client = { async query(s) { sql = s.replace(/\s+/g, ' ').trim(); return { rowCount: 0 } } }
   await reenqueueStaleListingsCl(client)
 
-  assert.doesNotMatch(sql, /jsonb_array_length/)
+  // Nada de umbrales inventados ni de filtrar por el nombre de la corredora.
+  assert.doesNotMatch(sql, /<= 5/)
   assert.doesNotMatch(sql, /'corredora'/)
+  // Las fotos solo se miran contra el total que declara el portal, que es una
+  // comprobación exacta y sí converge.
+  assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
 })
 
 test('reenqueueStaleListingsCl: NO ordena por last_seen_at — lo mueve el barrido del listado', async () => {

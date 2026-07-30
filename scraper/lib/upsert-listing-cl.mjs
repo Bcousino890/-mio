@@ -160,13 +160,13 @@ export async function upsertListingCl(client, parsed, options = {}) {
     `INSERT INTO listings_cl (
        portal, source_type, external_id, source_url, operation, advertiser_type, advertiser_name, phone,
        price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
-       comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos,
+       comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos, photos_total_count,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
        portal_first_seen_at,
        status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-       $18,$19,$20,$21,$22,$23,$24,$25,
+       $18,$19,$20,$21,$22,$23,$24,$25,$35,
        $26,$27,$28,$30,$31,$32,$33,$34,
        'active', true, $29, $29, now()
      )
@@ -180,6 +180,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
        property_type = EXCLUDED.property_type, comuna_id = EXCLUDED.comuna_id, comuna_raw = EXCLUDED.comuna_raw,
        localidad = EXCLUDED.localidad, address = EXCLUDED.address, latitude = EXCLUDED.latitude,
        longitude = EXCLUDED.longitude, description = EXCLUDED.description, photos = EXCLUDED.photos,
+       -- COALESCE: si esta pasada no pudo leer el total declarado, no se pisa
+       -- con null un valor bueno — sin él no se puede saber si faltan fotos.
+       photos_total_count = COALESCE(EXCLUDED.photos_total_count, listings_cl.photos_total_count),
        property_code = EXCLUDED.property_code, advertiser_id = EXCLUDED.advertiser_id,
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
        has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
@@ -206,6 +209,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       JSON.stringify(parsed.features ?? []),
       parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
       portalFirstSeenAt,
+      parsed.photos_total_count ?? null,
     ]
   )
   const listingId = upserted[0].id

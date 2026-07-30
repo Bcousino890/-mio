@@ -111,6 +111,11 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
  * de paso es lo único que detecta bajadas de precio en anuncios ya guardados
  * (el discovery solo encola el detalle de los que aún NO están en la base).
  *
+ * Delante de todo van las fichas a las que les FALTAN fotos de verdad:
+ * `photos_total_count` (migración 0086) es el total que declara el portal, así
+ * que "guardadas < declaradas" es una comprobación exacta, no un umbral
+ * inventado — y también converge, porque al completarse deja de cumplirse.
+ *
  * NO se usa `last_seen_at` para ordenar: lo mueve también el barrido del
  * listado, que ve el anuncio sin abrir su ficha.
  *
@@ -135,7 +140,11 @@ export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
            WHERE j.name = 'detail-cl' AND j.state IN ('created', 'active')
              AND j.data->>'externalId' = l.external_id
          )
-       ORDER BY l.detail_parsed_at ASC NULLS FIRST
+       ORDER BY CASE WHEN jsonb_typeof(l.photos) = 'array'
+                       AND l.photos_total_count IS NOT NULL
+                       AND jsonb_array_length(l.photos) < l.photos_total_count
+                     THEN 0 ELSE 1 END,
+                l.detail_parsed_at ASC NULLS FIRST
        LIMIT $1`,
       [limit]
     )

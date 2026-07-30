@@ -60,11 +60,25 @@ test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no re
   const client = makeClient();
   const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo/posted_days_ago
   assert.equal(res.changeType, 'new');
-  const idx = client.inserted.params.length;
-  assert.equal(client.inserted.params[idx - 4], false); // has_video
-  assert.equal(client.inserted.params[idx - 3], null); // video_modal_url
-  assert.equal(client.inserted.params[idx - 2], null); // advertiser_logo
-  assert.equal(client.inserted.params[idx - 1], null); // portal_first_seen_at
+  // Por posición absoluta ($N), no contando desde el final: añadir un campo
+  // nuevo al INSERT desplazaba el final y rompía este test sin que nada
+  // estuviera mal de verdad.
+  const param = (n) => client.inserted.params[n - 1];
+  assert.equal(param(31), false); // has_video
+  assert.equal(param(32), null); // video_modal_url
+  assert.equal(param(33), null); // advertiser_logo
+  assert.equal(param(34), null); // portal_first_seen_at
+});
+
+test('photos_total_count (el total que declara el portal) se persiste', async () => {
+  // Sin este número no se puede saber si a una ficha le faltan fotos: 3 fotos
+  // guardadas es correcto si el aviso tiene 3, y un fallo si tiene 24.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 24 });
+  assert.match(client.inserted.sql, /photos_total_count/);
+  assert.equal(client.inserted.params[34], 24); // $35
+  // Y al refrescar no se pisa con null un total que ya se conocía.
+  assert.match(client.inserted.sql, /photos_total_count = COALESCE\(EXCLUDED\.photos_total_count, listings_cl\.photos_total_count\)/);
 });
 
 test('advertiser_logo se persiste en el INSERT', async () => {
