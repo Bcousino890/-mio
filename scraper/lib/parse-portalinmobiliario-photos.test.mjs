@@ -13,7 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDetailPage } from './parse-portalinmobiliario.mjs';
+import { parseDetailPage, aMaximaResolucion } from './parse-portalinmobiliario.mjs';
 
 function galleryMosaicHtml({ totalCount = 20, mediaCounters = [] } = {}) {
   const initialState = {
@@ -136,4 +136,36 @@ test('una galería que llega a medias se reintenta por proxy, no solo si viene v
   assert.equal(intentos, 1);
   assert.equal(p.photos.length, 29); // 5 del blob + 24 del modal
   assert.equal(p.photos_total_count, 29);
+});
+
+test('todas las fotos se guardan en la variante de máxima resolución', async () => {
+  // Medido contra el CDN con la MISMA imagen: -F es 800x597 (122.848 bytes) y
+  // -O es 500x373 (52.996). El blob de la ficha trae las primeras en -F, pero
+  // la galería por item_id las construía en -O: por eso las primeras se veían
+  // bien y el resto peor. No era el anuncio, era la plantilla con la que
+  // pedíamos la imagen.
+  const p = await parseDetailPage(galleryMosaicHtml({ totalCount: 8 }), 'MLC-107', {
+    fetchGallery: async () => [],
+    fetchGalleryById: async () => [
+      'https://http2.mlstatic.com/D_NQ_NP_000021-MLC900000021-O.webp',
+      'https://http2.mlstatic.com/D_NQ_NP_2X_000022-MLC900000022_052026-V.webp',
+      'https://http2.mlstatic.com/D_000023-MLC900000023_052026-L.webp',
+    ],
+  });
+  assert.equal(p.photos.length, 8);
+  // Ninguna se queda en un tamaño menor, venga de donde venga.
+  for (const u of p.photos) {
+    assert.doesNotMatch(u, /-[A-EG-Z][-.]/, `foto en tamaño reducido: ${u}`);
+  }
+  assert.ok(p.photos.includes('https://http2.mlstatic.com/D_NQ_NP_000021-MLC900000021-F.webp'));
+  assert.ok(p.photos.includes('https://http2.mlstatic.com/D_NQ_NP_2X_000022-MLC900000022_052026-F.webp'));
+  assert.ok(p.photos.includes('https://http2.mlstatic.com/D_000023-MLC900000023_052026-F.webp'));
+});
+
+test('aMaximaResolucion no toca lo que no es una foto de Mercado Libre', async () => {
+  assert.equal(
+    aMaximaResolucion('https://http2.mlstatic.com/frontend-assets/vis-transactions-frontend/big-empty-state.webp'),
+    'https://http2.mlstatic.com/frontend-assets/vis-transactions-frontend/big-empty-state.webp',
+  );
+  assert.equal(aMaximaResolucion(null), '');
 });
