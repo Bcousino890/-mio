@@ -22,6 +22,29 @@ import { normalizeComuna } from './chile-comunas.mjs'
 import { resolvePriceClp, resolvePriceUf } from './to-listing.mjs'
 import { recordSnapshotCl } from './snapshot-cl.mjs'
 
+/**
+ * Monedas que `listings_cl.currency` acepta (CHECK de la migración 0028), que
+ * son también las únicas cuyo importe sabemos interpretar.
+ *
+ * El parser copia `currency_id` del blob de Mercado Libre tal cual cuando no es
+ * "CLF" (= UF), así que un anuncio publicado en otra moneda —el catálogo real
+ * trae unos pocos— llegaba aquí con un código que el CHECK rechaza: el INSERT
+ * lanzaba, la ficha no se guardaba NUNCA y su job volvía a fallar en cada
+ * pasada. Visto en producción: 4 fichas con
+ * 'new row for relation "listings_cl" violates check constraint'.
+ *
+ * Se normaliza a CLP para que la fila entre, pero SIN inventar el importe: el
+ * precio queda en null (ver resolvePriceClp en to-listing.mjs). Mejor un
+ * anuncio sin precio que uno con el número de otra moneda haciéndose pasar por
+ * pesos. El resto de la ficha —fotos, corredora, m², dirección— se guarda
+ * entero, que es lo que se estaba perdiendo.
+ */
+const MONEDAS_SOPORTADAS = new Set(['CLP', 'UF'])
+
+function normalizarMoneda(currency) {
+  return MONEDAS_SOPORTADAS.has(currency) ? currency : 'CLP'
+}
+
 async function resolveComunaId(client, comunaRaw) {
   if (!comunaRaw) return { comunaId: null, localidad: null }
   const { comuna, localidad } = normalizeComuna(comunaRaw)
@@ -103,8 +126,12 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const existing = existingRows[0] ?? null
 
   const { comunaId, localidad } = await resolveComunaId(client, parsed.comuna)
+  // Ojo al orden: el precio se resuelve con la moneda TAL CUAL la publicó el
+  // anuncio, para que una moneda no soportada dé null en vez de colarse como
+  // pesos. La normalización a un valor que el CHECK acepte va después.
   const priceClp = resolvePriceClp(parsed, ufRate)
   const priceUf = resolvePriceUf(parsed)
+  const currency = normalizarMoneda(parsed.currency)
 
   // Antigüedad REAL del aviso según el portal (parsed.posted_days_ago, desde el
   // subtitle de la ficha) — first_seen_at mide cuándo NOSOTROS lo vimos, que
@@ -116,7 +143,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const next = {
     price: priceClp,
     price_uf: priceUf,
-    currency: parsed.currency ?? null,
+    currency,
     advertiser_name: parsed.advertiser_name ?? null,
     photos: parsed.photos ?? [],
     description: parsed.description ?? null,
@@ -136,12 +163,12 @@ export async function upsertListingCl(client, parsed, options = {}) {
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
        portal_first_seen_at,
-       status, is_active, last_seen_at, updated_at
+       status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
        $18,$19,$20,$21,$22,$23,$24,$25,
        $26,$27,$28,$30,$31,$32,$33,$34,
-       'active', true, $29, now()
+       'active', true, $29, $29, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
        source_type = EXCLUDED.source_type, source_url = EXCLUDED.source_url,
@@ -160,12 +187,17 @@ export async function upsertListingCl(client, parsed, options = {}) {
        -- COALESCE: si esta pasada no pudo parsear "hace N días" (subtitle
        -- cambió de forma, o vino null), no se pisa un valor ya bueno con null.
        portal_first_seen_at = COALESCE(EXCLUDED.portal_first_seen_at, listings_cl.portal_first_seen_at),
+       -- Marca de que ESTA ficha se bajó y parseó entera con el parser actual.
+       -- Distinto de last_seen_at, que también lo mueve el barrido del listado:
+       -- es lo que permite rotar el re-scrapeo por antigüedad real de la ficha
+       -- sin repetir siempre las mismas (ver queue-maintenance-cl.mjs).
+       detail_parsed_at = EXCLUDED.detail_parsed_at,
        status = 'active', is_active = true, last_seen_at = EXCLUDED.last_seen_at, updated_at = now()
      RETURNING id`,
     [
       parsed.portal ?? 'portalinmobiliario', parsed.source_type ?? 'portal', parsed.external_id, parsed.source_url,
       parsed.operation ?? null, parsed.advertiser_type ?? 'unknown', parsed.advertiser_name ?? null, parsed.phone ?? null,
-      priceClp, priceUf, ufRate, ufRateDate, parsed.currency ?? 'CLP', parsed.bedrooms ?? null, parsed.bathrooms ?? null,
+      priceClp, priceUf, ufRate, ufRateDate, currency, parsed.bedrooms ?? null, parsed.bathrooms ?? null,
       parsed.square_meters ?? null, parsed.property_type ?? null,
       comunaId, parsed.comuna ?? null, localidad, parsed.address ?? null, parsed.latitude ?? null, parsed.longitude ?? null,
       parsed.description ?? null, JSON.stringify(parsed.photos ?? []),

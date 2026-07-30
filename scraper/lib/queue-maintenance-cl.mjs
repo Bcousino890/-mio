@@ -90,20 +90,32 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
 }
 
 /**
- * Re-encola las fichas cuyos datos GUARDADOS quedaron viejos, para que el parser
- * actual las vuelva a bajar.
+ * Re-encola, por tandas, las fichas que llevan más tiempo sin bajarse enteras.
  *
- * Dos rastros de anuncios scrapeados antes de arreglar el parser:
- *   · Exactamente 5 fotos — el blob de la ficha siempre trae 5, sin importar
- *     cuántas tenga de verdad; el resto vive detrás del modal de galería, que
- *     antes no se pedía. Verificado en vivo: MLC-4112445332 guarda 5 y el
- *     anuncio tiene 20.
- *   · advertiser_name genérico ("Corredora") o vacío, en vez del nombre real
- *     ("Josefina Fdez B") — visto en el mismo anuncio.
+ * Nació como backfill de los anuncios scrapeados antes de arreglar el parser,
+ * y elegía por sus dos rastros: exactamente 5 fotos (el blob de la ficha trae
+ * 5 pase lo que pase; el resto vive detrás del modal de galería, que antes no
+ * se pedía) y advertiser_name vacío o genérico ("Corredora").
  *
- * Se encolan con prioridad NORMAL (0), por debajo de los anuncios que aún no
- * existen en la base (prioridad 100): completar el catálogo va antes que
- * refrescar lo que ya está. Y por tandas, para no ahogar la cola ni el portal.
+ * Ese criterio NO CONVERGÍA. Un anuncio que de verdad tiene 3 fotos lo cumple
+ * para siempre: se re-scrapeaba, seguía teniendo 3, y volvía a entrar en la
+ * tanda siguiente. Medido en producción: el 6% del catálogo (74 de 1.200 con
+ * 1-4 fotos) girando en bucle, ~19.000 descargas diarias que no cambian un solo
+ * dato, gastando GB del proxy residencial y dando motivos al portal para volver
+ * a bloquear la IP — ya devolvió 403 una vez.
+ *
+ * Ahora se ordena por `detail_parsed_at` (migración 0085): la ficha que lleva
+ * más tiempo sin abrirse va primero, y al re-scrapearse se actualiza su fecha y
+ * pasa al final. Los anuncios del parser viejo lo tienen NULL, así que siguen
+ * entrando los primeros; después el catálogo rota entero a ritmo acotado, que
+ * de paso es lo único que detecta bajadas de precio en anuncios ya guardados
+ * (el discovery solo encola el detalle de los que aún NO están en la base).
+ *
+ * NO se usa `last_seen_at` para ordenar: lo mueve también el barrido del
+ * listado, que ve el anuncio sin abrir su ficha.
+ *
+ * Prioridad NORMAL (0), por debajo de los anuncios que aún no existen en la
+ * base (prioridad 100): completar el catálogo va antes que refrescarlo.
  *
  * Idempotente: no re-encola lo que ya está pendiente o ejecutándose.
  */
@@ -118,18 +130,12 @@ export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
        WHERE l.portal = 'portalinmobiliario'
          AND l.is_active
          AND l.source_url IS NOT NULL
-         AND (
-           (jsonb_typeof(l.photos) = 'array' AND jsonb_array_length(l.photos) <= 5)
-           OR l.advertiser_name IS NULL
-           OR btrim(l.advertiser_name) = ''
-           OR lower(btrim(l.advertiser_name)) = 'corredora'
-         )
          AND NOT EXISTS (
            SELECT 1 FROM pgboss.job j
            WHERE j.name = 'detail-cl' AND j.state IN ('created', 'active')
              AND j.data->>'externalId' = l.external_id
          )
-       ORDER BY l.last_seen_at ASC
+       ORDER BY l.detail_parsed_at ASC NULLS FIRST
        LIMIT $1`,
       [limit]
     )
