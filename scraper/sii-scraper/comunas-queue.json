@@ -14,10 +14,23 @@
     "stage: 'manzanas-geo' (descubrimiento geográfico, robusto para comunas de",
     "manzanas dispersas en IDs altos como Vitacura) o 'manzanas' (enumeración).",
     "Para agregar más comunas, añade objetos aquí; el orden es el de scrapeo.",
-    "Los códigos SII se descubren con la etapa 'regiones' (ver README.md)."
+    "Los códigos SII se descubren con la etapa 'regiones' (ver README.md).",
+    "",
+    "Códigos de Lo Barnechea/Colina/La Reina/Providencia/Ñuñoa/Zapallar: NO",
+    "adivinados — son los mismos sii_comuna_code ya confirmados contra datos",
+    "reales para sii_roles_cl (ver db/migrations/0025, 0026 y 0060). Todas",
+    "arrancan en 'manzanas-geo' (el default robusto de run-sii-mapasui.sh): no",
+    "hay evidencia todavía de que sus manzana_id sean densas/bajas como Las",
+    "Condes, así que se prefiere la vía que no depende de adivinar el rango."
   ],
   "comunas": [
     { "code": "15108", "nombre": "Las Condes", "stage": "manzanas" },
-    { "code": "15160", "nombre": "Vitacura", "stage": "manzanas-geo" }
+    { "code": "15160", "nombre": "Vitacura", "stage": "manzanas-geo" },
+    { "code": "15161", "nombre": "Lo Barnechea", "stage": "manzanas-geo" },
+    { "code": "14201", "nombre": "Colina", "stage": "manzanas-geo" },
+    { "code": "15132", "nombre": "La Reina", "stage": "manzanas-geo" },
+    { "code": "15103", "nombre": "Providencia", "stage": "manzanas-geo" },
+    { "code": "15105", "nombre": "Ñuñoa", "stage": "manzanas-geo" },
+    { "code": "5204", "nombre": "Zapallar", "stage": "manzanas-geo" }
   ]
 }
