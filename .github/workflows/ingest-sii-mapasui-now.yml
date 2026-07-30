@@ -12,16 +12,17 @@ name: Watchdog + ingesta de predios SII mapasui
 # re-ejecutar mientras el scraper sigue escribiendo más líneas al mismo archivo).
 on:
   workflow_dispatch: {}
-  # Respaldo cada 30 min: la ingesta incremental de run-sii-mapasui.sh (cada 10
-  # min) es el camino normal, pero este pipeline ya se murió en silencio dos
-  # veces (rsync --delete, corrida lanzada con script viejo). Re-ingestar el
-  # JSONL existente es idempotente y tarda ~30 s. Se pide cada 30 min (no cada
-  # hora) porque GitHub Actions descarta/retrasa mucho los scheduled runs: aun
-  # a esta cadencia se ven gaps reales de ~2-3 h, así que pedir más seguido es
-  # la única forma de que sii_mapasui_predios_cl no quede horas por detrás del
-  # disco (y de que el latido de sii-mapasui-stats no salte a "estancado").
-  schedule:
-    - cron: '*/30 * * * *'
+  # El cron recurrente ('*/30 * * * *') vivió acá hasta que dejó de tener
+  # sentido: entraba por SSH cada 30 min solo para correr en el VPS un
+  # watchdog + una re-ingesta que YA corren localmente ahí (ver
+  # scraper/sii-scraper/watchdog-ingest.sh, instalado en el crontab del VPS
+  # por infra/deploy.sh). Eso gastaba minutos de GitHub Actions sin
+  # necesidad y además fallaba seguido: re-ingestar el .jsonl de una comuna
+  # ya completa (sii_mapasui_predios_cl) tardaba minutos y la sesión SSH se
+  # cortaba a mitad ("client_loop: send disconnect: Broken pipe", exit 255).
+  # Este workflow queda solo como botón manual (workflow_dispatch) o vía el
+  # centinela de abajo, por si hace falta forzar una corrida desde fuera del
+  # VPS.
   push:
     branches:
       - main
