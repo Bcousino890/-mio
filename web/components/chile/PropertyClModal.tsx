@@ -369,38 +369,57 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     setManualPinDirty(true)
   }, [])
 
-  // ── Etapas 3 y 4 del pipeline: dueño (TGR) y teléfonos (DealerNet) ─────────
+  // ── Etapas 3 y 4 del pipeline: teléfonos (DealerNet) y dueño (TGR) ─────────
   // Guardar la ubicación dejaba la captación en 'matched' (rol resuelto) y ahí
   // se detenía: había que ir a /chile/captacion y pulsar "Continuar" dos veces
   // para ver dueño y teléfonos. Como desde la ficha lo que se quiere es LLAMAR,
   // aquí se encadenan solas y el resultado vuelve a la misma ficha.
+  //
+  // DealerNet va PRIMERO: busca por rol vía Buscador Múltiple sin necesitar el
+  // nombre de TGR (lookupContactsDealernet ya no lo exige), así que llega a
+  // los teléfonos directo. TGR va después y es opcional — solo suma la
+  // confirmación documental del dueño; si falla o tarda (levanta Chromium,
+  // ~30-60s) no bloquea los teléfonos que ya se guardaron arriba.
   const [captarStage, setCaptarStage] = useState<null | 'tgr' | 'dealernet'>(null)
   const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const runCaptacionPipeline = useCallback(async (captacionId: string) => {
     setCaptarMsg(null)
     const notes: string[] = []
+
+    setCaptarStage('dealernet')
+    const dn = await fetch(`/api/chile/captar/${captacionId}/dealernet`, { method: 'POST' })
+      .then(r => r.json()).catch(() => null)
+    if (dn && dn.success === false) notes.push(`Teléfonos (DealerNet): ${dn.error ?? 'sin resultado'}`)
+
+    // Los teléfonos, si llegaron, ya quedaron guardados: reflejarlos de una en
+    // vez de esperar a TGR (que es lento y no afecta este resultado).
+    let fresh = await refreshProperty()
+    let crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    let phones = crm?.phones?.length ?? 0
+    setCaptarMsg(
+      phones > 0
+        ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
+        : { ok: false, text: notes.join(' · ') || 'Sin teléfonos todavía — reintenta desde la captación' },
+    )
+
+    // TGR después, en segundo plano: documenta al dueño con la fuente oficial
+    // cuando DealerNet no trajo nombre o quedó ambiguo. Best-effort — un fallo
+    // aquí no debe tapar el resultado de arriba.
     try {
-      // TGR levanta Chromium: es la etapa lenta (~30-60 s), por eso se avisa.
       setCaptarStage('tgr')
       const tgr = await fetch(`/api/chile/captar/${captacionId}/tgr`, { method: 'POST' })
         .then(r => r.json()).catch(() => null)
-      if (tgr && tgr.success === false) notes.push(`Dueño (TGR): ${tgr.error ?? 'no se pudo obtener'}`)
-
-      // DealerNet busca por rol/nombre/dirección, así que se intenta aunque TGR
-      // no haya dado nombre — a veces igual devuelve el RUT y los teléfonos.
-      setCaptarStage('dealernet')
-      const dn = await fetch(`/api/chile/captar/${captacionId}/dealernet`, { method: 'POST' })
-        .then(r => r.json()).catch(() => null)
-      if (dn && dn.success === false) notes.push(`Teléfonos (DealerNet): ${dn.error ?? 'sin resultado'}`)
+      if (tgr && tgr.success === false) notes.push(`Dueño (TGR, opcional): ${tgr.error ?? 'no se pudo obtener'}`)
     } finally {
       setCaptarStage(null)
     }
 
-    // Traer la ficha ya enriquecida (dueño + teléfonos) y propagarla a la grilla.
-    const fresh = await refreshProperty()
-    if (fresh?.crm) setResolved(prev => (prev ? { ...prev, crm: fresh.crm ?? null } : prev))
-    const phones = (fresh?.crm?.phones?.length ?? 0)
+    fresh = await refreshProperty()
+    crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    phones = crm?.phones?.length ?? phones
     setCaptarMsg(
       phones > 0
         ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
@@ -882,7 +901,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — {shownCrm.owner_name ? 'contacto pendiente (DealerNet)' : 'dueño pendiente (TGR)'}.</div>
+                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
                                 )}
                                 {/* Reintentar las etapas lentas sin salir de la
                                     ficha: es donde se quiere el teléfono. */}
@@ -906,7 +925,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                       <RefreshCw size={12} className="animate-spin" />
                                       {captarStage === 'tgr' ? 'Buscando al dueño en TGR… (puede tardar ~1 min)' : 'Buscando teléfonos en DealerNet…'}
                                     </span>
-                                  : <>Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (crea la ficha con dueño vía TGR y teléfonos vía DealerNet).</>}
+                                  : <>Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (teléfonos vía DealerNet por rol, dueño documental vía TGR como respaldo opcional).</>}
                                 {captarMsg && !captarStage && (
                                   <div className={`mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
                                 )}
