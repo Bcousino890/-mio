@@ -42,10 +42,15 @@ export async function GET(request: NextRequest) {
 
   const page = Math.max(1, Number(sp.get('page')) || 1)
   // Corredoras está acotado por advertisers ÚNICOS (no por anuncios): a
-  // diferencia de listings_cl/property_cl, el cap alto es seguro — el
-  // directorio (/chile/corredoras) pide todas de una vez, sin paginar.
-  const pageSize = Math.min(Math.max(1, Number(sp.get('page_size')) || 30), 5000)
-  const offset = (page - 1) * pageSize
+  // diferencia de listings_cl/property_cl, no hace falta techo — el directorio
+  // (/chile/corredoras) pide todas de una vez, sin paginar. `page_size=0` es
+  // "sin límite": antes se simulaba con un page_size fijo en 5000, que con la
+  // tabla creciendo por encima de esa cifra habría empezado a recortar el
+  // directorio en silencio.
+  const pageSizeParam = sp.get('page_size')
+  const unlimited = pageSizeParam === '0'
+  const pageSize = unlimited ? 0 : Math.max(1, Number(pageSizeParam) || 30)
+  const offset = unlimited ? 0 : (page - 1) * pageSize
 
   try {
     const params: (string | number)[] = []
@@ -152,7 +157,13 @@ export async function GET(request: NextRequest) {
     )
     const total = Number(countResult.rows[0]?.total ?? 0)
 
-    const dataParams = [...params, pageSize, offset]
+    // `unlimited` (page_size=0): sin LIMIT/OFFSET, ni siquiera con un número
+    // "suficientemente grande" — así el directorio nunca depende de adivinar un
+    // techo que la tabla pueda superar más adelante.
+    const dataParams = unlimited ? params : [...params, pageSize, offset]
+    const limitClause = unlimited
+      ? ''
+      : `LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`
     const result = await pool.query(
       `${groupedCte}
        -- Sin metrics_updated_at/first_seen_at/last_seen_at: el directorio no los
@@ -163,7 +174,7 @@ export async function GET(request: NextRequest) {
        FROM agrupadas
        ${havingActive}
        ORDER BY ${SORT_CLAUSES[sort]}
-       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+       ${limitClause}`,
       dataParams
     )
 
@@ -172,8 +183,8 @@ export async function GET(request: NextRequest) {
       count: result.rows.length,
       total,
       page,
-      page_size: pageSize,
-      total_pages: Math.max(1, Math.ceil(total / pageSize)),
+      page_size: unlimited ? total : pageSize,
+      total_pages: unlimited ? 1 : Math.max(1, Math.ceil(total / pageSize)),
       data: result.rows,
     }, {
       // Las métricas de corredora las recalcula el job de dedup cada 15 min, así

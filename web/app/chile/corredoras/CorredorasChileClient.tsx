@@ -127,9 +127,12 @@ export default function CorredorasChileClient() {
 
   useEffect(() => {
     setLoading(true)
-    // Directorio: todas las corredoras de una sola vez (sin paginar). El cap
-    // de la API es 5000 — acotado por advertisers únicos, no por anuncios.
-    const params = new URLSearchParams({ sort: sortBy, page_size: '5000' })
+    // Directorio: todas las corredoras de una sola vez, sin paginar y sin
+    // techo — page_size=0 le dice a la API que omita LIMIT/OFFSET. Antes se
+    // pedía page_size=5000 como número "suficientemente grande"; con la tabla
+    // creciendo por encima de esa cifra el directorio habría empezado a
+    // recortar en silencio (acotado por advertisers únicos, no por anuncios).
+    const params = new URLSearchParams({ sort: sortBy, page_size: '0' })
     if (search) params.append('q', search)
     if (crm !== 'all') params.append('crm_platform', crm)
     if (comuna.trim()) params.append('comuna', comuna.trim())
