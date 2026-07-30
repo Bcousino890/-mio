@@ -61,6 +61,9 @@ const LISTINGS_JSON = `
       'manual_property_lock', l.manual_property_lock,
       'seller_reference', l.seller_reference,
       'photos', COALESCE(l.photos, '[]'::jsonb),
+      -- Cuántas declara el portal: sin este número no se puede saber si a la
+      -- ficha le faltan fotos o si el aviso simplemente tiene pocas.
+      'photos_total_count', l.photos_total_count,
       'description', l.description,
       'address', l.address,
       'latitude', l.latitude,

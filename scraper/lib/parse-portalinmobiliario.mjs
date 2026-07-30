@@ -108,7 +108,10 @@ function extraerFotosDeGaleria(html) {
         if (urlMatch) photos.add(urlMatch[1])
       }
     }
-    return Array.from(photos)
+    // Los cuatro patrones son a propósito amplios (cualquier imagen de
+    // mlstatic, cualquier `"url":"…jpg"`), así que arrastran gráficos de la
+    // interfaz. Solo son fotos del anuncio las que llevan id de Mercado Libre.
+    return Array.from(photos).filter(esFotoDeAnuncio)
 }
 
 /**
@@ -118,11 +121,12 @@ function extraerFotosDeGaleria(html) {
  * se quedaba con las 5 del blob. Es la diferencia entre sacar 20 fotos desde
  * fuera y guardar 5 desde la VPS.
  */
-async function fetchGalleryPhotos(galleryUrl) {
+async function fetchGalleryPhotos(galleryUrl, { esperadas = null } = {}) {
   try {
     let fotos = extraerFotosDeGaleria(await fetchGalleryHtml(galleryUrl))
-    if (fotos.length === 0) {
-      fotos = extraerFotosDeGaleria(await fetchGalleryHtml(galleryUrl, { forceProxy: true }))
+    if (incompleta(fotos.length, esperadas)) {
+      const porProxy = extraerFotosDeGaleria(await fetchGalleryHtml(galleryUrl, { forceProxy: true }))
+      if (porProxy.length > fotos.length) fotos = porProxy
     }
     return fotos
   } catch (e) {
@@ -131,11 +135,28 @@ async function fetchGalleryPhotos(galleryUrl) {
   }
 }
 
+/**
+ * ¿Merece la pena reintentar por proxy? Sí si no vino ninguna foto, y también
+ * si vinieron MENOS de las que el portal declara.
+ *
+ * Antes solo se reintentaba con cero. Pero un bloqueo no siempre llega vacío:
+ * llega como un 200 con la página a medias, así que una galería de 29 fotos
+ * podía guardarse con 17 y darse por buena para siempre — nadie volvía a
+ * mirarla porque "ya tenía fotos".
+ *
+ * Sin total declarado (`esperadas` nulo) solo se reintenta si vino vacía: no
+ * hay contra qué comparar y no se puede pedir el modal en bucle.
+ */
+function incompleta(obtenidas, esperadas) {
+  if (obtenidas === 0) return true
+  return esperadas != null && obtenidas < esperadas
+}
+
 // Galería COMPLETA por item_id (patrón verificado en producción, smartbc): el
 // modal /vis-modals/gallery/{itemId} lista los IDs de TODAS las fotos; la URL
 // full-res se arma con el template D_NQ_NP_{id}-O.webp. Más fiable que depender
 // del media_counters.url del blob (que a veces no viene → solo quedaban 5 fotos).
-async function fetchGalleryByItemId(externalId) {
+async function fetchGalleryByItemId(externalId, { esperadas = null } = {}) {
   try {
     const id = String(externalId).replace(/[^A-Z0-9]/gi, '') // "MLC-123" → "MLC123"
     if (!/^MLC\d+$/i.test(id)) return []
@@ -149,8 +170,11 @@ async function fetchGalleryByItemId(externalId) {
       return ids
     }
     let ids = idsDe(await fetchGalleryHtml(url))
-    if (ids.length === 0) ids = idsDe(await fetchGalleryHtml(url, { forceProxy: true }))
-    return ids.map((pid) => `https://http2.mlstatic.com/D_NQ_NP_${pid}-O.webp`)
+    if (incompleta(ids.length, esperadas)) {
+      const porProxy = idsDe(await fetchGalleryHtml(url, { forceProxy: true }))
+      if (porProxy.length > ids.length) ids = porProxy
+    }
+    return ids.map((pid) => `https://http2.mlstatic.com/D_NQ_NP_${pid}-${TAMANO_MAXIMO}.webp`)
   } catch (e) {
     console.warn('Error fetching gallery by item id:', e.message)
     return []
@@ -199,6 +223,53 @@ const photoIdKey = (url) => {
   const m = String(url ?? '').match(/\d+-MLC\d+/)
   return m ? m[0] : String(url ?? '')
 }
+
+/**
+ * ¿Es una foto DEL ANUNCIO, y no un gráfico de la interfaz de Mercado Libre?
+ *
+ * Toda imagen subida por el vendedor lleva el id `{secuencia}-MLC{item}` en la
+ * URL. Los recursos de la propia web no lo llevan, y varios de los patrones de
+ * extracción son deliberadamente amplios (cualquier URL de http2.mlstatic.com,
+ * cualquier `"url":"…jpg"`), así que se colaban como si fueran fotos.
+ *
+ * Visto en producción: MLC-4021070764 guardaba 3 "fotos" de las cuales 2 eran
+ * `frontend-assets/vis-transactions-frontend/big-empty-state.webp` y
+ * `little-empty-state.webp` — los placeholders de "aquí no hay nada" de la
+ * galería. El anuncio mostraba 3 imágenes en la ficha y solo 1 era la casa.
+ * MLC-4098190146 guardaba 3 cuando el portal declara 2 (`"2 Fotos"`).
+ *
+ * Sin id de ML no hay forma de deduplicar la imagen (photoIdKey cae a la URL
+ * entera), así que filtrar por el id es coherente con cómo ya se cuentan.
+ */
+const esFotoDeAnuncio = (url) => /\d+-MLC\d+/.test(String(url ?? ''))
+
+/**
+ * Reescribe una URL de foto a la variante de MÁS resolución que sirve el CDN.
+ *
+ * La letra suelta que va después del id de la foto es el código de tamaño.
+ * Medido contra http2.mlstatic.com con la misma imagen (692866-MLC110477947669):
+ *
+ *     -F → 800x597 px · 122.848 bytes   ← el mayor
+ *     -B → 800x597 px · 120.756 bytes
+ *     -L → 640x478 px ·  80.754 bytes
+ *     -O → 500x373 px ·  52.996 bytes   ← menos de la mitad de peso
+ *     -V → 320x239 px ·  24.178 bytes
+ *     -D → 90x67 px   ·   2.700 bytes
+ *
+ * Importa porque las fuentes NO coinciden: el blob de la ficha trae las
+ * primeras fotos en `-F`, pero `fetchGalleryByItemId` construía las demás en
+ * `-O`. De ahí que las primeras se vieran bien y el resto peor — no era el
+ * anuncio, era la plantilla con la que pedíamos la imagen.
+ *
+ * Se conserva el prefijo y el slug: solo cambia el código de tamaño.
+ * Comprobado que la variante reescrita existe también para las formas `D_…` y
+ * `D_NQ_NP_2X_…` (200 y los mismos 122.848 bytes).
+ */
+const CODIGO_TAMANO = /(D_(?:NQ_NP_)?(?:2X_)?\d+-MLC\d+(?:_\d+)?)-[A-Z]([-.])/
+const TAMANO_MAXIMO = 'F'
+
+export const aMaximaResolucion = (url) =>
+  String(url ?? '').replace(CODIGO_TAMANO, `$1-${TAMANO_MAXIMO}$2`)
 
 // ─── Helper: extracción del blob "Nordic" de Mercado Libre ──────────────────
 // `<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={...};self.__LOADABLE...`
@@ -548,11 +619,13 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // plantillas de URL distintas del mosaico y del modal, y contarlas por URL
     // inflaba el total (bug "21 fotos cuando el original tiene 16"). Ver photoIdKey.
     const addPhoto = (url) => {
-      if (!url) return
+      if (!url || !esFotoDeAnuncio(url)) return
       const key = photoIdKey(url)
       if (seenPhotos.has(key)) return
       seenPhotos.add(key)
-      photos.push(url)
+      // Siempre la variante grande, venga de donde venga: el blob sirve las
+      // primeras en -F (800px) y el modal de galería las daba en -O (500px).
+      photos.push(aMaximaResolucion(url))
     }
     if (gallery?.primary?.src) addPhoto(gallery.primary.src)
     for (const p of gallery?.secondary ?? []) addPhoto(p?.src)
@@ -572,7 +645,7 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // Fetch del modal de galería (si existe) para obtener TODAS las fotos
     if (galleryUrl) {
       try {
-        const galleryPhotos = await fetchGallery(galleryUrl)
+        const galleryPhotos = await fetchGallery(galleryUrl, { esperadas: photosTotalCount })
         for (const photo of galleryPhotos) {
           addPhoto(photo)
         }
@@ -590,7 +663,7 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // saltándose el modal justo en las fichas que más lo necesitan.
     const BLOB_PHOTO_CAP = 5
     if (external_id && (photos.length <= BLOB_PHOTO_CAP || photos.length < (photosTotalCount ?? 0))) {
-      const byId = await fetchGalleryById(external_id)
+      const byId = await fetchGalleryById(external_id, { esperadas: photosTotalCount })
       for (const photo of byId) addPhoto(photo)
     }
 

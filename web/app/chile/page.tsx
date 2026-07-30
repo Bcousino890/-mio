@@ -1,111 +1,25 @@
 import { Fragment } from 'react'
 import Link from 'next/link'
 import PageShell from '@/components/PageShell'
-import { Globe, Star, MapPinned, Upload, CheckCircle2, Database, Activity } from 'lucide-react'
-import { pool } from '@/lib/db'
-import { UNIT_ADDR_MATCH, unitBaseAddressExpr } from '@/lib/sii-edificio-sql'
+import { Globe, Star, MapPinned, Upload, CheckCircle2, Database, Activity, Loader2 } from 'lucide-react'
+import {
+  readComunasResumen,
+  refreshComunasResumenEnSegundoPlano,
+  resumenObsoleto,
+  type ComunaResumen,
+} from '@/lib/sii-comuna-resumen'
 
-// Render dinámico (el build de Docker no tiene DATABASE_URL: prerender ISR
-// dejaría la página vacía tras cada deploy) + caché en memoria de 1 hora:
-// el desglose por comuna recorre los ~9,6M de roles de sii_roles_cl con un
-// regexp por fila habitacional, demasiado caro para cada request.
+// Render dinámico: el build de Docker no tiene DATABASE_URL, así que un
+// prerender ISR dejaría la página vacía tras cada deploy.
+//
+// El desglose por comuna NO se calcula aquí. Recorrerlo son ~9,6M de roles de
+// sii_roles_cl con varios regex POSIX por fila y un COUNT(DISTINCT) sobre
+// direcciones normalizadas: minutos, no milisegundos. Hacerlo dentro del
+// request era exactamente la causa del timeout de 30 s de esta página (y de
+// que se comiera el pool de 10 conexiones que usa el resto del CRM). Ahora se
+// lee ya calculado de sii_resumen_comuna_cl y, si está obsoleto, se dispara el
+// recálculo por detrás sin esperarlo (web/lib/sii-comuna-resumen.ts).
 export const dynamic = 'force-dynamic'
-
-const CACHE_TTL_MS = 60 * 60 * 1000
-let resumenCache: { at: number; rows: ComunaResumen[] } | null = null
-
-// Departamento = rol habitacional cuya dirección lleva sufijo de depto tras
-// la numeración ("PEUMO 1190 DP 502"). Solo tokens de depto: BD/EST/LC tienen
-// su propio destino SII (bodega/estacionamiento/local).
-const DEPTO_ADDR_MATCH = '^.*?[0-9]+[[:space:]]+(DP|DPTO|DEPTO|DEP)([[:space:]]|$)'
-
-interface ComunaResumen {
-  name: string
-  region: string
-  provincia: string
-  priority: boolean
-  sii_comuna_code: string | null
-  roles: number
-  casas: number
-  departamentos: number
-  edificios: number
-  sitios: number
-  bodegas: number
-  estacionamientos: number
-  oficinas: number
-  comercio: number
-  agricolas: number
-  otros: number
-}
-
-async function getComunasResumen(): Promise<ComunaResumen[]> {
-  if (!process.env.DATABASE_URL) return []
-  if (resumenCache && Date.now() - resumenCache.at < CACHE_TTL_MS && resumenCache.rows.length > 0) {
-    return resumenCache.rows
-  }
-  try {
-    const res = await pool.query(
-      `SELECT cc.name, cc.region, cc.provincia, cc.priority, cc.sii_comuna_code,
-              COALESCE(s.total, 0)            AS roles,
-              COALESCE(s.casas, 0)            AS casas,
-              COALESCE(s.departamentos, 0)    AS departamentos,
-              COALESCE(s.edificios, 0)        AS edificios,
-              COALESCE(s.sitios, 0)           AS sitios,
-              COALESCE(s.bodegas, 0)          AS bodegas,
-              COALESCE(s.estacionamientos, 0) AS estacionamientos,
-              COALESCE(s.oficinas, 0)         AS oficinas,
-              COALESCE(s.comercio, 0)         AS comercio,
-              COALESCE(s.agricolas, 0)        AS agricolas
-       FROM chile_comunas cc
-       LEFT JOIN (
-         SELECT sii_comuna_code,
-                COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'H'
-                                   AND direccion ~ '${DEPTO_ADDR_MATCH}')::int AS departamentos,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'H'
-                                   AND (direccion IS NULL OR direccion !~ '${DEPTO_ADDR_MATCH}'))::int AS casas,
-                COUNT(DISTINCT ${unitBaseAddressExpr('direccion')})
-                  FILTER (WHERE direccion ~ '${UNIT_ADDR_MATCH}')::int AS edificios,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'W')::int AS sitios,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'L')::int AS bodegas,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'Z')::int AS estacionamientos,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'O')::int AS oficinas,
-                COUNT(*) FILTER (WHERE codigo_destino_principal = 'C')::int AS comercio,
-                COUNT(*) FILTER (WHERE serie = 'agricola')::int AS agricolas
-         FROM sii_roles_cl
-         GROUP BY sii_comuna_code
-       ) s ON s.sii_comuna_code = cc.sii_comuna_code
-       ORDER BY cc.region, roles DESC, cc.name`
-    )
-    const rows = res.rows.map((r) => {
-      const roles = Number(r.roles)
-      const buckets = ['casas', 'departamentos', 'sitios', 'bodegas', 'estacionamientos', 'oficinas', 'comercio'] as const
-      const clasificados = buckets.reduce((s, k) => s + Number(r[k]), 0)
-      return {
-        name: r.name,
-        region: r.region,
-        provincia: r.provincia,
-        priority: r.priority,
-        sii_comuna_code: r.sii_comuna_code,
-        roles,
-        casas: Number(r.casas),
-        departamentos: Number(r.departamentos),
-        edificios: Number(r.edificios),
-        sitios: Number(r.sitios),
-        bodegas: Number(r.bodegas),
-        estacionamientos: Number(r.estacionamientos),
-        oficinas: Number(r.oficinas),
-        comercio: Number(r.comercio),
-        agricolas: Number(r.agricolas),
-        otros: Math.max(0, roles - clasificados),
-      }
-    })
-    resumenCache = { at: Date.now(), rows }
-    return rows
-  } catch {
-    return []
-  }
-}
 
 function formatNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -118,7 +32,11 @@ function fmt(n: number): string {
 }
 
 export default async function ChilePage() {
-  const comunas = await getComunasResumen()
+  const { rows: comunas, computedAt, calculando } = await readComunasResumen()
+
+  // Si el resumen está obsoleto (o no existe todavía) se lanza el recálculo y
+  // NO se espera: la página se sirve al instante con lo que haya en la tabla.
+  if (resumenObsoleto(computedAt)) refreshComunasResumenEnSegundoPlano()
 
   const conDatos = comunas.filter((c) => c.roles > 0)
   const totalRoles = conDatos.reduce((s, c) => s + c.roles, 0)
@@ -164,6 +82,18 @@ export default async function ChilePage() {
         </div>
       }
     >
+      {/* Primer cálculo tras el deploy: la tabla precalculada aún está vacía.
+          Se avisa en vez de mostrar ceros silenciosos, que parecerían un fallo. */}
+      {calculando && (
+        <div className="mb-5 flex items-center gap-2 rounded-xl border border-amber-900/50 bg-amber-950/20 px-4 py-3 text-xs text-amber-300">
+          <Loader2 size={13} className="animate-spin flex-shrink-0" />
+          <span>
+            Calculando el desglose del catastro por comuna (primer cálculo tras el deploy, unos minutos sobre 9,6M de
+            roles). Recarga en un rato: los conteos aparecerán solos.
+          </span>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="rounded-xl border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
@@ -279,7 +209,10 @@ export default async function ChilePage() {
         <Globe size={12} className="text-slate-700" />
         <span>
           Casas/Deptos = destino SII habitacional (depto si la dirección lleva sufijo DP) · Edif./Cond. = conjuntos agrupados
-          por dirección · Sitios = eriazos (W) · Agrícolas = serie agrícola · Datos: catastral.cl S2-2025 · se recalcula cada hora
+          por dirección · Sitios = eriazos (W) · Agrícolas = serie agrícola · Datos: catastral.cl S2-2025
+          {computedAt
+            ? ` · desglose calculado el ${computedAt.toLocaleString('es-CL', { timeZone: 'America/Santiago' })}`
+            : ''}
         </span>
       </div>
     </PageShell>
