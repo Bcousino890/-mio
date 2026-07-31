@@ -51,7 +51,7 @@ import { pruneDuplicateJobsCl, prioritizeMissingDetailJobsCl, reenqueueStaleList
 import { runInternalCodeLinkCl } from './lib/link-internal-code-cl.mjs'
 import { runNivel2ClusteringCl } from './lib/clustering-cl.mjs'
 import { runStartupFixesCl, DEDUP_ADVISORY_LOCK_KEY } from './lib/maintenance-cl.mjs'
-import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
+import { discoverTarget, selectDueTargets, scanHeadTarget, selectHeadTargets } from './lib/discovery-portalinmobiliario-cl.mjs'
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
 import { getUfRateCl } from './lib/uf-rate-cl.mjs'
@@ -65,6 +65,8 @@ export const QUEUES = {
   BROKER_ENRICH: 'broker-enrich-cl',
   DISCOVERY: 'discovery-cl',
   DISCOVERY_SCHEDULER: 'discovery-scheduler-cl',
+  DISCOVERY_HEAD: 'discovery-head-cl',
+  DISCOVERY_HEAD_SCHEDULER: 'discovery-head-scheduler-cl',
   CORREDORA_WEB: 'corredora-web-crawl-cl',
   CORREDORA_WEB_SCHEDULER: 'corredora-web-scheduler-cl',
 }
@@ -246,6 +248,48 @@ export async function handleDiscoveryJob(dbClient, jobData, deps = {}) {
  * Job `discovery-scheduler-cl` (periódico): encola un discovery-cl por cada
  * comuna `enabled` cuya cadencia venció. `deps` inyectables para test.
  */
+/**
+ * Job `discovery-head-cl`: barrido de CABECERA de un objetivo (solo altas).
+ */
+export async function handleDiscoveryHeadJob(dbClient, data, deps = {}) {
+  const { scan = scanHeadTarget, enqueueDetail: enq = async () => {} } = deps
+  const res = await scan(dbClient, data.target, { enqueueDetail: enq })
+  if (res.enqueued > 0) {
+    console.log(`[altas] ${data.target.comuna_name} ${data.target.operation}: ${res.enqueued} nuevas en ${res.pages} pág.`)
+  }
+  return res
+}
+
+/** Hora de Chile continental para la ventana de publicación. */
+function horaChile(now = new Date()) {
+  return Number(new Intl.DateTimeFormat('es-CL', {
+    timeZone: 'America/Santiago', hour: 'numeric', hour12: false,
+  }).format(now))
+}
+
+// Ventana en la que las corredoras publican. Fuera de ella el barrido de
+// cabecera no corre: de madrugada no hay altas que descubrir y cada pasada
+// cuesta tráfico del proxy residencial, que se paga por GB.
+export const VENTANA_ALTAS = { desde: 8, hasta: 23 }
+
+/**
+ * Job `discovery-head-scheduler-cl`: cada 30 min dentro de la ventana horaria
+ * chilena, encola un barrido de cabecera por objetivo activo.
+ *
+ * No mira `interval_hours` — esa columna gobierna el barrido COMPLETO (bajas),
+ * que es otra cadencia y otro coste.
+ */
+export async function handleDiscoveryHeadSchedulerJob(dbClient, deps = {}) {
+  const { select = selectHeadTargets, enqueueHead = async () => {}, now = () => new Date() } = deps
+  const h = horaChile(now())
+  if (h < VENTANA_ALTAS.desde || h >= VENTANA_ALTAS.hasta) {
+    return { enqueued: 0, skipped: `fuera de ventana (${h}h Chile)` }
+  }
+  const targets = await select(dbClient)
+  for (const target of targets) await enqueueHead(target)
+  return { enqueued: targets.length }
+}
+
 export async function handleDiscoverySchedulerJob(dbClient, deps = {}) {
   const { select = selectDueTargets, enqueueDiscovery = async () => {} } = deps
   const targets = await select(dbClient)
@@ -401,6 +445,21 @@ async function main() {
     })
   })
   await boss.schedule(QUEUES.DISCOVERY_SCHEDULER, '*/15 * * * *')
+
+  // Altas: barrido de cabecera cada 30 min. El scheduler corre siempre y es él
+  // quien decide si está dentro de la ventana horaria chilena — así la ventana
+  // se cambia sin tocar el cron ni depender de la zona horaria del contenedor.
+  await boss.work(QUEUES.DISCOVERY_HEAD, async (jobs) => {
+    for (const job of jobs) {
+      await handleDiscoveryHeadJob(dbClient, job.data, { enqueueDetail: enqueueDetail })
+    }
+  })
+  await boss.work(QUEUES.DISCOVERY_HEAD_SCHEDULER, async () => {
+    await handleDiscoveryHeadSchedulerJob(dbClient, {
+      enqueueHead: (target) => boss.send(QUEUES.DISCOVERY_HEAD, { target }),
+    })
+  })
+  await boss.schedule(QUEUES.DISCOVERY_HEAD_SCHEDULER, '*/30 * * * *')
 
   // Webs propias de corredoras (H21): el scheduler lee corredora_web_targets_cl
   // y encola un crawl por web `enabled` vencida (cadencia suave, 24h por defecto).

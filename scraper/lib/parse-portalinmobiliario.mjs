@@ -73,7 +73,11 @@ const NAMED = {
 // replica el mismo criterio directo-primero + proxy-fallback ya validado para
 // la ficha principal.
 async function fetchGalleryHtml(url, { forceProxy = false } = {}) {
-  if (forceProxy) {
+  // El modal de galería sigue la MISMA política que la ficha: siempre por
+  // proxy, para no enseñarle al portal la IP del VPS (ver PI_SOLO_PROXY en
+  // fetch.mjs). Sin esto, cada ficha hacía una petición directa aquí y el
+  // esfuerzo de esconder la IP en la ficha principal no servía de nada.
+  if (forceProxy || process.env.PI_SOLO_PROXY !== '0') {
     const only = await fetchHtml(url, { useProxy: true, profile: 'portalinmobiliario' })
     return only.ok ? only.html : null
   }
