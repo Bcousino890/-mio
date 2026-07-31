@@ -9,7 +9,7 @@ import {
   dealernetRetcodeMessage,
   dedupePhones,
 } from '@/lib/dealernet'
-import { getCachedContactByRut, logDealernetQuery } from '@/lib/dealernet-cache'
+import { getCachedContactByRut, logDealernetQuery, toRelacionadoJson } from '@/lib/dealernet-cache'
 
 const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
 
@@ -292,7 +292,8 @@ export async function GET(request: NextRequest) {
       phones: phonesRes.rows,
       addresses: addressesRes.rows,
       emails: emailsRes.rows,
-      relacionados: relacionadosRes.rows,
+      // rut_num/rut_dv (columnas) → rut/dv (lo que lee la ficha).
+      relacionados: relacionadosRes.rows.map(toRelacionadoJson),
     })
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 })
