@@ -4,6 +4,7 @@ import { fetchListingPage } from '@/lib/captar-pipeline'
 import { parsePortalListingDetail, photoIdKey } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
 import { getUfRateCl } from '@/lib/uf-rate-cl'
+import { refreshPropertyClAggregates } from '@/lib/dedup-cl'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/chile/listings-cl/refetch — body: { id: <listings_cl.id> }
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, source_url FROM listings_cl WHERE id = $1`,
+      `SELECT id, source_url, property_cl_id FROM listings_cl WHERE id = $1`,
       [id],
     )
     const listing = rows[0]
@@ -105,6 +106,16 @@ export async function POST(request: NextRequest) {
         detail.latitude, detail.longitude,
       ],
     )
+
+    // La ficha del inmueble (property_cl) NO lee el aviso: lee sus agregados
+    // (precio canónico, m², dormitorios, comuna, fechas). Sin rehacerlos aquí,
+    // "Re-scrapear" actualizaba listings_cl y la ficha seguía exactamente igual
+    // hasta que pasara el dedup del worker — que es como no hacer nada.
+    if (listing.property_cl_id) {
+      await refreshPropertyClAggregates(pool, listing.property_cl_id).catch(() => {
+        // El aviso ya quedó al día; que fallen los agregados no invalida eso.
+      })
+    }
 
     return NextResponse.json({ success: true, data: updated[0] })
   } catch (error) {

@@ -19,6 +19,7 @@ import {
   Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
   Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
+import { toLatLng } from '@/lib/coords'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 import { DuenosRolPicker, type RutCandidato } from '@/components/chile/DuenosRolPicker'
 import { corredoraColor } from '@/lib/corredora-pin-colors'
@@ -165,7 +166,7 @@ export function marketTime(days: number | null): string {
 
 // Rango de precios entre corredoras (el insight de "en canje").
 export function priceSpread(p: Property) {
-  const prices = p.listings.map(l => l.price).filter((x): x is number => x != null && x > 0)
+  const prices = (p.listings ?? []).map(l => l.price).filter((x): x is number => x != null && x > 0)
   if (prices.length === 0) return null
   const min = Math.min(...prices), max = Math.max(...prices)
   return { min, max, spread: max - min, spreadPct: min > 0 ? (max - min) / min : 0, count: prices.length }
@@ -209,12 +210,23 @@ export function CorredoraThumb({ src }: { src?: string }) {
 export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   p: Property; onClose: () => void; onRefetched: (p: Property) => void; onSplit: (message: string) => void
 }) {
-  const sortedListings = useMemo(() => [...p.listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [p])
+  // `listings` siempre debería llegar como array (el API lo garantiza con un
+  // COALESCE a '[]'), pero la ficha se queda en blanco antes que tumbar la app
+  // si algún día no lo hace.
+  const listings = useMemo(() => (Array.isArray(p.listings) ? p.listings : []), [p.listings])
+  const sortedListings = useMemo(() => [...listings].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)), [listings])
   const cheapest = sortedListings.find(l => l.price != null)?.listing_id
   // Aviso cuya ubicación declarada se muestra/corrige en el mapa de la ficha
   // (el primero de los listings con lat/lng) — su source_url es el que se
   // manda al guardar el pin manual, para poder crear/actualizar la captación.
-  const geo = useMemo(() => p.listings.find(l => l.latitude != null && l.longitude != null), [p])
+  // `coords` normaliza el par: el resto de la ficha lo usa como números.
+  const geo = useMemo(() => {
+    for (const l of listings) {
+      const coords = toLatLng(l.latitude, l.longitude)
+      if (coords) return { ...l, coords }
+    }
+    return undefined
+  }, [listings])
 
   // Cada corredora trae su propio set de fotos del mismo inmueble — mezclarlas
   // en una sola galería confundía cuál foto era de qué aviso (y de paso hacía
@@ -253,10 +265,15 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // aparte del declarado por el anuncio, para comparar y corregir a mano
   // cuando el corredor lo puso mal. Se guarda en property_cl.manual_latitude/
   // longitude (0077) vía PATCH /api/chile/property-cl.
+  //
+  // Las coordenadas se fuerzan a número aunque el API ya las mande casteadas:
+  // son columnas `numeric` y el driver de Postgres las devuelve como string, así
+  // que un consumidor que se salte el cast dejaba `latitude` valiendo "-33.36" y
+  // el `.toFixed(5)` de más abajo reventaba el render — con él, TODA la app (la
+  // pantalla negra de "Application error"). Un dato mal tipado no puede volver a
+  // costar la aplicación entera.
   const [manualPin, setManualPin] = useState<{ latitude: number; longitude: number } | null>(
-    p.manual_latitude != null && p.manual_longitude != null
-      ? { latitude: p.manual_latitude, longitude: p.manual_longitude }
-      : null
+    () => toLatLng(p.manual_latitude, p.manual_longitude)
   )
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
@@ -369,6 +386,12 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   const captacionHref = liveCrm?.captacion_id
     ? `/chile/captacion?id=${liveCrm.captacion_id}`
     : p.captacion_id ? `/chile/captacion?id=${p.captacion_id}` : null
+  // Listas del CRM siempre como arrays: son columnas `jsonb` y basta con que una
+  // llegue con otra forma (null de JSON, un objeto suelto) para que el `.map` de
+  // más abajo tumbe el render — y con él la app entera.
+  const crmPhones = Array.isArray(liveCrm?.phones) ? liveCrm.phones : []
+  const crmCandidatos = Array.isArray(liveCrm?.owner_rut_candidates) ? liveCrm.owner_rut_candidates : []
+  const crmRelacionados = Array.isArray(liveCrm?.relacionados) ? liveCrm.relacionados : []
 
   // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
   // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
@@ -378,18 +401,19 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // las corredoras que comparten el punto, en vez de perder los nombres.
   const corredoraPins = useMemo(() => {
     const byCoord = new Map<string, { latitude: number; longitude: number; names: string[] }>()
-    for (const l of p.listings) {
-      if (l.latitude == null || l.longitude == null) continue
-      const key = `${l.latitude.toFixed(6)},${l.longitude.toFixed(6)}`
+    for (const l of listings) {
+      const coords = toLatLng(l.latitude, l.longitude)
+      if (!coords) continue
+      const key = `${coords.latitude.toFixed(6)},${coords.longitude.toFixed(6)}`
       const name = l.advertiser_name || 'Corredora'
       const hit = byCoord.get(key)
       if (hit) { if (!hit.names.includes(name)) hit.names.push(name) ; continue }
-      byCoord.set(key, { latitude: l.latitude, longitude: l.longitude, names: [name] })
+      byCoord.set(key, { ...coords, names: [name] })
     }
     return [...byCoord.values()].map(e => ({
       latitude: e.latitude, longitude: e.longitude, label: e.names.join(' · '),
     }))
-  }, [p.listings])
+  }, [listings])
 
   // Poner/mover el pin real (arrastre, clic en el mapa o en una parcela).
   const handleRealPinChange = useCallback((pos: { latitude: number; longitude: number }) => {
@@ -605,7 +629,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   const [splittingId, setSplittingId] = useState<string | null>(null)
   const [splitError, setSplitError] = useState<string | null>(null)
   const doSplit = useCallback(async (listingId: string) => {
-    if (p.listings.length < 2 || splittingId) return
+    if (listings.length < 2 || splittingId) return
     if (!window.confirm('¿Separar este aviso en una ficha propia? El aviso no se borra: pasa a ser una propiedad aparte y el dedup automático no volverá a unirlos.')) return
     setSplittingId(listingId)
     setSplitError(null)
@@ -625,7 +649,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     } finally {
       setSplittingId(null)
     }
-  }, [p.id, p.listings.length, splittingId, onRefetched, onSplit])
+  }, [p.id, listings.length, splittingId, onRefetched, onSplit])
 
   // Si la galería cambió (re-scrape con más/menos fotos) y el índice quedó fuera
   // de rango, volver a una foto válida en vez de apuntar a un hueco.
@@ -779,10 +803,10 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
             // "Ficha canónica": tomamos de los avisos el más completo para
             // descripción / dirección / características (todos son el mismo
             // inmueble; distintas corredoras traen textos distintos).
-            const withDesc = p.listings.filter(l => l.description)
-            const primary = withDesc.sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0))[0] ?? p.listings[0]
-            const address = p.listings.map(l => l.address).find(Boolean) ?? null
-            const feats = Array.from(new Set(p.listings.flatMap(l => l.features ?? [])))
+            const withDesc = listings.filter(l => l.description)
+            const primary = withDesc.sort((a, b) => (b.description?.length ?? 0) - (a.description?.length ?? 0))[0] ?? listings[0]
+            const address = listings.map(l => l.address).find(Boolean) ?? null
+            const feats = Array.from(new Set(listings.flatMap(l => l.features ?? [])))
             return (
               <>
                 {/* Ubicación */}
@@ -799,7 +823,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                           </button>
                         )}
                         {geo && !manualPin && (
-                          <button onClick={() => addManualPin(geo.latitude!, geo.longitude!)}
+                          <button onClick={() => addManualPin(geo.coords.latitude, geo.coords.longitude)}
                             className="text-xs text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
                             <Plus size={12} /> Agregar pin real
                           </button>
@@ -882,7 +906,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                           onClick={mapExpanded ? (e) => e.stopPropagation() : undefined}
                         >
                           <PropertyLocationMap
-                            latitude={geo.latitude!} longitude={geo.longitude!}
+                            latitude={geo.coords.latitude} longitude={geo.coords.longitude}
                             corredoraPins={corredoraPins}
                             realPin={manualPin}
                             onRealPinChange={handleRealPinChange}
@@ -920,12 +944,12 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">
                       {address && <div>{address}</div>}
-                      <div className="text-slate-500 text-xs mt-0.5">{p.comuna_name}{geo ? ` · ${geo.latitude!.toFixed(5)}, ${geo.longitude!.toFixed(5)}` : ''}</div>
+                      <div className="text-slate-500 text-xs mt-0.5">{p.comuna_name}{geo ? ` · ${geo.coords.latitude.toFixed(5)}, ${geo.coords.longitude.toFixed(5)}` : ''}</div>
                       {manualPin && (
                         <div className="text-emerald-400 text-xs mt-0.5">Pin corregido · {manualPin.latitude.toFixed(5)}, {manualPin.longitude.toFixed(5)}</div>
                       )}
                       {geo && (
-                        <a href={`https://www.google.com/maps/search/?api=1&query=${manualPin?.latitude ?? geo.latitude},${manualPin?.longitude ?? geo.longitude}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${manualPin?.latitude ?? geo.coords.latitude},${manualPin?.longitude ?? geo.coords.longitude}`} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
                       )}
                     </div>
@@ -993,9 +1017,9 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                     {shownCrm.owner_rut && <span className="text-slate-500 font-normal text-xs"> · {shownCrm.owner_rut}</span>}
                                   </div>
                                 )}
-                                {shownCrm.phones && shownCrm.phones.length > 0 ? (
+                                {crmPhones.length > 0 ? (
                                   <div className="space-y-1 mt-1.5">
-                                    {shownCrm.phones.map((ph, i) => (
+                                    {crmPhones.map((ph, i) => (
                                       <PhoneRow
                                         key={`${ph.numero}-${i}`}
                                         phone={{
@@ -1017,24 +1041,24 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                 {/* Dueños del rol: el actual es el que se
                                     consulta solo; los históricos y cualquier
                                     otro RUT, a un clic y a propósito. */}
-                                {shownCrm.owner_rut_candidates && shownCrm.owner_rut_candidates.length > 0 && (
+                                {crmCandidatos.length > 0 && (
                                   <div className="mt-2">
                                     <DuenosRolPicker
-                                      candidatos={shownCrm.owner_rut_candidates}
+                                      candidatos={crmCandidatos}
                                       ownerRut={shownCrm.owner_rut}
                                       busyRut={pidiendoRut}
                                       onPedirTelefonos={(rut) => pedirTelefonosDeRut(shownCrm.captacion_id, rut)}
                                     />
                                   </div>
                                 )}
-                                {shownCrm.relacionados && shownCrm.relacionados.length > 0 && (
+                                {crmRelacionados.length > 0 && (
                                   <div className="mt-2">
-                                    <RelacionadosTable relacionados={shownCrm.relacionados} />
+                                    <RelacionadosTable relacionados={crmRelacionados} />
                                   </div>
                                 )}
                                 {/* Reintentar las etapas lentas sin salir de la
                                     ficha: es donde se quiere el teléfono. */}
-                                {(!shownCrm.phones || shownCrm.phones.length === 0) && (
+                                {crmPhones.length === 0 && (
                                   <button onClick={() => runCaptacionPipeline(shownCrm.captacion_id)} disabled={captarStage != null}
                                     className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
                                     <RefreshCw size={13} className={captarStage ? 'animate-spin' : ''} />
@@ -1104,7 +1128,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                 </span>
               )}
             </div>
-            {p.listings.length > 1 && (
+            {listings.length > 1 && (
               <p className="text-[11px] text-slate-500 mb-2">
                 ¿Alguno no es esta propiedad? Sepáralo con <Unlink size={11} className="inline -mt-0.5" /> y queda como ficha propia.
               </p>
@@ -1142,7 +1166,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       <div className="flex items-center justify-between gap-2 mt-1.5">
                         <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.property_code && <> · cód. {l.property_code}</>}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
                         <div className="flex items-center gap-2 shrink-0">
-                          {p.listings.length > 1 && (
+                          {listings.length > 1 && (
                             <button onClick={() => doSplit(l.listing_id)} disabled={splittingId != null}
                               title="No es la misma propiedad: separar este aviso en una ficha propia"
                               className="text-[11px] text-slate-500 hover:text-rose-400 disabled:opacity-50 inline-flex items-center gap-1">

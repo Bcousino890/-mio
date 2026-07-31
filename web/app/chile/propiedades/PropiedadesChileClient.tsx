@@ -286,7 +286,7 @@ function StatTile({ icon, label, value, accent }: { icon: React.ReactNode; label
 }
 
 // ─── Página ─────────────────────────────────────────────────────────────────
-export default function PropiedadesChileClient() {
+export default function PropiedadesChileClient({ initialParams = {} }: { initialParams?: Record<string, string> }) {
   const [items, setItems] = useState<Property[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -407,11 +407,12 @@ export default function PropiedadesChileClient() {
     showToast(message)
   }, [showToast])
 
-  // Estado de filtros — hidratado desde la URL al montar (compartible/persistente).
-  const initial = useMemo(() => {
-    if (typeof window === 'undefined') return new URLSearchParams()
-    return new URLSearchParams(window.location.search)
-  }, [])
+  // Estado de filtros — sembrado con la query que ya leyó el servidor
+  // (compartible/persistente). Viene por props a propósito: leer
+  // `window.location.search` aquí hacía que el servidor pintara la página sin
+  // filtros y el navegador con ellos, y eso es un error de hidratación en cada
+  // carga de un enlace con filtros (ver page.tsx).
+  const initial = useMemo(() => new URLSearchParams(initialParams), [initialParams])
   const [page, setPage] = useState(Number(initial.get('page')) || 1)
   const [operation, setOperation] = useState(initial.get('op') || 'sale')
   const [comuna, setComuna] = useState(initial.get('comuna') || '')
