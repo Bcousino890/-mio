@@ -9,7 +9,7 @@
 // duplicado y fallaba SIEMPRE la caché de certificados de TGR.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeClRol } from '../rol-format'
+import { formatRolCl, normalizeClRol } from '../rol-format'
 
 test('quita los ceros a la izquierda de los dos tramos', () => {
   // El rol del catastro gráfico (cadastre_parcels_cl) vs. el de sii_roles_cl.
@@ -37,4 +37,42 @@ test('lo que no es "manzana-predio" numérico se devuelve intacto', () => {
 
 test('ignora los espacios de sobra', () => {
   assert.equal(normalizeClRol('  03810-00021  '), '3810-21')
+})
+
+// ── Formato OFICIAL: el que sale de casa ────────────────────────────────────
+// Normalizar la base fue lo correcto para PODER COMPARAR (ficha↔captación,
+// dirección del catastro, caché de TGR), pero el rol que se manda al CRM o se
+// enseña es el que imprime el SII: manzana y predio a cinco dígitos. Son dos
+// cosas distintas y confundirlas mandaba a SmartBC un rol que nadie reconoce.
+
+test('el rol oficial lleva los dos tramos a cinco dígitos', () => {
+  assert.equal(formatRolCl('3810-21'), '03810-00021')
+  assert.equal(formatRolCl('2452-14'), '02452-00014')
+  assert.equal(formatRolCl('795-198'), '00795-00198')
+})
+
+test('un rol ya oficial no cambia', () => {
+  assert.equal(formatRolCl('03810-00021'), '03810-00021')
+})
+
+test('normalizar y formatear son inversos el uno del otro', () => {
+  for (const rol of ['03810-00021', '02452-00014', '00795-00198']) {
+    assert.equal(formatRolCl(normalizeClRol(rol)), rol)
+  }
+})
+
+test('sin rol no se inventa nada', () => {
+  assert.equal(formatRolCl(null), null)
+  assert.equal(formatRolCl(undefined), null)
+  assert.equal(formatRolCl('   '), null)
+})
+
+test('un tramo más largo de cinco se manda entero, no recortado', () => {
+  // Recortarlo sería mandar OTRO rol.
+  assert.equal(formatRolCl('123456-7'), '123456-00007')
+})
+
+test('lo que no es "manzana-predio" numérico se manda tal cual', () => {
+  assert.equal(formatRolCl('13114-0700-0012'), '13114-0700-0012')
+  assert.equal(formatRolCl('sin rol'), 'sin rol')
 })

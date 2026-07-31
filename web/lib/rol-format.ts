@@ -1,18 +1,30 @@
 /**
- * Normaliza un Rol de Avalúo ya compuesto "manzana-predio" al mismo formato
- * que usa sii_roles_cl.rol (sin ceros a la izquierda, ej. "02452-00014" →
- * "2452-14"). Necesario porque el rol que llega de cadastre_parcels_cl (clic
- * en el mapa), de un deep-link compartido, o de la caja de búsqueda puede
- * traer el padding de ceros del origen y romper el match exacto contra
- * sii_roles_cl. Si el string no matchea "manzana-predio" numérico, se
- * devuelve tal cual (p. ej. rol_padre con formato "comuna-manzana-predio").
+ * Fachada tipada de `rol-format.mjs` — ahí está la implementación y la
+ * explicación de por qué hay dos formatos de Rol de Avalúo (canónico interno
+ * para comparar, oficial para mostrar y enviar fuera).
  *
- * Módulo sin dependencias de Node (fs/pg) a propósito: se importa tanto desde
- * componentes cliente (page.tsx) como desde API routes.
+ * La implementación vive en .mjs porque también la cargan los módulos de
+ * SmartBC, que son .mjs para que el CLI del scraper pueda importarlos desde el
+ * checkout (mismo motivo que web/lib/smartbc/). Una sola definición: si el
+ * formato cambia, cambia en un solo sitio.
  */
-export function normalizeClRol(raw: string): string {
-  const trimmed = raw.trim()
-  const parts = trimmed.split('-')
-  if (parts.length !== 2 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) return trimmed
-  return `${parseInt(parts[0], 10)}-${parseInt(parts[1], 10)}`
-}
+import { normalizeClRol as normalizeImpl, formatRolCl as formatImpl } from './rol-format.mjs'
+
+/**
+ * Formato CANÓNICO INTERNO, sin ceros a la izquierda ("02452-00014" →
+ * "2452-14"): el de `sii_roles_cl.rol` y el que usa toda la base desde la
+ * migración 0093. Es el que sirve para COMPARAR (ficha ↔ captación, dirección
+ * exacta del catastro, caché de certificados TGR).
+ *
+ * Lo que no sea "manzana-predio" numérico se devuelve tal cual.
+ */
+export const normalizeClRol: (raw: string) => string = normalizeImpl
+
+/**
+ * Formato OFICIAL, manzana y predio a cinco dígitos ("3810-21" →
+ * "03810-00021"): como lo imprime el SII y como sale en el certificado de la
+ * Tesorería. Es el que va a la vista y el que se manda fuera (CRM SmartBC).
+ *
+ * null si no hay rol; intacto si no es "manzana-predio" numérico.
+ */
+export const formatRolCl: (raw: string | null | undefined) => string | null = formatImpl
