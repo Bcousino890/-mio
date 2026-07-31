@@ -187,3 +187,28 @@ test('m²: el spec destacado abrevia los miles, se usa el valor escrito completo
   const p = await parseDetailPage(html, 'MLC-200', { fetchGallery: async () => [], fetchGalleryById: async () => [] });
   assert.equal(p.square_meters, 1505);
 });
+
+test('m²: una superficie imposible se descarta y se usa la siguiente que declara el anuncio', async () => {
+  // Verificado en MLC-1958761199, que publica las dos cosas a la vez:
+  //   "Superficie total": 1 m²    ← basura que puso el vendedor
+  //   "Superficie útil": 160 m²   ← la superficie real
+  // La precedencia se quedaba con el 1 por venir del campo con más prioridad,
+  // teniendo el dato bueno justo al lado. No se inventa nada: se ignora lo
+  // imposible y se usa la siguiente medida que el propio anuncio declara.
+  const html = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={};self.x=1</script></head>
+    <body><table><tbody>
+      <tr class="ui-vpp-striped-specs__row"><th>Superficie total</th><td>1 m²</td></tr>
+      <tr class="ui-vpp-striped-specs__row"><th>Superficie útil</th><td>160 m²</td></tr>
+    </tbody></table></body></html>`;
+  const p = await parseDetailPage(html, 'MLC-201', { fetchGallery: async () => [], fetchGalleryById: async () => [] });
+  assert.equal(p.square_meters, 160);
+});
+
+test('m²: si TODAS las superficies son imposibles, no se inventa ninguna', async () => {
+  const html = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={};self.x=1</script></head>
+    <body><table><tbody>
+      <tr class="ui-vpp-striped-specs__row"><th>Superficie total</th><td>1 m²</td></tr>
+    </tbody></table></body></html>`;
+  const p = await parseDetailPage(html, 'MLC-202', { fetchGallery: async () => [], fetchGalleryById: async () => [] });
+  assert.equal(p.square_meters, null);
+});

@@ -201,6 +201,12 @@ const toInt = (s) => {
 // decimales y se quitan los puntos antes de parsear. `toInt` (que solo elimina
 // puntos y espacios) convertía "232,33" en 232 pero "23.056" en 23056 — correcto
 // para ambos, pero aquí lo hacemos explícito para no depender de ese detalle.
+// Superficie mínima que puede tener un inmueble publicado. Por debajo de esto
+// el dato es basura (un "1" de un campo mal rellenado, o un valor abreviado mal
+// interpretado), nunca una casa ni un departamento.
+const MIN_SUPERFICIE_M2 = 10
+const creible = (n) => (n != null && n >= MIN_SUPERFICIE_M2 ? n : null)
+
 const toSqm = (s) => {
   if (!s) return null
   const m = String(s).match(/[\d.,]+/)
@@ -799,9 +805,19 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     const sqmEscritoM = html.match(/([\d.]+(?:,\d+)?)\s*m²\s*(?:totales|[úu]tiles|construidos)/i)
     const sqmEscrito = sqmEscritoM ? toSqm(sqmEscritoM[1]) : null
 
-    const sqm_terreno = sqmTerreno ?? sqmHighlightedTerreno ?? null
-    const sqm_construida = sqmConstruida ?? sqmTotal ?? sqmUtil ?? sqmEscrito ?? sqmHighlightedBuilt ?? null
-    const square_meters = sqmTotal ?? sqmConstruida ?? sqmUtil ?? sqmEscrito ?? sqmHighlightedBuilt ?? null
+    // Una superficie por debajo de MIN_SUPERFICIE_M2 no existe: se descarta y se
+    // pasa al siguiente candidato, en vez de aceptarla por venir del campo con
+    // más prioridad.
+    //
+    // Verificado en MLC-1958761199, que publica las dos cosas a la vez:
+    //     "Superficie total": 1 m²     ← basura que puso el vendedor
+    //     "Superficie útil": 160 m²    ← la superficie real
+    // La precedencia se quedaba con el 1 sin mirar si era creíble, teniendo el
+    // dato bueno al lado. No se inventa nada: solo se ignora lo imposible y se
+    // usa la siguiente medida que el propio anuncio declara.
+    const sqm_terreno = creible(sqmTerreno) ?? creible(sqmHighlightedTerreno) ?? null
+    const sqm_construida = creible(sqmConstruida) ?? creible(sqmTotal) ?? creible(sqmUtil) ?? creible(sqmEscrito) ?? creible(sqmHighlightedBuilt) ?? null
+    const square_meters = creible(sqmTotal) ?? creible(sqmConstruida) ?? creible(sqmUtil) ?? creible(sqmEscrito) ?? creible(sqmHighlightedBuilt) ?? null
 
     return {
       external_id,
