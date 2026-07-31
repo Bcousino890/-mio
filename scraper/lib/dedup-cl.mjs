@@ -381,8 +381,8 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
 
   for (const { advertiser_id } of pending.rows) {
     const { rows: family } = await client.query(
-      `SELECT id, corredora_id, advertiser_name, advertiser_logo, phone, comuna_id, is_active,
-              first_seen_at, last_seen_at, taken_down_at, property_cl_id
+      `SELECT id, corredora_id, advertiser_name, advertiser_logo, advertiser_store_slug, phone, comuna_id,
+              is_active, first_seen_at, last_seen_at, taken_down_at, property_cl_id
        FROM listings_cl WHERE advertiser_id = $1`,
       [advertiser_id]
     );
@@ -394,6 +394,13 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
     const latestLogoed = [...family]
       .filter((r) => r.advertiser_logo)
       .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1))[0];
+    // Slug de tienda oficial (H23): mismo criterio que el logo — se sabe desde
+    // cualquier anuncio ya scrapeado de la corredora, sin registro manual.
+    // Habilita el barrido de su inventario COMPLETO por tienda (RM entera),
+    // en vez de depender de qué comunas estén activadas en scrape_targets_cl.
+    const latestStoreSlug = [...family]
+      .filter((r) => r.advertiser_store_slug)
+      .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1))[0];
 
     let corredoraId = family.find((r) => r.corredora_id)?.corredora_id ?? null;
     if (!corredoraId) {
@@ -402,8 +409,8 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
         .filter((r) => r.advertiser_name)
         .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1))[0];
       const { rows: inserted } = await client.query(
-        `INSERT INTO corredoras_cl (advertiser_id, name_normalized, name_raw, logo_url, first_seen_at, last_seen_at)
-         VALUES ($1, $2, $2, $3, $4, $5)
+        `INSERT INTO corredoras_cl (advertiser_id, name_normalized, name_raw, logo_url, portal_store_slug, first_seen_at, last_seen_at)
+         VALUES ($1, $2, $2, $3, $4, $5, $6)
          ON CONFLICT (advertiser_id) WHERE advertiser_id IS NOT NULL
          DO UPDATE SET last_seen_at = GREATEST(corredoras_cl.last_seen_at, EXCLUDED.last_seen_at)
          RETURNING id`,
@@ -411,20 +418,29 @@ export async function runCorredoraConsolidationCl(client, options = {}) {
           advertiser_id,
           latestNamed?.advertiser_name ?? null,
           latestLogoed?.advertiser_logo ?? null,
+          latestStoreSlug?.advertiser_store_slug ?? null,
           family.reduce((min, r) => (r.first_seen_at < min ? r.first_seen_at : min), family[0].first_seen_at),
           family.reduce((max, r) => (r.last_seen_at > max ? r.last_seen_at : max), family[0].last_seen_at),
         ]
       );
       corredoraId = inserted[0].id;
       created++;
-    } else if (latestLogoed?.advertiser_logo) {
-      // Corredora ya existente (creada antes de que el logo se persistiera, o
-      // sin logo visto todavía): rellena solo si sigue en null — no pisa un
-      // logo ya guardado en cada corrida.
-      await client.query(
-        `UPDATE corredoras_cl SET logo_url = $2, updated_at = now() WHERE id = $1 AND logo_url IS NULL`,
-        [corredoraId, latestLogoed.advertiser_logo]
-      );
+    } else {
+      if (latestLogoed?.advertiser_logo) {
+        // Corredora ya existente (creada antes de que el logo se persistiera, o
+        // sin logo visto todavía): rellena solo si sigue en null — no pisa un
+        // logo ya guardado en cada corrida.
+        await client.query(
+          `UPDATE corredoras_cl SET logo_url = $2, updated_at = now() WHERE id = $1 AND logo_url IS NULL`,
+          [corredoraId, latestLogoed.advertiser_logo]
+        );
+      }
+      if (latestStoreSlug?.advertiser_store_slug) {
+        await client.query(
+          `UPDATE corredoras_cl SET portal_store_slug = $2, updated_at = now() WHERE id = $1 AND portal_store_slug IS NULL`,
+          [corredoraId, latestStoreSlug.advertiser_store_slug]
+        );
+      }
     }
 
     const listingIds = family.map((r) => r.id);

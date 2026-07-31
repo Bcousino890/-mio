@@ -341,6 +341,34 @@ Beneficios: **trazabilidad total**, **inventario oculto** (leads de captación) 
   lo existente, no solo a lo nuevo.
 - **Criterio de éxito antes de escalar de Las Condes al resto RM** (gate): ver §6.
 
+### H23 — Barrido de inventario COMPLETO por tienda oficial, no por comuna
+Hallazgo (2026-07-30): el barrido por comuna solo ve lo que `scrape_targets_cl`
+tiene `enabled` (hoy, solo Las Condes). Una corredora grande publica en TODA la
+RM — verificado en vivo, Property Partners declara **1.966** casas en su tienda
+oficial mientras `corredoras_cl` solo conocía ~1.000 (lo que cae dentro de Las
+Condes). Escalar comuna por comuna para cerrar ese hueco no hace falta: cada
+corredora YA declara su inventario completo en una URL propia del portal
+(`/tienda/<slug>/listado/inmuebles/<tipo>s/propiedades-usadas/rm-metropolitana`
+— verificado con HTML real de CyM Propiedades y Remax Diamante, mismo blob
+Nordic que ya entienden `parseListPage`/`parseListMeta`).
+
+`advertiser_store_slug` (0084) se descubre SOLO, sin registro manual (a
+diferencia de `web_propia_url`): sale del enlace "Ir a la tienda oficial de
+&lt;nombre&gt;" presente en cualquier ficha ya scrapeada de esa corredora, igual
+que ya pasa con `advertiser_logo` (0075). `runCorredoraConsolidationCl`
+(dedup-cl.mjs) lo propaga a `corredoras_cl.portal_store_slug` con el mismo
+criterio (más reciente no nulo).
+
+`discovery-corredora-tienda-cl.mjs` + `sweep-corredora-tienda-cl.mjs` barren
+esa tienda SIN tope artificial de páginas (solo el fin real de la paginación
+frena, con bisección de precio como red para tiendas por encima del tope de
+paginación del portal) — pero SÍ con la misma confirmación de cobertura contra
+el total declarado que ya usa el barrido general antes de autorizar bajas
+(lección de producción: las señales de fin de paginación solas no bastan,
+causaron bajas falsas). Corre aparte del barrido por comuna (runner manual/cron
+propio, no wireado aún al worker pg-boss); ambos alimentan `listings_cl` sin
+pisarse (dedup por `external_id`).
+
 ---
 
 ## 5. Piezas transversales de una "buena base"
