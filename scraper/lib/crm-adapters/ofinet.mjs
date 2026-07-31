@@ -48,17 +48,33 @@ export const pageSize = 9
 const STATUS = { sale: 'VE', rent: 'AR' }
 
 /**
+ * Vistas de listado de Ofinet. Cada instalación tiene UNA activa y la otra
+ * devuelve vacío, y cuál es no se puede saber sin probar:
+ *   · cympropiedades.cl → i_listing.asp          (4-column devuelve 24 bytes)
+ *   · bpropiedades.cl   → i_listing-4-column.asp (i_listing devuelve 0 fichas)
+ *
+ * Dar por muerta la vista 4-column porque estaba vacía en cympropiedades me
+ * llevó a concluir que bpropiedades "no publica inventario" cuando tiene 4
+ * páginas de casas. El crawler prueba las dos en la página 1 y se queda con la
+ * que responda (ver crawl-corredora-web-cl.mjs).
+ */
+export const listViews = ['i_listing.asp', 'i_listing-4-column.asp']
+
+/**
  * URL del listado. La página 1 lleva el juego completo de filtros (es la que
- * fija la búsqueda en la sesión); de la 2 en adelante basta Order+NumPag, que
- * es exactamente lo que hacen los enlaces del paginador del sitio.
+ * fija la búsqueda en la sesión); de la 2 en adelante basta NumPag, que es lo
+ * que heredan de la sesión los enlaces del paginador del sitio. `Order` lo
+ * añaden esos enlaces (ASC en una instalación, DESC en otra) pero es
+ * indiferente: verificado que NumPag a secas devuelve lo mismo en ambas.
  *
  * Pedir una página >1 sin haber pedido antes la 1 en la MISMA sesión devuelve
  * cero fichas — no es un fallo del adaptador sino cómo funciona el sitio.
  */
-export function listUrl(domain, { operation, page = 1, baseUrl } = {}) {
+export function listUrl(domain, { operation, page = 1, baseUrl, view } = {}) {
   const base = siteBase(domain, baseUrl)
+  const vista = listViews.includes(view) ? view : listViews[0]
   const n = Math.max(1, Number(page) || 1)
-  if (n > 1) return `${base}/i_listing.asp?Order=ASC&NumPag=${n}`
+  if (n > 1) return `${base}/${vista}?NumPag=${n}`
 
   const params = new URLSearchParams({
     dormitorios: '0',
@@ -67,12 +83,12 @@ export function listUrl(domain, { operation, page = 1, baseUrl } = {}) {
     'select-region': '-1',        // -1 = todas las regiones
     'select-location': '-1',      // -1 = todas las comunas
     rbEs: '0',
-    'min-price': '',
-    'max-price': '',
+    'min-price': '0',
+    'max-price': '0',
     condominio: '2',              // 2 = indiferente
     idPro: '0',
   })
-  return `${base}/i_listing.asp?${params.toString()}`
+  return `${base}/${vista}?${params.toString()}`
 }
 
 /** URL de la ficha. El idPro es el código interno de la corredora. */
@@ -159,22 +175,35 @@ function parseM2(text) {
  * después en el documento y son de OTRAS fichas.
  */
 function parsePriceAndOperation($) {
-  const priceText = clean($('.label.price').first().text())
-  const opText = clean($('.label.forrent').first().text())
+  let priceText = clean($('.label.price').first().text())
+  let opText = clean($('.label.forrent').first().text())
 
+  // Variante sin etiquetas (bpropiedades.cl): precio y operación van juntos en
+  // un <b> de texto corrido justo encima del título del inmueble —
+  // "UF 105.000,00 - $ 4.288.702.950 Venta"— sin ninguna clase que los marque.
+  // Sin este respaldo la ficha se guardaba sin precio Y sin operación.
+  if (!priceText) {
+    const linea = clean($('.pgl-detail .col-sm-8 p b, .pgl-detail p b').first().text())
+    if (linea) {
+      priceText = linea
+      if (!opText) opText = linea
+    }
+  }
+
+  // UF y CLP se buscan por separado, no en un if/else: esa variante publica los
+  // dos importes en la misma cadena y quedarse solo con uno tira la mitad del
+  // dato. En cympropiedades, que solo escribe UF, el CLP sale null igual.
   let priceUf = null
   let priceClp = null
-  if (/uf/i.test(priceText)) {
-    // "UF 17.500,00": punto = miles, coma = decimales (siempre ,00 en precios
-    // de propiedad, se descartan).
-    const m = priceText.match(/uf\s*([\d.]+)(?:,\d+)?/i)
-    const n = m ? Number(m[1].replace(/\./g, '')) : NaN
-    if (Number.isFinite(n) && n > 0) priceUf = n
-  } else {
-    const m = priceText.match(/\$\s*([\d.]+)/)
-    const n = m ? Number(m[1].replace(/\./g, '')) : NaN
-    if (Number.isFinite(n) && n > 0) priceClp = n
-  }
+  // "UF 105.000,00": punto = miles, coma = decimales (siempre ,00 en precios de
+  // propiedad, se descartan).
+  const mUf = priceText.match(/uf\s*([\d.]+)(?:,\d+)?/i)
+  const nUf = mUf ? Number(mUf[1].replace(/\./g, '')) : NaN
+  if (Number.isFinite(nUf) && nUf > 0) priceUf = nUf
+
+  const mClp = priceText.match(/\$\s*([\d.]+)/)
+  const nClp = mClp ? Number(mClp[1].replace(/\./g, '')) : NaN
+  if (Number.isFinite(nClp) && nClp > 0) priceClp = nClp
 
   let operation = null
   if (/arriend|arrend/i.test(opText)) operation = 'rent'

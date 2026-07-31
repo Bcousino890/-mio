@@ -125,18 +125,42 @@ async function crawlListado(adapter, { domain, baseUrl, operation, seen, limit, 
   // dejaría fuera el resto del inventario en arriendo.
   let huellaAnterior = null
 
+  // Algunas plataformas sirven el listado por varias vistas y solo UNA está
+  // activa en cada instalación (Ofinet: i_listing.asp en un dominio,
+  // i_listing-4-column.asp en otro), sin forma de saber cuál sin probar. Se
+  // prueban en la página 1 y se conserva la que responda para el resto de la
+  // paginación. Dar una por muerta porque estaba vacía en OTRO dominio de la
+  // misma plataforma es cómo bpropiedades.cl pasó por "no publica inventario"
+  // teniendo cuatro páginas de casas.
+  const vistas = Array.isArray(adapter.listViews) && adapter.listViews.length ? adapter.listViews : [undefined]
+  let vista = vistas[0]
+
   try {
     for (let page = 1; page <= maxPages; page++) {
-      const url = adapter.listUrl(domain, { operation, page, baseUrl })
-      // minLength 1: una página de listado vacía —el final normal del
-      // recorrido— son pocos bytes, y tratarla como respuesta corrupta
-      // convertía el final del barrido en un error del target.
-      const res = await fetchImpl(url, { useProxy: false, profile: 'corredora', cookieJar, minLength: 1 })
-      pages++
-      await sleepImpl(delayMs)
-      if (!res?.ok || !res.html) break
+      // Solo la primera página prueba vistas; a partir de ahí ya se sabe cuál va.
+      const candidatas = page === 1 ? vistas : [vista]
+      let res = null
+      let pageItems = []
+      let total = null
+      let lastPage = null
 
-      const { items: pageItems, total, lastPage } = adapter.parseList(res.html, { domain, baseUrl })
+      for (const v of candidatas) {
+        const url = adapter.listUrl(domain, { operation, page, baseUrl, view: v })
+        // minLength 1: una página de listado vacía —el final normal del
+        // recorrido— son pocos bytes, y tratarla como respuesta corrupta
+        // convertía el final del barrido en un error del target.
+        res = await fetchImpl(url, { useProxy: false, profile: 'corredora', cookieJar, minLength: 1 })
+        pages++
+        await sleepImpl(delayMs)
+        if (!res?.ok || !res.html) continue
+        ;({ items: pageItems, total, lastPage } = adapter.parseList(res.html, { domain, baseUrl }))
+        if (pageItems.length > 0) {
+          vista = v
+          break
+        }
+      }
+
+      if (!res?.ok || !res.html) break
       if (total != null) declaredTotal = total
 
       // Página sin fichas = fin del listado. Es el ÚNICO criterio válido en

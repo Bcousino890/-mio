@@ -440,18 +440,38 @@ test('Ofinet.listUrl: filtros completos en la página 1, solo NumPag después', 
   const p1 = ofinet.listUrl('cympropiedades.cl', { operation: 'sale' })
   assert.match(p1, /^https:\/\/www\.cympropiedades\.cl\/i_listing\.asp\?/)
   assert.match(p1, /select-status=VE/)
-  // i_listing-4-column.asp devuelve 24 bytes vacíos: no debe usarse.
-  assert.doesNotMatch(p1, /4-column/)
   // El juego completo es obligatorio; con un subconjunto el sitio responde vacío.
   for (const k of ['dormitorios', 'select-property-type', 'select-region', 'select-location', 'rbEs', 'condominio', 'idPro']) {
     assert.match(p1, new RegExp(`(\\?|&)${k}=`))
   }
   assert.match(ofinet.listUrl('cympropiedades.cl', { operation: 'rent' }), /select-status=AR/)
-  // La paginación va sin filtros: los hereda de la sesión de ASP.
+  // La paginación va sin filtros: los hereda de la sesión de ASP. `Order` lo
+  // añaden los enlaces del sitio (ASC en una instalación, DESC en otra) pero es
+  // indiferente — verificado que NumPag a secas devuelve lo mismo en las dos.
   assert.equal(
     ofinet.listUrl('cympropiedades.cl', { operation: 'sale', page: 5 }),
-    'https://www.cympropiedades.cl/i_listing.asp?Order=ASC&NumPag=5'
+    'https://www.cympropiedades.cl/i_listing.asp?NumPag=5'
   )
+})
+
+test('Ofinet declara sus DOS vistas de listado', () => {
+  // Cada instalación tiene una activa y la otra vacía, y cuál es no se sabe sin
+  // probar: cympropiedades.cl sirve por i_listing.asp y bpropiedades.cl por
+  // i_listing-4-column.asp. Dar la segunda por muerta —porque en
+  // cympropiedades devuelve 24 bytes— hizo pasar a bpropiedades por "no publica
+  // inventario" teniendo cuatro páginas de casas.
+  assert.deepEqual(ofinet.listViews, ['i_listing.asp', 'i_listing-4-column.asp'])
+  assert.match(
+    ofinet.listUrl('bpropiedades.cl', { operation: 'sale', view: 'i_listing-4-column.asp' }),
+    /\/i_listing-4-column\.asp\?/
+  )
+  // La paginación conserva la vista elegida.
+  assert.equal(
+    ofinet.listUrl('bpropiedades.cl', { operation: 'sale', page: 3, view: 'i_listing-4-column.asp' }),
+    'https://www.bpropiedades.cl/i_listing-4-column.asp?NumPag=3'
+  )
+  // Una vista desconocida cae a la primera, no genera una URL inválida.
+  assert.match(ofinet.listUrl('x.cl', { operation: 'sale', view: 'inventada.asp' }), /\/i_listing\.asp\?/)
 })
 
 test('Ofinet declara que necesita sesión', () => {
@@ -544,6 +564,59 @@ test('Ofinet.parseDetail extrae la ficha completa', () => {
   assert.equal(l.has_video, true)
   assert.equal(l.phone, '+56966616220')
   assert.equal(l.crm_platform, 'ofinet')
+})
+
+// bpropiedades.cl/property.asp?idPro=6673 — MISMA plataforma que cympropiedades
+// pero sin las etiquetas .label.price/.label.forrent: el precio y la operación
+// van juntos en un <b> de texto corrido encima del título, y publica los dos
+// importes (UF y CLP) en la misma cadena.
+const OFINET_FICHA_SIN_LABELS = `<html><head>
+  <meta property="og:title" content="PRECIOSA CASA GONZALO MARDONES, Lo Barnechea" />
+  </head><body>
+  <li><img src="Fotos/6673a.jpg"></li>
+  <div class="pgl-detail verlineacel"><div class="row">
+    <div class="col-sm-4"><ul class="list-unstyled amenities amenities-detail">
+      <li><strong>C&oacute;d.:</strong> 6673</li>
+      <li><strong>Tipo:</strong> Casa</li>
+      <li><strong>Sup.:</strong> 1.160<sup>m2</sup>/3.720<sup>m2</sup></li>
+      <li><address><i class="icons icon-location"></i> Lo Barnechea, SANTIAGO</address></li>
+      <li><i class="icons icon-bedroom"></i> 4 Dormitorios</li>
+      <li><i class="icons icon-bathroom"></i> 5 Ba&ntilde;os</li>
+    </ul></div>
+    <div class="col-sm-8">
+      <p style="font-family:arial;color:#000;"><b>UF 105.000,00 - $ 4.288.702.950&nbsp;Venta</b></p>
+      <h2 style="font-size:1.5em">PRECIOSA CASA GONZALO MARDONES - IMPECABLE - CONECTIVIDAD</h2>
+    </div>
+  </div></div>
+  <footer>Designed by Ofinet</footer></body></html>`
+
+test('Ofinet: precio y operación en texto corrido, sin etiquetas de clase', () => {
+  const l = ofinet.parseDetail(OFINET_FICHA_SIN_LABELS, {
+    url: 'https://www.bpropiedades.cl/property.asp?idPro=6673',
+    domain: 'bpropiedades.cl',
+  })
+  assert.ok(l)
+  assert.equal(l.seller_reference, '6673')
+  // Sin el respaldo al <b> la ficha se guardaba sin precio Y sin operación.
+  assert.equal(l.price_uf, 105000)
+  assert.equal(l.operation, 'sale')
+  assert.equal(l.bedrooms, 4)
+  assert.equal(l.bathrooms, 5)
+  assert.equal(l.square_meters, 1160)
+  assert.equal(l.comuna, 'Lo Barnechea')
+  assert.ok(l.features.includes('Terreno: 3720 m²'))
+})
+
+test('Ofinet: UF y CLP en la misma cadena se guardan los dos', () => {
+  const l = ofinet.parseDetail(OFINET_FICHA_SIN_LABELS, {
+    url: 'https://www.bpropiedades.cl/property.asp?idPro=6673',
+    domain: 'bpropiedades.cl',
+  })
+  // Buscarlos con un if/else tiraba la mitad del dato.
+  assert.equal(l.price_uf, 105000)
+  assert.equal(l.price, 4288702950)
+  // La moneda de publicación sigue siendo UF.
+  assert.equal(l.currency, 'UF')
 })
 
 test('Ofinet.parseDetail no se queda con las fotos del sidebar', () => {

@@ -86,13 +86,13 @@ UPDATE corredora_web_targets_cl
        updated_at = now()
  WHERE lower(domain) = 'cympropiedades.cl';
 
--- bpropiedades.cl responde 200 y su plataforma sigue siendo reconocible, pero su
--- buscador devuelve CERO fichas en venta, arriendo y agencias — hasta el
--- carrusel de destacadas viene con "property.asp?idPro=" vacío. No hay nada que
--- barrer ahí ahora mismo; se deja registrada y anotada para no volver a
--- investigar el "fallo" del adaptador la próxima vez que alguien lo mire.
+-- bpropiedades.cl sirve su listado por la OTRA vista de Ofinet
+-- (i_listing-4-column.asp). i_listing.asp, que es la que funciona en
+-- cympropiedades.cl, ahí devuelve cero fichas — y al revés. Cada instalación
+-- tiene una vista activa y la otra muerta, sin forma de saber cuál sin probar
+-- las dos: el adaptador prueba ambas en la primera página.
 UPDATE corredora_web_targets_cl
    SET base_url = COALESCE(base_url, 'https://www.bpropiedades.cl'),
-       notes = 'Ofinet. Verificado julio 2026: el sitio responde pero NO publica inventario (0 fichas en venta/arriendo/agencias).',
+       notes = 'Ofinet. Listado por i_listing-4-column.asp (i_listing.asp devuelve 0 aquí). Ficha property.asp?idPro=<cod>, con precio y operación en texto corrido sin etiquetas. 920 fichas en venta.',
        updated_at = now()
  WHERE lower(domain) = 'bpropiedades.cl';

@@ -13,41 +13,57 @@ Sitios analizados:
 
 | Dominio | Plataforma | Fichas publicadas | Listado | Ficha |
 |---|---|---|---|---|
-| cympropiedades.cl | Ofinet | **759** en venta (+1 arriendo) | HTML paginado, con sesión | `property.asp?idPro=N` |
+| cympropiedades.cl | Ofinet | **762** en venta (+1 arriendo) | HTML paginado, con sesión | `property.asp?idPro=N` |
+| bpropiedades.cl | Ofinet | **920** en venta | HTML paginado, con sesión (otra vista) | `property.asp?idPro=N` |
 | elbarrio.cl | Convecta | **668** (631 venta / 71 arriendo) | **JSON público** | `fichaPropiedad.aspx?i=N` |
 | magnoliaproperty.cl | Convecta | **1.116** (920 venta) | **JSON público** | `fichaPropiedad.aspx?i=N` |
 | keyproperties.com | Convecta | **597** (511 venta / 104 arriendo) | **JSON público** | `fichaPropiedad.aspx?i=N` |
 | ppartnersgroup.com | Konnect (propia) | **10.870** en Chile (9.753 venta / 1.117 arriendo) | **API JSON** | `/es-cl/propiedad/<slug>/<cod>/` |
 
-Total accesible: **~14.000 fichas**, todas con su código interno de corredora —
+Total accesible: **~15.000 fichas**, todas con su código interno de corredora —
 que es la clave con la que el Nivel 1.5 del dedup las engancha al anuncio de
 Portal Inmobiliario de la misma corredora, y con la que se detecta lo que solo
 está en su web.
 
 ---
 
-## 1. Ofinet — cympropiedades.cl
+## 1. Ofinet — cympropiedades.cl, bpropiedades.cl
 
 ASP clásico. Footer `Designed by Ofinet`. Tres hallazgos que condicionan el
 barrido:
 
-**1.1 · El listado no es el que se creía.** `i_listing-4-column.asp` devuelve
-**24 bytes vacíos** (esa vista está comentada en la plantilla). El que sirve
-datos es `i_listing.asp`, y exige el juego COMPLETO de parámetros: con un
-subconjunto responde vacío.
+**1.1 · Hay DOS vistas de listado y cada instalación usa una.** Ninguna es "la
+buena" de la plataforma:
+
+| Dominio | Vista activa | La otra |
+|---|---|---|
+| cympropiedades.cl | `i_listing.asp` | `i_listing-4-column.asp` → 24 bytes vacíos |
+| bpropiedades.cl | `i_listing-4-column.asp` | `i_listing.asp` → 0 fichas |
+
+No hay forma de saber cuál sin probar, así que el crawler prueba las dos en la
+primera página y se queda con la que responda.
+
+Esto me costó una conclusión falsa: al ver `i_listing-4-column.asp` vacío en
+cympropiedades la di por muerta **en toda la plataforma**, y con eso reporté que
+bpropiedades.cl "no publica inventario". Publica **920 fichas en venta**, en 77
+páginas. Generalizar el comportamiento de un dominio al resto de su plataforma
+es exactamente el error que esta investigación existía para no cometer.
+
+Sea cual sea la vista, exige el juego COMPLETO de parámetros: con un subconjunto
+responde vacío.
 
 ```
 /i_listing.asp?dormitorios=0&select-status=VE&select-property-type=-1
               &select-region=-1&select-location=-1&rbEs=0
-              &min-price=&max-price=&condominio=2&idPro=0
+              &min-price=0&max-price=0&condominio=2&idPro=0
 ```
 
 `select-status`: `VE` venta, `AR` arriendo.
 
 **1.2 · La paginación depende de la sesión.** El filtro se guarda en la sesión
-de ASP, no en la URL: las páginas siguientes son `i_listing.asp?Order=ASC&NumPag=N`
-a secas. Sin la cookie `ASPSESSIONID*` de la petición que fijó el filtro, la
-página 2 devuelve **cero fichas**. Comprobado:
+de ASP, no en la URL: las páginas siguientes son `<vista>?NumPag=N` a secas.
+Sin la cookie `ASPSESSIONID*` de la petición que fijó el filtro, la página 2
+devuelve **cero fichas**. Comprobado:
 
 ```
 p1 con cookie jar → 3243 3728 4428 4651 5421 5437 5452 5658 5836
@@ -58,8 +74,9 @@ p2 SIN cookie     → (vacío)
 **1.3 · El paginador miente (lo más caro de descubrir).** Es una **ventana
 deslizante**: en la página 1 solo enseña enlaces hasta la 4, en la 4 hasta la 7,
 en la 5 de la 2 a la 8. Creerle da **36 fichas**. Avanzando `NumPag` hasta que
-una página viene vacía, el listado termina en la **página 86** y son **759
+una página viene vacía, el listado termina en la **página 86** y son **762
 fichas en venta** — 21 veces más inventario del que declara su propio paginador.
+Lo mismo en bpropiedades.cl: 77 páginas, 920 fichas.
 
 El único criterio de parada válido aquí es la página vacía.
 
@@ -77,7 +94,7 @@ El único criterio de parada válido aquí es la página vacía.
 | Vídeo | iframe YouTube | sí |
 | Contacto | `.contacts-list` | +56966616220 |
 
-Dos trampas en la ficha:
+Tres trampas en la ficha:
 
 - La clase CSS es `forrent` **también para las ventas**. Manda el texto
   (`Venta` / `Arriendo`), no el nombre de la clase.
@@ -86,6 +103,12 @@ Dos trampas en la ficha:
   ficha, una propiedad de 17 fotos se guarda con 40, y las de más son de otras
   casas — justo el material con el que el dedup por imagen decide si dos
   anuncios son el mismo inmueble.
+- **Hay fichas sin esas etiquetas.** bpropiedades.cl escribe precio y operación
+  juntos en un `<b>` de texto corrido encima del título, sin ninguna clase que
+  los marque, y con los dos importes en la misma cadena:
+  `UF 105.000,00 - $ 4.288.702.950 Venta`. Sin ese respaldo la ficha se guardaba
+  sin precio y sin operación; y buscando UF **o** CLP con un `if/else` se tiraba
+  la mitad del dato.
 
 Sin coordenadas: el mapa de la ficha se resuelve por dirección.
 
@@ -290,7 +313,8 @@ sin proxy y con 4 s entre peticiones (H22). Con eso, un barrido completo es:
 | Dominio | Peticiones | Duración aprox. |
 |---|---|---|
 | ppartnersgroup.com | ~110 (solo listado) | ~7 min |
-| cympropiedades.cl | ~85 + 759 fichas | ~1 h |
+| cympropiedades.cl | ~85 + 762 fichas | ~1 h |
+| bpropiedades.cl | ~78 + 920 fichas | ~1,1 h |
 | magnoliaproperty.cl | ~60 + 1.116 fichas | ~1,3 h |
 | elbarrio.cl | ~40 + 668 fichas | ~50 min |
 | keyproperties.com | ~40 + 597 fichas | ~45 min |
@@ -348,29 +372,31 @@ Los tests también estaban construidos sobre fixturas inventadas y pasaban en
 verde mientras los parsers devolvían todo lo anterior. Los de ahora usan
 recortes literales del markup real de cada sitio.
 
-Cobertura: **180 tests** en la suite del scraper, más una auditoría contra los
-sitios en vivo — **96 fichas reales** (24 por dominio, muestreadas de páginas
-repartidas por todo el listado: 1, 3, 6, 11 y 17).
+Cobertura: **183 tests** en la suite del scraper, más una auditoría contra los
+sitios en vivo — **111 fichas reales** (24 por dominio en cuatro, 15 en
+bpropiedades), muestreadas de páginas repartidas por todo el listado.
 
-Resultado de la auditoría: **96/96 parseadas**, sin un solo hueco de código,
+Resultado de la auditoría: **111/111 parseadas**, sin un solo hueco de código,
 precio, comuna, fotos, tipo ni operación. Los únicos campos vacíos son 6 fichas
 sin superficie **porque el sitio no la publica** (verificado una a una: la tabla
 dice literalmente `Sup. útil: - m`, o directamente no trae el campo).
 
 Muestrear poco esconde fallos: con 6 fichas todo parecía correcto. Las 96
 destaparon tres defectos reales —etiquetas de superficie no cubiertas, fichas
-duales sin precio y `Terraza` confundible con la superficie construida— que ya
-están corregidos y con test de regresión.
+duales sin precio y `Terraza` confundible con la superficie construida—, y
+bpropiedades otros dos —la segunda vista de listado y el precio en texto corrido
+sin etiquetas—. Los cinco están corregidos y con test de regresión.
+
+Y muestrear **un solo dominio por plataforma** esconde otros: los dos peores
+fallos de toda esta investigación (dar por muerta la vista de listado que usa
+bpropiedades, y suponer que Convecta etiqueta igual las superficies en todas sus
+fichas) vinieron de generalizar lo visto en un dominio al resto de su
+plataforma.
 
 ---
 
 ## 8. Pendiente / limitaciones conocidas
 
-- **`bpropiedades.cl` no publica inventario.** Es una de las semillas de la
-  migración 0069 y responde 200 con la plataforma Ofinet reconocible, pero su
-  buscador devuelve **cero fichas** en venta, arriendo y agencias, y hasta su
-  carrusel de destacadas viene con `property.asp?idPro=` vacío. No es un fallo
-  del parser: no hay nada que barrer. Queda registrada y desactivada.
 - **Ofinet no da coordenadas.** Sus fichas resuelven el mapa por dirección, así
   que el cruce con catastro para cympropiedades.cl necesita geocodificar.
 - **El pipeline no se ha ejercitado contra una base real.** Los parsers y el
@@ -378,8 +404,8 @@ están corregidos y con test de regresión.
   cliente Postgres en memoria; falta una corrida con `DATABASE_URL` de verdad
   antes de activar ningún target.
 - **`maxDetails` está en 400 por corrida.** La primera pasada de los sitios
-  grandes (magnolia 1.116, cym 759) necesitará varias corridas o subirlo
-  puntualmente.
+  grandes (magnolia 1.116, bpropiedades 920, cym 762) necesitará varias corridas
+  o subirlo puntualmente.
 - **El total declarado se suma entre operaciones**, y una ficha publicada en
   venta y arriendo cuenta en las dos. Sirve para detectar que el barrido se
   quedó corto, no como cifra exacta del inventario.
