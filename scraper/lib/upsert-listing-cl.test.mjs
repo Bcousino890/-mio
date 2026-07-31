@@ -60,11 +60,25 @@ test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no re
   const client = makeClient();
   const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo/posted_days_ago
   assert.equal(res.changeType, 'new');
-  const idx = client.inserted.params.length;
-  assert.equal(client.inserted.params[idx - 4], false); // has_video
-  assert.equal(client.inserted.params[idx - 3], null); // video_modal_url
-  assert.equal(client.inserted.params[idx - 2], null); // advertiser_logo
-  assert.equal(client.inserted.params[idx - 1], null); // portal_first_seen_at
+  // Por posición absoluta ($N), no contando desde el final: añadir un campo
+  // nuevo al INSERT desplazaba el final y rompía este test sin que nada
+  // estuviera mal de verdad.
+  const param = (n) => client.inserted.params[n - 1];
+  assert.equal(param(31), false); // has_video
+  assert.equal(param(32), null); // video_modal_url
+  assert.equal(param(33), null); // advertiser_logo
+  assert.equal(param(34), null); // portal_first_seen_at
+});
+
+test('photos_total_count (el total que declara el portal) se persiste', async () => {
+  // Sin este número no se puede saber si a una ficha le faltan fotos: 3 fotos
+  // guardadas es correcto si el aviso tiene 3, y un fallo si tiene 24.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 24 });
+  assert.match(client.inserted.sql, /photos_total_count/);
+  assert.equal(client.inserted.params[34], 24); // $35
+  // Y al refrescar no se pisa con null un total que ya se conocía.
+  assert.match(client.inserted.sql, /photos_total_count = COALESCE\(EXCLUDED\.photos_total_count, listings_cl\.photos_total_count\)/);
 });
 
 test('advertiser_logo se persiste en el INSERT', async () => {
@@ -174,4 +188,85 @@ test('anuncio en UF sin price_uf previo (fila vieja) → no se inventa un cambio
   });
   const { changeType } = await upsertListingCl(client, UF_PARSED, { ufRate: 40844.79, ufRateDate: '2026-07-28' });
   assert.equal(changeType, null);
+});
+
+// ─── moneda no soportada ─────────────────────────────────────────────────────
+
+test('anuncio en una moneda que el esquema no acepta → se guarda igual, sin precio inventado', async () => {
+  // Regresión de producción. El parser copia `currency_id` del blob de Mercado
+  // Libre tal cual cuando no es "CLF" (= UF), así que un anuncio publicado en
+  // otra moneda llegaba al INSERT con un código que el CHECK de 0028 rechaza:
+  // la ficha NO se guardaba nunca y su job volvía a fallar en cada pasada.
+  // Visto en el panel de salud: 4 fichas con
+  // 'new row for relation "listings_cl" violates check constraint'.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' });
+
+  const sql = client.inserted.sql;
+  const param = (n) => client.inserted.params[n - 1]; // $N → params[N-1]
+  // La moneda que llega a la base es una de las dos que el CHECK permite.
+  assert.ok(['CLP', 'UF'].includes(param(13)));
+  // Y el importe NO se copia: 450.000 dólares no son 450.000 pesos.
+  assert.equal(param(9), null);  // price (CLP)
+  assert.equal(param(10), null); // price_uf
+  // Pero la ficha entra: es lo que se estaba perdiendo entera.
+  assert.match(sql, /INSERT INTO listings_cl/);
+  assert.ok(client.inserted.params.includes('Test Corredora'));
+});
+
+test('CLP y UF siguen pasando intactas', async () => {
+  const clp = makeClient();
+  await upsertListingCl(clp, { ...BASE_PARSED, price: 500_000_000, currency: 'CLP' });
+  assert.equal(clp.inserted.params[12], 'CLP'); // $13
+  assert.equal(clp.inserted.params[8], 500_000_000); // $9 price
+
+  const uf = makeClient();
+  await upsertListingCl(uf, { ...BASE_PARSED, price: 12_000, currency: 'UF' }, { ufRate: 40_000, ufRateDate: '2026-07-30' });
+  assert.equal(uf.inserted.params[12], 'UF');
+  assert.equal(uf.inserted.params[9], 12_000); // $10 price_uf
+  assert.equal(uf.inserted.params[8], 480_000_000); // $9 price = 12.000 × 40.000
+});
+
+// ─── una respuesta parcial del portal no puede borrar fotos ──────────────────
+
+test('un re-scrapeo que trae MENOS fotos no pisa las que ya había', async () => {
+  // Verificado en vivo sobre MLC-4014327318: teníamos 14 fotos guardadas y tres
+  // peticiones seguidas al modal de galería devolvieron 9. No es un error: es
+  // un 200 con menos fotos. Con `photos = EXCLUDED.photos` sin condiciones, el
+  // siguiente re-scrapeo habría dejado la ficha en 9 para siempre — y con la
+  // rotación pasando por todo el catálogo, le tocaría a cualquiera.
+  const guardadas = Array.from({ length: 14 }, (_, i) => `https://http2.mlstatic.com/D_NQ_NP_00001${i}-MLC90000${i}-F.webp`);
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: guardadas, description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const parciales = guardadas.slice(0, 9);
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, photos: parciales, photos_total_count: 29 });
+
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 14); // $25 = photos
+  assert.notEqual(changeType, 'updated'); // tampoco se registra un cambio que no hubo
+});
+
+test('si el vendedor borra fotos de verdad, el set nuevo SÍ entra', async () => {
+  // El portal declara ahora 2 y el scrapeo trae 2: encoge, pero está completo.
+  // Quedarse con las 5 viejas sería conservar URLs muertas.
+  const guardadas = Array.from({ length: 5 }, (_, i) => `https://http2.mlstatic.com/D_NQ_NP_00002${i}-MLC91000${i}-F.webp`);
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: guardadas, description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  await upsertListingCl(client, { ...BASE_PARSED, photos: guardadas.slice(0, 2), photos_total_count: 2 });
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 2);
+});
+
+test('una ficha nueva guarda lo que traiga, sin nada con qué comparar', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 3 });
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 3);
 });

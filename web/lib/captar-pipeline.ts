@@ -32,8 +32,10 @@ import {
   queryDealernetBuscadorMultiple,
   dealernetRetcodeMessage,
   computeRutDv,
+  dedupePhones,
   DEFAULT_DEALERNET_PRODUCTS,
   type DealernetCandidato,
+  type DealernetPhone,
 } from '@/lib/dealernet'
 // Caché compartida con las API routes de DealerNet (/api/chile/dealernet-buscar
 // y /api/chile/dealernet-lookup) — sin esto, este pipeline volvía a golpear el
@@ -488,6 +490,7 @@ export interface CaptacionRow {
   owner_rut_candidates: unknown
   phones: unknown
   emails: unknown
+  relacionados: unknown
   dealernet_consulted_at: string | null
   dealernet_error: string | null
   stage: string
@@ -784,7 +787,8 @@ export async function matchRol(captacionId: string): Promise<MatchStageResult> {
   )
 
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
-  return { captacion: rows[0] as CaptacionRow, decision, candidates: scored }
+  const captacion = await reuseSiblingCaptacionData(rows[0] as CaptacionRow)
+  return { captacion, decision, candidates: scored }
 }
 
 /**
@@ -875,7 +879,8 @@ export async function verifyVisual(captacionId: string, selectedPhotoUrls?: stri
     ],
   )
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
-  return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored, visual_usage: usage }
+  const captacion = await reuseSiblingCaptacionData(rows[0] as CaptacionRow)
+  return { captacion, decision, candidates: rescored, visual_usage: usage }
 }
 
 /**
@@ -961,7 +966,7 @@ export async function selectRolManual(
     [captacionId, siiRol, direccion, score, signals ? JSON.stringify(signals) : null, comuna, method],
   )
   await syncListingIdentity(rows[0] as CaptacionRow)
-  return rows[0] as CaptacionRow
+  return reuseSiblingCaptacionData(rows[0] as CaptacionRow)
 }
 
 // ─── Rol SII a partir de un punto (pin corregido a mano en la ficha) ────────
@@ -1078,19 +1083,30 @@ export async function findCrmCaptacionByRol(rol: string, siiComunaCode: string):
  * arrastrado a mano y cruzado contra el polígono catastral es evidencia más
  * directa que cualquier candidato de esa lista).
  */
-export async function setRolFromPin(captacionId: string, rol: string, siiComunaCode: string | null): Promise<CaptacionRow> {
+export async function setRolFromPin(
+  captacionId: string,
+  rol: string,
+  siiComunaCode: string | null,
+  // Dirección exacta que ya trajo resolveRolAtPoint (SII de la parcela bajo el
+  // pin) — sin esto la captación quedaba con sii_rol confirmado pero
+  // sii_direccion vacío para siempre, porque este es el ÚNICO camino de
+  // confirmación de rol que no la fijaba (matchRol/verifyVisual/selectRolManual
+  // sí la guardan).
+  direccion: string | null = null,
+): Promise<CaptacionRow> {
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
        sii_rol = $2,
+       sii_direccion = COALESCE($4, sii_direccion),
        sii_comuna_code = COALESCE($3, sii_comuna_code),
        match_confidence = 'manual', match_method = 'manual_pin', match_score = 1,
        stage = 'matched', needs_review = false, review_reason = NULL, updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [captacionId, rol, siiComunaCode],
+    [captacionId, rol, siiComunaCode, direccion],
   )
   if (!rows[0]) throw new Error('Captación no encontrada')
   await syncListingIdentity(rows[0] as CaptacionRow)
-  return rows[0] as CaptacionRow
+  return reuseSiblingCaptacionData(rows[0] as CaptacionRow)
 }
 
 /**
@@ -1171,6 +1187,50 @@ async function syncListingIdentity(c: CaptacionRow): Promise<void> {
     // 'exact'/'high' pueden no estar en el CHECK de location_confidence en
     // esquemas antiguos — el pipeline no debe morir por eso.
   }
+}
+
+/**
+ * Si esta captación acaba de confirmar un rol SII que OTRA captación ya
+ * resolvió (mismo predio, publicado por otra corredora o capturado desde otra
+ * URL — el dedup de anuncios no evita que cada aviso genere su propia
+ * captación), copia dueño + teléfonos de esa hermana en vez de dejar que TGR y
+ * DealerNet se vuelvan a consultar desde cero para el mismo RUT: son consultas
+ * pagas y el certificado/los teléfonos ya están.
+ *
+ * No hace daño llamarla siempre que se fija un rol: si esta captación ya tiene
+ * dueño, o no hay ninguna hermana con datos, no toca nada.
+ */
+async function reuseSiblingCaptacionData(c: CaptacionRow): Promise<CaptacionRow> {
+  if (c.owner_name || !c.sii_rol || !c.sii_comuna_code) return c
+  const { rows: siblings } = await pool.query(
+    `SELECT * FROM captaciones_cl
+      WHERE sii_rol = $1 AND sii_comuna_code = $2 AND id != $3 AND owner_name IS NOT NULL
+      ORDER BY (phones IS NOT NULL AND jsonb_array_length(phones) > 0) DESC, updated_at DESC
+      LIMIT 1`,
+    [c.sii_rol, c.sii_comuna_code, c.id],
+  )
+  const sibling = siblings[0] as CaptacionRow | undefined
+  if (!sibling) return c
+
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       owner_name = $2, owner_rut = $3, owner_rut_candidates = $4,
+       phones = $5, emails = $6, relacionados = $13,
+       tgr_status = $7, tgr_direccion = $8, tgr_consulted_at = $9, tgr_error = NULL,
+       dealernet_status = $10, dealernet_consulted_at = $11, dealernet_error = NULL,
+       match_verified = $12,
+       stage = CASE WHEN $10 = 'ok' THEN 'contact_found' ELSE stage END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [
+      c.id, sibling.owner_name, sibling.owner_rut, JSON.stringify(sibling.owner_rut_candidates ?? null),
+      JSON.stringify(sibling.phones ?? null), JSON.stringify(sibling.emails ?? null),
+      sibling.tgr_status, sibling.tgr_direccion, sibling.tgr_consulted_at,
+      sibling.dealernet_status, sibling.dealernet_consulted_at,
+      sibling.match_verified, JSON.stringify(sibling.relacionados ?? null),
+    ],
+  )
+  return (rows[0] as CaptacionRow) ?? c
 }
 
 // ─── Etapa 3: dueño vía TGR ──────────────────────────────────────────────────
@@ -1313,11 +1373,16 @@ function candidatoFullName(cand: DealernetCandidato): string {
   return [cand.nombres, cand.apellidos, cand.razonSocial].filter(Boolean).join(' ')
 }
 
+// Umbral de confianza cuando NO hay nombre TGR contra qué comparar: se usa la
+// propia señal de DealerNet (probabilidad "Alta" + similitud, 0-100 → 0-1) en
+// vez de nameSimilarity. Mismo corte que ya pinta verde en el panel manual de
+// /chile/duenos (DuenoLookup.tsx) para "Alta".
+const DEALERNET_OWN_CONFIDENCE_THRESHOLD = 0.8
+
 export async function lookupContactsDealernet(captacionId: string): Promise<DealernetStageResult> {
   const c = await getCaptacion(captacionId)
   if (!c) throw new Error('Captación no encontrada')
   if (!c.sii_rol || !c.sii_comuna_code) throw new Error('La captación aún no tiene rol confirmado')
-  if (!c.owner_name) throw new Error('Primero hay que obtener el nombre del dueño vía TGR')
 
   const comunaRes = await pool.query(
     `SELECT name FROM chile_comunas WHERE sii_comuna_code = $1 LIMIT 1`,
@@ -1325,12 +1390,16 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
   )
   const comunaNombre: string | null = comunaRes.rows[0]?.name ?? c.comuna_label
 
-  // Buscador Múltiple: por rol → por nombre → por dirección, hasta encontrar
-  // candidatos cuyo nombre calce con el dueño TGR.
+  // Buscador Múltiple: por rol (SIEMPRE, no depende de TGR) → por nombre (si
+  // ya hay dueño confirmado vía TGR) → por dirección SII (tampoco depende de
+  // TGR: sii_direccion se fija al resolver el rol, en la Etapa 2). TGR es
+  // lento (levanta Chromium, ~30-60s) y puede fallar — el rol solo casi
+  // siempre alcanza para identificar al titular sin esperarlo.
   const attempts: Array<{ tipo: 'rol' | 'nombre' | 'direccion'; args: string }> = []
   if (comunaNombre) attempts.push({ tipo: 'rol', args: `${c.sii_rol}, ${comunaNombre}` })
-  attempts.push({ tipo: 'nombre', args: c.owner_name })
+  if (c.owner_name) attempts.push({ tipo: 'nombre', args: c.owner_name })
   if (c.sii_direccion && comunaNombre) attempts.push({ tipo: 'direccion', args: `${c.sii_direccion}, ${comunaNombre}` })
+  if (attempts.length === 0) throw new Error('Sin rol, nombre ni dirección para buscar en DealerNet')
 
   let allCandidates: DealernetCandidato[] = []
   let lastError: string | null = null
@@ -1349,10 +1418,19 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
       await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: attempt.tipo, args: attempt.args, retcode: res.retcode, success: true, fromCache: !!cached, candidatosN: res.candidatos.length, source: 'captacion' })
       const withRut = res.candidatos.filter((x) => x.rut != null)
       allCandidates = allCandidates.concat(withRut)
+      // Con nombre TGR: comparar texto contra el dueño confirmado. Sin
+      // nombre: apoyarse en la confianza que la propia DealerNet le pone al
+      // candidato (probabilidad/similitud del Buscador Múltiple).
       const scored = withRut
-        .map((cand) => ({ cand, sim: nameSimilarity(c.owner_name, candidatoFullName(cand)) }))
+        .map((cand) => ({
+          cand,
+          sim: c.owner_name
+            ? nameSimilarity(c.owner_name, candidatoFullName(cand))
+            : (cand.probabilidad === 'Alta' ? (cand.similitud != null ? cand.similitud / 100 : 0.9) : 0),
+        }))
         .sort((a, b) => b.sim - a.sim)
-      if (scored[0] && scored[0].sim >= OWNER_NAME_MATCH_THRESHOLD) {
+      const threshold = c.owner_name ? OWNER_NAME_MATCH_THRESHOLD : DEALERNET_OWN_CONFIDENCE_THRESHOLD
+      if (scored[0] && scored[0].sim >= threshold) {
         const second = scored[1]
         // Si dos RUT distintos matchean igual de bien, es ambiguo
         if (!second || second.sim < scored[0].sim || second.cand.rut === scored[0].cand.rut) {
@@ -1366,6 +1444,9 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
   }
 
   if (!chosen) {
+    // Ambiguo o sin match: los candidatos igual quedan guardados
+    // (owner_rut_candidates) para elegir a mano desde /chile/captacion — nada
+    // de lo consultado se descarta aunque no se pudiera auto-confirmar.
     const status = allCandidates.length > 0 ? 'ambiguous' : 'not_found'
     const { rows } = await pool.query(
       `UPDATE captaciones_cl SET
@@ -1380,7 +1461,7 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
     return { captacion: rows[0], rut_candidates: allCandidates.slice(0, 15) }
   }
 
-  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates)
+  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates, candidatoFullName(chosen) || null)
 }
 
 /** Consulta final por RUT (productos de contactabilidad) y persistencia. */
@@ -1389,17 +1470,28 @@ export async function finishDealernetByRut(
   rutNum: number,
   rutDv: string,
   allCandidates: DealernetCandidato[] = [],
+  // Nombre del titular tal como lo trajo el Buscador Múltiple, usado como
+  // respaldo cuando TGR nunca corrió (o falló): sin esto, saltarse TGR dejaba
+  // owner_name en null aunque ya hubiera RUT y teléfonos guardados — la fila
+  // se veía "sin dueño" en /chile/captacion pese a estar contactable.
+  candidateNameHint: string | null = null,
 ): Promise<DealernetStageResult> {
   // Este mismo RUT puede ya estar guardado (ficha del rol en /chile/catastro,
   // /chile/dealer, u otra captación) — reusar evita pagar la consulta de nuevo.
   const cached = await getCachedContactByRut(rutNum, rutDv, DEFAULT_DEALERNET_PRODUCTS)
 
-  let phones: { phone_e164: string; clasificacion: string | null; categoria: string; ind_whatsapp: boolean | null; product_code: string; calidad: number | null }[]
+  let phones: DealernetPhone[]
   let emails: { email: string; categoria: string; product_code: string }[]
+  let relacionados: { rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }[]
+  // Nombre del titular según la propia consulta DealerNet — respaldo de
+  // owner_name cuando TGR no corrió.
+  let titularName: string | null = null
 
   if (cached) {
-    phones = cached.phones as any
+    phones = cached.phones
     emails = cached.emails as any
+    relacionados = cached.relacionados
+    titularName = (cached.contact as any).nombre_titular ?? null
     await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: cached.contact.retcode, success: true, fromCache: true, candidatosN: cached.phones.length, source: 'captacion' })
     if (c.sii_rol && c.sii_comuna_code && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
       await pool.query(
@@ -1455,23 +1547,45 @@ export async function finishDealernetByRut(
            phone.ind_whatsapp, phone.idimagen, phone.relacion, phone.ranking, phone.calidad, phone.product_code],
         )
       }
+      // Personas/empresas relacionadas con el titular (Cónyuge, Suegra,
+      // Empleador...) — es lo que le da nombre a la "Relación directa con X"
+      // de cada teléfono, que por sí sola solo trae el tipo de relación.
+      for (const rel of lookup.relacionados) {
+        await pool.query(
+          `INSERT INTO dealernet_relacionados_cl
+             (contact_id, rut_num, rut_dv, nombre, relacion, product_code)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (contact_id, COALESCE(rut_num, 0), COALESCE(nombre, ''), COALESCE(relacion, '')) DO UPDATE SET
+             rut_dv = COALESCE(EXCLUDED.rut_dv, dealernet_relacionados_cl.rut_dv)`,
+          [contactId, rel.rut, rel.dv, rel.nombre, rel.relacion, rel.product_code],
+        )
+      }
     } catch {
       // cache compartido es secundario — los teléfonos quedan igual en captaciones_cl
     }
 
     phones = lookup.phones
     emails = lookup.emails
+    relacionados = lookup.relacionados
+    titularName = lookup.nombreTitular
   }
 
-  const phonesJson = phones.map((p) => ({
+  // Mismo teléfono puede salir de varios productos (3407/3408/3410) — se
+  // deduplica igual que en la ficha Dealer (dealernet-lookup) para no repetir
+  // cada número una vez por producto que lo confirmó.
+  const phonesJson = dedupePhones(phones).map((p) => ({
     numero: p.phone_e164,
     tipo: p.clasificacion,
     categoria: p.categoria,
     whatsapp: p.ind_whatsapp,
     fuente: p.product_code,
     calidad: p.calidad,
+    idimagen: p.idimagen,
+    relacion: p.relacion,
+    ranking: p.ranking,
   }))
   const emailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
+  const relacionadosJson = relacionados.map((r) => ({ rut: r.rut, dv: r.dv, nombre: r.nombre, relacion: r.relacion }))
 
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
@@ -1480,13 +1594,20 @@ export async function finishDealernetByRut(
        owner_rut_candidates = $3,
        phones = $4,
        emails = $5,
+       relacionados = $8,
        dealernet_error = NULL,
        dealernet_consulted_at = now(),
+       -- Si TGR nunca corrió (o falló), el nombre que trae la propia
+       -- DealerNet es mejor que dejar la fila "sin dueño" con RUT y
+       -- teléfonos ya confirmados. COALESCE: nunca pisa un nombre TGR ya
+       -- guardado (esa fuente documental sigue siendo la de mayor confianza).
+       owner_name = COALESCE(owner_name, $7),
        stage = CASE WHEN $6::int > 0 THEN 'contact_found' ELSE stage END,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [c.id, `${rutNum}-${rutDv}`, JSON.stringify(allCandidates.slice(0, 15)),
-     JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length],
+     JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length,
+     titularName ?? candidateNameHint, JSON.stringify(relacionadosJson)],
   )
   return { captacion: rows[0] as CaptacionRow }
 }

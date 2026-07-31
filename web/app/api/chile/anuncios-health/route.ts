@@ -221,7 +221,11 @@ export async function GET(request: Request) {
         `SELECT COALESCE(
                   CASE WHEN output->>'ok' = 'true' THEN 'ok:' || COALESCE(output->>'changeType', 'sin cambios')
                        WHEN output ? 'ok' THEN 'falló: ' || COALESCE(output->>'reason', '?')
-                       ELSE 'excepción: ' || left(COALESCE(output->>'message', output::text), 60) END,
+                       -- 60 caracteres cortaban el mensaje justo ANTES del dato
+                       -- que sirve: "violates check constraint" sin decir cuál.
+                       -- El agrupado sigue funcionando porque los mensajes de
+                       -- Postgres son estables para el mismo fallo.
+                       ELSE 'excepción: ' || left(COALESCE(output->>'message', output::text), 200) END,
                   'sin salida') AS outcome,
                 count(*)::int AS n
          FROM pgboss.job

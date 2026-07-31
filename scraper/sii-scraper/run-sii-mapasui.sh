@@ -159,7 +159,7 @@ PY
   echo "▶ Modo COLA — ${#COMUNA_CODES[@]} comuna(s): ${COMUNA_NOMBRES[*]}"
 fi
 
-# Estado en disco para el watchdog (watchdog-ingest-sii-mapasui.sh).
+# Estado en disco para el watchdog (watchdog-ingest.sh).
 cat > "$PARAMS_FILE" <<PARAMS
 SII_RPS=${SII_RPS}
 SII_CONCURRENCY=${SII_CONCURRENCY}
@@ -213,10 +213,10 @@ fi
 # crecimiento es seguro.
 #
 # El flock la serializa con el watchdog del cron del VPS
-# (watchdog-ingest-sii-mapasui.sh, cada 10 min): sin él, dos ingestas podían
+# (watchdog-ingest.sh, en el cron del VPS): sin él, dos ingestas podían
 # solaparse sobre la misma tabla. Acá
 # es -n (si el cron ya está ingestando, esta vuelta se salta: la siguiente
-# recoge igual lo que falte gracias al checkpoint de la migración 0084).
+# recoge igual lo que falte gracias al checkpoint de la migración 0089).
 SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"
 INGEST_LOCK="/tmp/casafari-ingest-sii-mapasui.lock"
 (

@@ -8,17 +8,22 @@
 //   node scraper/ingest-sii-mapasui.mjs --file sii-scraper/output/predios/vitacura.jsonl
 //   node scraper/ingest-sii-mapasui.mjs --dir ... --full   # ignora checkpoints
 //
-// La ingesta es INCREMENTAL: cada archivo recuerda en
-// `sii_mapasui_ingest_state_cl` (migración 0084) hasta qué byte se leyó, así
-// que una corrida normal solo procesa las líneas nuevas y tarda segundos. Con
-// --full se releen los archivos enteros (útil tras vaciar la tabla a mano).
+// La ingesta es INCREMENTAL en dos niveles, uno barato y otro fino:
+//   1. Atajo por mtime (solo --dir): si el .jsonl no cambió desde la última
+//      corrida, ni se abre la BD. Cubre la comuna ya terminada.
+//   2. Checkpoint por bytes en `sii_mapasui_ingest_state_cl` (migración 0089):
+//      cuando el archivo SÍ creció, se leen solo los bytes nuevos en vez del
+//      archivo entero. Esto es lo que hace barata la comuna en curso, que es
+//      justo la que el atajo por mtime nunca puede saltarse.
+// Con --full se ignoran ambos y se releen los archivos enteros (útil tras
+// vaciar la tabla a mano).
 //
 // Requiere haber corrido antes, dentro de scraper/sii-scraper/:
 //   python run.py manzanas --config config.json
 //   python run.py predios  --config config.json
 // (ver scraper/sii-scraper/README.md — incluye el aviso de procedencia/ToS)
 // ─────────────────────────────────────────────────────────────────────────────
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ingestMapasuiPrediosFile } from './lib/sii-mapasui-cl.mjs'
@@ -56,6 +61,24 @@ async function main() {
   let total = 0
   let fallos = 0
   for (const filePath of files) {
+    // Modo --dir (cron recurrente): si el archivo no cambió desde la última
+    // ingesta exitosa, saltarlo. Sin esto, un cron cada 30 min re-lee y
+    // re-hace UPSERT fila por fila del .jsonl completo de una comuna que ya
+    // terminó de scrapear hace tiempo, sin ningún dato nuevo que justifique
+    // los minutos que tarda (ver .sii-mapasui-complete). Modo --file (uso
+    // manual) siempre ingesta, sin este atajo.
+    // `--full` tiene que saltarse este atajo: se pide justo cuando la tabla se
+    // vació a mano, y ahí el archivo NO cambió pero sí hay que releerlo entero.
+    const marker = `${filePath}.mtime`
+    if (values.dir && !full) {
+      const { mtimeMs } = await stat(filePath)
+      const prevMtime = await readFile(marker, 'utf8').catch(() => null)
+      if (prevMtime && Number(prevMtime) === mtimeMs) {
+        console.log(`\n○ ${filePath} sin cambios desde la última ingesta — se omite.`)
+        continue
+      }
+    }
+
     console.log(`\n→ Ingestando ${filePath}...`)
     const result = await ingestMapasuiPrediosFile({ filePath, full })
     if (!result.ok) {
@@ -69,6 +92,10 @@ async function main() {
     } else {
       const invalidas = result.invalidas ? ` · ${result.invalidas} líneas ilegibles omitidas` : ''
       console.log(`  ✓ ${result.count} predios de ${result.lineas} líneas nuevas${invalidas}`)
+    }
+    if (values.dir) {
+      const { mtimeMs } = await stat(filePath)
+      await writeFile(marker, String(mtimeMs))
     }
   }
 

@@ -11,12 +11,12 @@ import { pool } from '@/lib/db'
  * Nota: a diferencia de TGR (que escribe rol por rol), esta tabla se llena por
  * LOTES — la ingesta incremental de run-sii-mapasui.sh corre cada
  * SII_INGEST_INTERVAL_SEC (default 600 s), y el watchdog del cron del VPS
- * (watchdog-ingest-sii-mapasui.sh, cada 10 min) la repasa aunque el scrape ya
+ * (watchdog-ingest.sh, cada 30 min) la repasa aunque el scrape ya
  * haya terminado.
  *
- * El latido sale de `sii_mapasui_ingest_state_cl` (migración 0084), NO del
+ * El latido sale de `sii_mapasui_ingest_state_cl` (migración 0089), NO del
  * updated_at de los predios. Dos razones:
- *   1. Desde 0084 la ingesta es incremental: si no hay líneas nuevas no se
+ *   1. Desde 0089 la ingesta es incremental: si no hay líneas nuevas no se
  *      reescribe ninguna fila, así que updated_at se quedaría congelado y el
  *      panel gritaría "estancado" con el pipeline perfectamente sano.
  *   2. Al revés, antes mentía en el otro sentido: el cron llevaba días
@@ -39,9 +39,9 @@ import { pool } from '@/lib/db'
  * La ventana era de 6 h mientras el respaldo vivía en un scheduled workflow de
  * GitHub: esos runs se descartan y retrasan tanto que se veían gaps reales de
  * ~3 h30 aun pidiéndolo cada 30 min, y había que tolerarlos para no dar falsas
- * alarmas. Con el watchdog en el cron del VPS (cada 10 min, sin jitter) ese
- * margen sobra: 2 h siguen siendo 12 vueltas perdidas antes de encender la
- * alarma, y una caída real se ve 4 h antes que hasta ahora.
+ * alarmas. Con el watchdog ya en el cron del VPS (cada 30 min, sin jitter)
+ * ese margen sobra: 2 h siguen siendo 4 vueltas seguidas perdidas antes de
+ * encender la alarma, y una caída real se ve 4 h antes que hasta ahora.
  */
 const VENTANA_INGESTANDO_SEG = 15 * 60
 const VENTANA_AL_DIA_SEG = 2 * 60 * 60
@@ -95,7 +95,7 @@ export async function GET() {
       `),
     ])
 
-    // Estado por archivo (0084). Tolerante a que la migración aún no esté
+    // Estado por archivo (0089). Tolerante a que la migración aún no esté
     // aplicada en este entorno: el panel sigue funcionando con el latido viejo.
     const archivosRes = await pool
       .query(`

@@ -6,7 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
-  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers, Wand2,
+  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers, Wand2, Hash,
 } from 'lucide-react'
 
 // La ficha (modal) y sus tipos/helpers viven en un módulo compartido: la misma
@@ -416,6 +416,11 @@ export default function PropiedadesChileClient() {
   const [operation, setOperation] = useState(initial.get('op') || 'sale')
   const [comuna, setComuna] = useState(initial.get('comuna') || '')
   const [searchInput, setSearchInput] = useState(initial.get('comuna') || '')
+  // Buscador por código o URL: código de propiedad ML, código interno de la
+  // corredora, código interno del CRM (ref_code, "PI-2607-00042") o URL del
+  // anuncio (MLC-id) pegada tal cual desde portalinmobiliario.com.
+  const [codeQuery, setCodeQuery] = useState(initial.get('q') || '')
+  const [codeInput, setCodeInput] = useState(initial.get('q') || '')
   const [priceMin, setPriceMin] = useState<number | null>(initial.get('pmin') ? Number(initial.get('pmin')) : null)
   const [priceMax, setPriceMax] = useState<number | null>(initial.get('pmax') ? Number(initial.get('pmax')) : null)
   const [sqmMin, setSqmMin] = useState<number | null>(initial.get('sqm') ? Number(initial.get('sqm')) : null)
@@ -458,6 +463,13 @@ export default function PropiedadesChileClient() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [searchInput])
 
+  const codeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (codeDebounceRef.current) clearTimeout(codeDebounceRef.current)
+    codeDebounceRef.current = setTimeout(() => { setCodeQuery(codeInput.trim()); setPage(1) }, 350)
+    return () => { if (codeDebounceRef.current) clearTimeout(codeDebounceRef.current) }
+  }, [codeInput])
+
   useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, sortBy, grouped])
 
   // Sincroniza el estado a la URL sin recargar (history.replaceState). Incluye
@@ -468,6 +480,7 @@ export default function PropiedadesChileClient() {
     const qs = new URLSearchParams()
     if (operation !== 'sale') qs.set('op', operation)
     if (comuna) qs.set('comuna', comuna)
+    if (codeQuery) qs.set('q', codeQuery)
     if (priceMin != null) qs.set('pmin', String(priceMin))
     if (priceMax != null) qs.set('pmax', String(priceMax))
     if (sqmMin != null) qs.set('sqm', String(sqmMin))
@@ -482,7 +495,7 @@ export default function PropiedadesChileClient() {
     if (selected) qs.set('p', selected.id)
     const s = qs.toString()
     window.history.replaceState(null, '', s ? `?${s}` : window.location.pathname)
-  }, [operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, sortBy, page, selected])
+  }, [operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, sortBy, page, selected])
 
   // Al montar: si la URL trae ?p=<id> (link compartido/bookmark de una ficha
   // específica), abre esa ficha directo — sin depender de que esté en la
@@ -502,6 +515,7 @@ export default function PropiedadesChileClient() {
     const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), sort: sortBy })
     if (operation !== 'all') params.append('operation', operation)
     if (comuna) params.append('comuna', comuna)
+    if (codeQuery) params.append('q', codeQuery)
     if (priceMin != null) params.append('price_min', String(priceMin))
     if (priceMax != null) params.append('price_max', String(priceMax))
     if (sqmMin != null) params.append('sqm_min', String(sqmMin))
@@ -515,18 +529,25 @@ export default function PropiedadesChileClient() {
     fetch(`/api/chile/property-cl?${params.toString()}`)
       .then(r => r.json())
       .then(d => {
-        if (d.success && Array.isArray(d.data)) { setItems(d.data); setTotal(d.total); setTotalPages(d.total_pages); setStats(d.stats ?? null) }
+        if (d.success && Array.isArray(d.data)) {
+          setItems(d.data); setTotal(d.total); setTotalPages(d.total_pages); setStats(d.stats ?? null)
+          // No estaba en la base: se scrapeó en vivo desde el portal (ver
+          // /api/chile/property-cl, bloque `q` sin resultados).
+          if (d.scraped) showToast('Propiedad no encontrada en la base — se trajo en vivo desde el portal')
+          else if (d.scrape_error) showToast(`No se pudo traer la propiedad del portal: ${d.scrape_error}`, false)
+        }
         else { setItems([]); setTotal(0); setTotalPages(1); setStats(null) }
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, reloadKey])
+  }, [page, sortBy, operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, reloadKey])
 
   const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0) + (onlyCaptadas ? 1 : 0) + (onlySmart ? 1 : 0)
   const clearAll = () => {
     setPriceMin(null); setPriceMax(null); setSqmMin(null); setBedroomsMin(null); setOnlyMulti(false); setOnlyConfirmed(false)
     setOnlyCaptadas(false); setOnlySmart(false)
     setComuna(''); setSearchInput('')
+    setCodeQuery(''); setCodeInput('')
   }
 
   return (
@@ -561,12 +582,19 @@ export default function PropiedadesChileClient() {
         </div>
 
         {/* Búsqueda + comuna chips */}
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex flex-wrap items-center gap-2 mb-2">
           <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input type="text" placeholder="Buscar por comuna…" value={searchInput} onChange={e => setSearchInput(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 pl-9 pr-8 py-2 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
             {searchInput && <button onClick={() => setSearchInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X size={14} /></button>}
+          </div>
+          <div className="relative w-64 shrink-0">
+            <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input type="text" placeholder="Código de propiedad o URL del portal…" value={codeInput} onChange={e => setCodeInput(e.target.value)}
+              title="Busca por código de propiedad, código interno de la corredora, código interno del CRM (PI-...) o pega la URL del anuncio en portalinmobiliario.com"
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 pl-9 pr-8 py-2 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
+            {codeInput && <button onClick={() => setCodeInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X size={14} /></button>}
           </div>
           <select value={operation} onChange={e => setOperation(e.target.value)} className="bg-slate-800 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-amber-500">
             <option value="all">Todas</option><option value="sale">Venta</option><option value="rent">Arriendo</option>

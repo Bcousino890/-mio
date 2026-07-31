@@ -100,12 +100,6 @@ fi
 echo "▶ [5/6] Aplicando migraciones SQL..."
 bash "$REPO_DIR/infra/post-deploy.sh" || true
 
-# Cron local del VPS (watchdog + ingesta de predios SII). Vivía en un scheduled
-# workflow de GitHub que solo servía de mando a distancia por SSH y facturaba
-# un runner cada media hora en un repo privado. `|| true`: un fallo instalando
-# el cron no debe revertir un deploy que ya sirve tráfico.
-bash "$REPO_DIR/infra/install-crons.sh" || true
-
 # Worker 24/7 de Anuncios CL (H2): se construye AQUÍ, en el VPS, a diferencia
 # de `app` — su Dockerfile es liviano (node:20-bookworm-slim + npm ci, sin
 # chromium/geopandas) y no arriesga el OOM que obligó a mover el build de la
@@ -116,6 +110,21 @@ bash "$REPO_DIR/infra/install-crons.sh" || true
 # deploy de la app (que ya sirve tráfico real).
 echo "▶ [6/6] Construyendo y levantando worker-cl (Anuncios CL)..."
 $COMPOSE build worker-cl && $COMPOSE up -d --no-deps worker-cl || echo "⚠ worker-cl no se pudo levantar (revisar logs: docker compose -p casafari logs worker-cl)"
+
+# Watchdog + ingesta de SII mapasui: antes era un workflow de GitHub Actions
+# con cron cada 30 min que entraba por SSH solo para correr esto mismo en el
+# VPS, gastando minutos de Actions de más. Ahora vive en el propio crontab
+# del servidor (scraper/sii-scraper/watchdog-ingest.sh) — idempotente: si ya
+# está instalado, no duplica la entrada.
+echo "▶ Asegurando watchdog+ingesta SII mapasui en el crontab del VPS..."
+chmod +x "$REPO_DIR/scraper/sii-scraper/watchdog-ingest.sh"
+mkdir -p "$REPO_DIR/scraper/output"
+if ! crontab -l 2>/dev/null | grep -q "sii-mapasui-watchdog"; then
+  (crontab -l 2>/dev/null; echo "*/30 * * * * cd $REPO_DIR && bash scraper/sii-scraper/watchdog-ingest.sh >> $REPO_DIR/scraper/output/watchdog-ingest-cron.log 2>&1 # casafari-mio:sii-mapasui-watchdog") | crontab -
+  echo "  ✅ Entrada de crontab instalada (cada 30 min)"
+else
+  echo "  ✅ Entrada de crontab ya existía"
+fi
 
 echo ""
 echo "✅ Deploy completado → https://$DOMAIN"

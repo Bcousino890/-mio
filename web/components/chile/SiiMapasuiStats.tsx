@@ -35,7 +35,7 @@ interface IngestaStatus {
 }
 
 // Estado por archivo JSONL del VPS (sii_mapasui_ingest_state_cl, migración
-// 0084). Es lo que responde "¿qué falta?": cuánto del output en disco ya está
+// 0089). Es lo que responde "¿qué falta?": cuánto del output en disco ya está
 // en la BD y si el último barrido quedó a medias.
 interface ArchivoRow {
   archivo: string
@@ -52,7 +52,7 @@ interface ArchivoRow {
 // Presentación de cada nivel del latido. `al_dia` (scrape en reposo, cron
 // horario al día) es un estado SANO y se pinta en calma, no como alarma.
 const NIVEL_UI: Record<NivelIngesta, { dot: string; pulse: boolean; label: string }> = {
-  ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lotes cada ~10 min)' },
+  ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lote reciente)' },
   al_dia: { dot: 'bg-emerald-500', pulse: false, label: 'Al día (scrape en reposo · datos completos)' },
   estancado: { dot: 'bg-amber-500', pulse: false, label: 'Sin ingesta reciente' },
   sin_datos: { dot: 'bg-slate-500', pulse: false, label: 'Sin datos todavía' },

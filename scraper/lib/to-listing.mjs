@@ -149,6 +149,12 @@ export function resolvePriceClp(row, ufRate) {
   if (row.price_uf != null && ufRate != null) return Math.round(row.price_uf * ufRate)
   if (row.price != null) {
     if (row.currency === 'UF') return ufRate != null ? Math.round(row.price * ufRate) : null
+    // Solo un importe que YA está en pesos puede copiarse tal cual. Antes se
+    // devolvía `row.price` para cualquier moneda distinta de UF, así que un
+    // anuncio publicado en dólares habría quedado guardado como si esos fueran
+    // pesos: una casa de USD 450.000 aparecería a $450.000 y envenenaría el
+    // precio/m², los filtros y el "precio de mercado" del cluster.
+    if (row.currency != null && row.currency !== 'CLP') return null
     return Math.round(row.price)
   }
   return null

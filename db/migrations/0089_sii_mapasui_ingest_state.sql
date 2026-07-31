@@ -1,8 +1,8 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0084 · Estado de la ingesta de predios mapasui (checkpoint por archivo)
+-- 0089 · Estado de la ingesta de predios mapasui (checkpoint por archivo)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- El cron de respaldo (ingest-sii-mapasui-now.yml, cada 30 min) y la ingesta
--- incremental de run-sii-mapasui.sh (cada 10 min) re-leían ENTERO cada
+-- incremental de run-sii-mapasui.sh re-leían ENTERO cada
 -- output/predios/*.jsonl y hacían un UPSERT por línea. Con Las Condes ya en
 -- 340k predios eso son 340k round-trips a Postgres por corrida: tardaba más de
 -- 5 minutos SIN escribir nada en el canal SSH, y el túnel se caía a la mitad

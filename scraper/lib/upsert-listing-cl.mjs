@@ -22,6 +22,57 @@ import { normalizeComuna } from './chile-comunas.mjs'
 import { resolvePriceClp, resolvePriceUf } from './to-listing.mjs'
 import { recordSnapshotCl } from './snapshot-cl.mjs'
 
+/**
+ * Monedas que `listings_cl.currency` acepta (CHECK de la migración 0028), que
+ * son también las únicas cuyo importe sabemos interpretar.
+ *
+ * El parser copia `currency_id` del blob de Mercado Libre tal cual cuando no es
+ * "CLF" (= UF), así que un anuncio publicado en otra moneda —el catálogo real
+ * trae unos pocos— llegaba aquí con un código que el CHECK rechaza: el INSERT
+ * lanzaba, la ficha no se guardaba NUNCA y su job volvía a fallar en cada
+ * pasada. Visto en producción: 4 fichas con
+ * 'new row for relation "listings_cl" violates check constraint'.
+ *
+ * Se normaliza a CLP para que la fila entre, pero SIN inventar el importe: el
+ * precio queda en null (ver resolvePriceClp en to-listing.mjs). Mejor un
+ * anuncio sin precio que uno con el número de otra moneda haciéndose pasar por
+ * pesos. El resto de la ficha —fotos, corredora, m², dirección— se guarda
+ * entero, que es lo que se estaba perdiendo.
+ */
+const MONEDAS_SOPORTADAS = new Set(['CLP', 'UF'])
+
+function normalizarMoneda(currency) {
+  return MONEDAS_SOPORTADAS.has(currency) ? currency : 'CLP'
+}
+
+/**
+ * Qué set de fotos se guarda: el recién bajado o el que ya había.
+ *
+ * El modal de galería del portal responde de forma inconsistente. Verificado en
+ * vivo sobre MLC-4014327318: teníamos 14 fotos guardadas y tres peticiones
+ * seguidas al modal devolvieron 9 — no un error, un 200 con menos fotos. Como
+ * el upsert hacía `photos = EXCLUDED.photos` sin condiciones, el siguiente
+ * re-scrapeo habría reemplazado 14 fotos buenas por 9. Y con la rotación
+ * pasando por todo el catálogo, eso ocurriría tarde o temprano en cualquier
+ * ficha: cada respuesta floja del portal borraba fotos para siempre.
+ *
+ * Se acepta el set nuevo si NO encoge, o si trae todas las que el portal
+ * declara ahora — ese segundo caso es el que permite reflejar que el vendedor
+ * borró fotos de verdad, en vez de quedarse con URLs muertas. Si encoge sin
+ * llegar al total declarado, es una respuesta parcial: se conserva lo que había.
+ */
+function fotosAGuardar(existing, parsed) {
+  const nuevas = parsed.photos ?? []
+  const guardadas = Array.isArray(existing?.photos) ? existing.photos : []
+  if (guardadas.length === 0) return nuevas
+  if (nuevas.length >= guardadas.length) return nuevas
+
+  const declaradas = parsed.photos_total_count
+  if (declaradas != null && nuevas.length >= declaradas) return nuevas
+
+  return guardadas
+}
+
 async function resolveComunaId(client, comunaRaw) {
   if (!comunaRaw) return { comunaId: null, localidad: null }
   const { comuna, localidad } = normalizeComuna(comunaRaw)
@@ -103,8 +154,14 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const existing = existingRows[0] ?? null
 
   const { comunaId, localidad } = await resolveComunaId(client, parsed.comuna)
+  // Ojo al orden: el precio se resuelve con la moneda TAL CUAL la publicó el
+  // anuncio, para que una moneda no soportada dé null en vez de colarse como
+  // pesos. La normalización a un valor que el CHECK acepte va después.
   const priceClp = resolvePriceClp(parsed, ufRate)
   const priceUf = resolvePriceUf(parsed)
+  const currency = normalizarMoneda(parsed.currency)
+  // Una respuesta parcial del modal de galería no puede borrar fotos buenas.
+  const photos = fotosAGuardar(existing, parsed)
 
   // Antigüedad REAL del aviso según el portal (parsed.posted_days_ago, desde el
   // subtitle de la ficha) — first_seen_at mide cuándo NOSOTROS lo vimos, que
@@ -116,9 +173,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const next = {
     price: priceClp,
     price_uf: priceUf,
-    currency: parsed.currency ?? null,
+    currency,
     advertiser_name: parsed.advertiser_name ?? null,
-    photos: parsed.photos ?? [],
+    photos,
     description: parsed.description ?? null,
     square_meters: parsed.square_meters ?? null,
     bedrooms: parsed.bedrooms ?? null,
@@ -133,15 +190,15 @@ export async function upsertListingCl(client, parsed, options = {}) {
     `INSERT INTO listings_cl (
        portal, source_type, external_id, source_url, operation, advertiser_type, advertiser_name, phone,
        price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
-       comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos,
+       comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos, photos_total_count,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
        portal_first_seen_at,
-       status, is_active, last_seen_at, updated_at
+       status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-       $18,$19,$20,$21,$22,$23,$24,$25,
+       $18,$19,$20,$21,$22,$23,$24,$25,$35,
        $26,$27,$28,$30,$31,$32,$33,$34,
-       'active', true, $29, now()
+       'active', true, $29, $29, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
        source_type = EXCLUDED.source_type, source_url = EXCLUDED.source_url,
@@ -153,6 +210,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
        property_type = EXCLUDED.property_type, comuna_id = EXCLUDED.comuna_id, comuna_raw = EXCLUDED.comuna_raw,
        localidad = EXCLUDED.localidad, address = EXCLUDED.address, latitude = EXCLUDED.latitude,
        longitude = EXCLUDED.longitude, description = EXCLUDED.description, photos = EXCLUDED.photos,
+       -- COALESCE: si esta pasada no pudo leer el total declarado, no se pisa
+       -- con null un valor bueno — sin él no se puede saber si faltan fotos.
+       photos_total_count = COALESCE(EXCLUDED.photos_total_count, listings_cl.photos_total_count),
        property_code = EXCLUDED.property_code, advertiser_id = EXCLUDED.advertiser_id,
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
        has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
@@ -160,20 +220,26 @@ export async function upsertListingCl(client, parsed, options = {}) {
        -- COALESCE: si esta pasada no pudo parsear "hace N días" (subtitle
        -- cambió de forma, o vino null), no se pisa un valor ya bueno con null.
        portal_first_seen_at = COALESCE(EXCLUDED.portal_first_seen_at, listings_cl.portal_first_seen_at),
+       -- Marca de que ESTA ficha se bajó y parseó entera con el parser actual.
+       -- Distinto de last_seen_at, que también lo mueve el barrido del listado:
+       -- es lo que permite rotar el re-scrapeo por antigüedad real de la ficha
+       -- sin repetir siempre las mismas (ver queue-maintenance-cl.mjs).
+       detail_parsed_at = EXCLUDED.detail_parsed_at,
        status = 'active', is_active = true, last_seen_at = EXCLUDED.last_seen_at, updated_at = now()
      RETURNING id`,
     [
       parsed.portal ?? 'portalinmobiliario', parsed.source_type ?? 'portal', parsed.external_id, parsed.source_url,
       parsed.operation ?? null, parsed.advertiser_type ?? 'unknown', parsed.advertiser_name ?? null, parsed.phone ?? null,
-      priceClp, priceUf, ufRate, ufRateDate, parsed.currency ?? 'CLP', parsed.bedrooms ?? null, parsed.bathrooms ?? null,
+      priceClp, priceUf, ufRate, ufRateDate, currency, parsed.bedrooms ?? null, parsed.bathrooms ?? null,
       parsed.square_meters ?? null, parsed.property_type ?? null,
       comunaId, parsed.comuna ?? null, localidad, parsed.address ?? null, parsed.latitude ?? null, parsed.longitude ?? null,
-      parsed.description ?? null, JSON.stringify(parsed.photos ?? []),
+      parsed.description ?? null, JSON.stringify(photos),
       parsed.property_code ?? null, parsed.advertiser_id ?? null, parsed.seller_reference ?? null,
       scrapedAt,
       JSON.stringify(parsed.features ?? []),
       parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
       portalFirstSeenAt,
+      parsed.photos_total_count ?? null,
     ]
   )
   const listingId = upserted[0].id

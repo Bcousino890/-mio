@@ -17,8 +17,9 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
-  Phone, Layers, Landmark, MessageCircle, BadgeCheck, AlertTriangle, Save,
+  Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
+import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
 
@@ -36,6 +37,7 @@ export type Listing = {
   // el dedup automático ya no lo reagrupa por su cuenta.
   manual_property_lock?: boolean
   seller_reference: string | null
+  property_code: string | null
   photos: string[]
   description: string | null
   address: string | null
@@ -85,7 +87,10 @@ export type Property = {
 }
 
 // Teléfono de contacto del dueño (DealerNet). Misma forma que captaciones_cl.phones.
-export type CrmPhone = { numero: string; tipo?: string; whatsapp?: boolean; fuente?: string; calidad?: number }
+export type CrmPhone = {
+  numero: string; tipo?: string | null; whatsapp?: boolean | null; fuente?: string; calidad?: number | null
+  categoria?: string; idimagen?: string | null; relacion?: string | null; ranking?: number | null
+}
 // El inmueble ya presente en el CRM de captación (captaciones_cl), resuelto por rol.
 export type CrmInfo = {
   captacion_id: string
@@ -93,6 +98,7 @@ export type CrmInfo = {
   owner_rut: string | null
   phones: CrmPhone[] | null
   emails: unknown
+  relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
   stage: string
   dealernet_status: string
   needs_review: boolean
@@ -250,6 +256,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   )
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
+  const { copiedKey: copiedPhoneKey, copy: copyPhone } = useCopy()
   // Feedback del rol SII resuelto bajo el pin + su guardado en captación
   // (best-effort, ver PATCH /api/chile/property-cl). `captacionId` habilita el
   // link a /chile/captacion?id=<id> para abrir esa captación puntual.
@@ -369,38 +376,57 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     setManualPinDirty(true)
   }, [])
 
-  // ── Etapas 3 y 4 del pipeline: dueño (TGR) y teléfonos (DealerNet) ─────────
+  // ── Etapas 3 y 4 del pipeline: teléfonos (DealerNet) y dueño (TGR) ─────────
   // Guardar la ubicación dejaba la captación en 'matched' (rol resuelto) y ahí
   // se detenía: había que ir a /chile/captacion y pulsar "Continuar" dos veces
   // para ver dueño y teléfonos. Como desde la ficha lo que se quiere es LLAMAR,
   // aquí se encadenan solas y el resultado vuelve a la misma ficha.
+  //
+  // DealerNet va PRIMERO: busca por rol vía Buscador Múltiple sin necesitar el
+  // nombre de TGR (lookupContactsDealernet ya no lo exige), así que llega a
+  // los teléfonos directo. TGR va después y es opcional — solo suma la
+  // confirmación documental del dueño; si falla o tarda (levanta Chromium,
+  // ~30-60s) no bloquea los teléfonos que ya se guardaron arriba.
   const [captarStage, setCaptarStage] = useState<null | 'tgr' | 'dealernet'>(null)
   const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   const runCaptacionPipeline = useCallback(async (captacionId: string) => {
     setCaptarMsg(null)
     const notes: string[] = []
+
+    setCaptarStage('dealernet')
+    const dn = await fetch(`/api/chile/captar/${captacionId}/dealernet`, { method: 'POST' })
+      .then(r => r.json()).catch(() => null)
+    if (dn && dn.success === false) notes.push(`Teléfonos (DealerNet): ${dn.error ?? 'sin resultado'}`)
+
+    // Los teléfonos, si llegaron, ya quedaron guardados: reflejarlos de una en
+    // vez de esperar a TGR (que es lento y no afecta este resultado).
+    let fresh = await refreshProperty()
+    let crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    let phones = crm?.phones?.length ?? 0
+    setCaptarMsg(
+      phones > 0
+        ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
+        : { ok: false, text: notes.join(' · ') || 'Sin teléfonos todavía — reintenta desde la captación' },
+    )
+
+    // TGR después, en segundo plano: documenta al dueño con la fuente oficial
+    // cuando DealerNet no trajo nombre o quedó ambiguo. Best-effort — un fallo
+    // aquí no debe tapar el resultado de arriba.
     try {
-      // TGR levanta Chromium: es la etapa lenta (~30-60 s), por eso se avisa.
       setCaptarStage('tgr')
       const tgr = await fetch(`/api/chile/captar/${captacionId}/tgr`, { method: 'POST' })
         .then(r => r.json()).catch(() => null)
-      if (tgr && tgr.success === false) notes.push(`Dueño (TGR): ${tgr.error ?? 'no se pudo obtener'}`)
-
-      // DealerNet busca por rol/nombre/dirección, así que se intenta aunque TGR
-      // no haya dado nombre — a veces igual devuelve el RUT y los teléfonos.
-      setCaptarStage('dealernet')
-      const dn = await fetch(`/api/chile/captar/${captacionId}/dealernet`, { method: 'POST' })
-        .then(r => r.json()).catch(() => null)
-      if (dn && dn.success === false) notes.push(`Teléfonos (DealerNet): ${dn.error ?? 'sin resultado'}`)
+      if (tgr && tgr.success === false) notes.push(`Dueño (TGR, opcional): ${tgr.error ?? 'no se pudo obtener'}`)
     } finally {
       setCaptarStage(null)
     }
 
-    // Traer la ficha ya enriquecida (dueño + teléfonos) y propagarla a la grilla.
-    const fresh = await refreshProperty()
-    if (fresh?.crm) setResolved(prev => (prev ? { ...prev, crm: fresh.crm ?? null } : prev))
-    const phones = (fresh?.crm?.phones?.length ?? 0)
+    fresh = await refreshProperty()
+    crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    phones = crm?.phones?.length ?? phones
     setCaptarMsg(
       phones > 0
         ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
@@ -872,17 +898,30 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 )}
                                 {shownCrm.phones && shownCrm.phones.length > 0 ? (
-                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                  <div className="space-y-1 mt-1.5">
                                     {shownCrm.phones.map((ph, i) => (
-                                      <span key={i} className="inline-flex items-center gap-1.5 text-xs bg-slate-800 border border-slate-600/50 rounded-full pl-2 pr-2 py-0.5">
-                                        <a href={`tel:${ph.numero.replace(/[^\d+]/g, '')}`} className="font-mono text-slate-100 hover:text-emerald-300 inline-flex items-center gap-1"><Phone size={11} /> {ph.numero}</a>
-                                        {ph.whatsapp && <a href={`https://wa.me/${ph.numero.replace(/[^\d]/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300" title="WhatsApp"><MessageCircle size={12} /></a>}
-                                        {ph.tipo && <span className="text-[10px] text-slate-500">{ph.tipo}</span>}
-                                      </span>
+                                      <PhoneRow
+                                        key={`${ph.numero}-${i}`}
+                                        phone={{
+                                          phone_e164: ph.numero,
+                                          categoria: ph.categoria ?? 'alternativo',
+                                          clasificacion: ph.tipo ?? null,
+                                          ind_whatsapp: ph.whatsapp ?? null,
+                                          idimagen: ph.idimagen ?? null,
+                                          relacion: ph.relacion ?? null,
+                                        }}
+                                        copied={copiedPhoneKey === `phone-${i}`}
+                                        onCopy={() => copyPhone(`phone-${i}`, ph.numero)}
+                                      />
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — {shownCrm.owner_name ? 'contacto pendiente (DealerNet)' : 'dueño pendiente (TGR)'}.</div>
+                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
+                                )}
+                                {shownCrm.relacionados && shownCrm.relacionados.length > 0 && (
+                                  <div className="mt-2">
+                                    <RelacionadosTable relacionados={shownCrm.relacionados} />
+                                  </div>
                                 )}
                                 {/* Reintentar las etapas lentas sin salir de la
                                     ficha: es donde se quiere el teléfono. */}
@@ -906,7 +945,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                       <RefreshCw size={12} className="animate-spin" />
                                       {captarStage === 'tgr' ? 'Buscando al dueño en TGR… (puede tardar ~1 min)' : 'Buscando teléfonos en DealerNet…'}
                                     </span>
-                                  : <>Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (crea la ficha con dueño vía TGR y teléfonos vía DealerNet).</>}
+                                  : <>Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (teléfonos vía DealerNet por rol, dueño documental vía TGR como respaldo opcional).</>}
                                 {captarMsg && !captarStage && (
                                   <div className={`mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
                                 )}
@@ -992,7 +1031,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-1.5">
-                        <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
+                        <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.property_code && <> · cód. {l.property_code}</>}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
                         <div className="flex items-center gap-2 shrink-0">
                           {p.listings.length > 1 && (
                             <button onClick={() => doSplit(l.listing_id)} disabled={splittingId != null}

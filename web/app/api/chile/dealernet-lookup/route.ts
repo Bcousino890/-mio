@@ -7,32 +7,11 @@ import {
   DEFAULT_DEALERNET_PRODUCTS,
   DEALERNET_PRODUCTS,
   dealernetRetcodeMessage,
-  type DealernetPhone,
+  dedupePhones,
 } from '@/lib/dealernet'
 import { getCachedContactByRut, logDealernetQuery } from '@/lib/dealernet-cache'
 
 const VALID_PRODUCT_CODES = new Set(Object.values(DEALERNET_PRODUCTS))
-
-// Mismo teléfono puede salir de varios productos (3407/3408/3410) — para la
-// UI lo mostramos una vez, marcando todas las fuentes que lo confirmaron.
-function dedupePhones(phones: DealernetPhone[]) {
-  const map = new Map<string, DealernetPhone & { sources: string[] }>()
-  for (const p of phones) {
-    const existing = map.get(p.phone_e164)
-    if (!existing) {
-      map.set(p.phone_e164, { ...p, sources: [p.product_code] })
-      continue
-    }
-    existing.sources.push(p.product_code)
-    if (p.categoria === 'probable') existing.categoria = 'probable'
-    existing.ranking = Math.max(existing.ranking ?? 0, p.ranking ?? 0)
-    existing.calidad = Math.max(existing.calidad ?? 0, p.calidad ?? 0)
-    existing.ind_whatsapp = existing.ind_whatsapp || p.ind_whatsapp
-    existing.idimagen = existing.idimagen ?? p.idimagen
-    existing.relacion = existing.relacion ?? p.relacion
-  }
-  return Array.from(map.values())
-}
 
 export async function POST(request: NextRequest) {
   let body: any

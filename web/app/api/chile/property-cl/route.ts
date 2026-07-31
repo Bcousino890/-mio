@@ -5,6 +5,7 @@ import {
   linkCaptacionToProperty,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
+import { scrapeAndUpsertListingCl, extractMlcId, type ScrapeResult } from '@/lib/scrape-listing-cl'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/property-cl — propiedades CANÓNICAS deduplicadas (plan Anuncios CL
@@ -57,10 +58,14 @@ const LISTINGS_JSON = `
       'source_type', l.source_type,
       'portal', l.portal,
       'source_url', l.source_url,
+      'property_code', l.property_code,
       'is_active', l.is_active,
       'manual_property_lock', l.manual_property_lock,
       'seller_reference', l.seller_reference,
       'photos', COALESCE(l.photos, '[]'::jsonb),
+      -- Cuántas declara el portal: sin este número no se puede saber si a la
+      -- ficha le faltan fotos o si el aviso simplemente tiene pocas.
+      'photos_total_count', l.photos_total_count,
       'description', l.description,
       'address', l.address,
       'latitude', l.latitude,
@@ -101,6 +106,7 @@ const CRM_JSON = `
        'owner_rut', cap.owner_rut,
        'phones', cap.phones,
        'emails', cap.emails,
+       'relacionados', cap.relacionados,
        'stage', cap.stage,
        'dealernet_status', cap.dealernet_status,
        'needs_review', cap.needs_review,
@@ -127,12 +133,43 @@ const COVER_PHOTO = `
    LIMIT 1) AS cover_photo
 `
 
+// Relee una ficha por id con la misma forma que una fila de la lista (usado
+// tras un scraping puntual on-demand, ver bloque `q` en GET más abajo — el
+// buscador necesita el mismo shape que ya consume la grilla, no el objeto de
+// detalle "suelto" que devuelve `?id=`).
+async function fetchPropertyClRowById(id: string) {
+  const { rows } = await pool.query(
+    `SELECT
+       p.id, p.id AS row_key, p.ref_code, p.operation, p.property_type,
+       p.canonical_price, p.canonical_price_uf, p.uf_rate, p.uf_rate_date,
+       p.square_meters,
+       CASE WHEN p.square_meters > 0 THEN ROUND(p.canonical_price::numeric / p.square_meters) ELSE 0 END AS price_sqm,
+       p.bedrooms, p.bathrooms, p.comuna_id, c.name AS comuna_name, c.sii_comuna_code,
+       p.localidad, p.latitude, p.longitude, p.exact_address, p.location_confidence, p.rol_matriz,
+       p.listing_count, p.corredora_count, p.portals, p.source_types, p.advertiser_kinds,
+       p.is_active, p.first_seen_at, p.last_seen_at, p.portal_first_seen_at,
+       p.manual_latitude, p.manual_longitude, p.manual_pin_set_at, p.smart_crm_at, p.captacion_id, p.manual_merge_at,
+       EXTRACT(DAY FROM (now() - COALESCE(p.portal_first_seen_at, p.first_seen_at)))::int AS days_on_market,
+       ${COVER_PHOTO},
+       ${CRM_JSON},
+       ${LISTINGS_JSON}
+     FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id
+     WHERE p.id = $1`,
+    [id]
+  )
+  return rows[0] ?? null
+}
+
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams
 
   const id = sp.get('id')?.trim()
   const operation = sp.get('operation')
   const comunaName = sp.get('comuna')?.trim()
+  // Buscador por código o URL (código de propiedad, código de anuncio MLC-id,
+  // código interno del CRM `ref_code`, o URL pegada del portal): ver bloque
+  // más abajo donde se arma la condición SQL.
+  const q = sp.get('q')?.trim() || null
   const comunaCode = sp.get('comuna_code')?.trim()
   const priceMin = sp.get('price_min') ? Number(sp.get('price_min')) : null
   const priceMax = sp.get('price_max') ? Number(sp.get('price_max')) : null
@@ -199,6 +236,30 @@ export async function GET(request: NextRequest) {
     }
     if (operation && operation !== 'all') conditions.push(`${F.operation} = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
+    // Si `q` es un código/URL de Portal Inmobiliario y no aparece en la
+    // búsqueda, se usa más abajo para scrapearlo en vivo (ver bloque tras la
+    // consulta principal).
+    let qMlcId: string | null = null
+    if (q) {
+      // Acepta: código de propiedad ML ("5495"), código interno de la
+      // corredora (seller_reference), código interno del CRM (ref_code, ej.
+      // "PI-2607-00042"), código/URL del anuncio (MLC-id, ej. "MLC-2009525691"
+      // o una URL completa de portalinmobiliario.com que lo contenga), o la
+      // URL del anuncio pegada tal cual.
+      const mlcId = extractMlcId(q)
+      qMlcId = mlcId
+      const likeParam = addParam(`%${q}%`)
+      const exactParam = addParam(q)
+      const listingMatch = mlcId
+        ? `${listUngrouped ? 'l' : 'lq'}.external_id = ${addParam(mlcId)}`
+        : `(${listUngrouped ? 'l' : 'lq'}.property_code = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.seller_reference = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.external_id ILIKE ${likeParam})`
+      const sourceUrlMatch = `${listUngrouped ? 'l' : 'lq'}.source_url ILIKE ${likeParam}`
+      conditions.push(
+        listUngrouped
+          ? `(p.ref_code ILIKE ${likeParam} OR ${listingMatch} OR ${sourceUrlMatch})`
+          : `(p.ref_code ILIKE ${likeParam} OR EXISTS (SELECT 1 FROM listings_cl lq WHERE lq.property_cl_id = p.id AND (${listingMatch} OR ${sourceUrlMatch})))`
+      )
+    }
     if (comunaCode) conditions.push(`c.sii_comuna_code = ${addParam(comunaCode)}`)
     if (priceMin !== null) conditions.push(`${F.price} >= ${addParam(priceMin)}`)
     if (priceMax !== null) conditions.push(`${F.price} <= ${addParam(priceMax)}`)
@@ -303,6 +364,33 @@ export async function GET(request: NextRequest) {
     `
 
     const result = await pool.query(query, dataParams)
+
+    // Búsqueda por código/URL de Portal Inmobiliario sin resultados: se
+    // scrapea la ficha EN VIVO (no depende del barrido 24/7 ni de la cola de
+    // dedup, ver scrape-listing-cl.ts) y se devuelve ya creada — "si no está,
+    // se trae". Solo aplica cuando `q` identificó un MLC-id real: un código
+    // interno suelto sin match ("5495") no tiene URL que scrapear.
+    if (!id && q && qMlcId && result.rows.length === 0) {
+      const scraped: ScrapeResult = await scrapeAndUpsertListingCl(q).catch((e): ScrapeResult => ({
+        ok: false,
+        error: e instanceof Error ? e.message : 'Error al scrapear el anuncio',
+      }))
+      if (scraped.ok) {
+        const fresh = await fetchPropertyClRowById(scraped.propertyId)
+        if (fresh) {
+          return NextResponse.json({
+            success: true, count: 1, total: 1, stats,
+            page: 1, page_size: pageSize, total_pages: 1,
+            data: [fresh], scraped: true,
+          })
+        }
+      }
+      return NextResponse.json({
+        success: true, count: 0, total: 0, stats,
+        page, page_size: pageSize, total_pages: 1,
+        data: [], scrape_error: scraped.ok ? null : scraped.error,
+      })
+    }
 
     // Detalle por id: devolver el objeto único (o 404) en vez de una lista de 1.
     if (id) {
@@ -462,7 +550,7 @@ export async function PATCH(request: NextRequest) {
       if (rol && listingUrl) {
         try {
           const { captacion: c } = await extractListing(listingUrl)
-          const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code)
+          const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code, rol.direccion)
           // Enlace permanente ficha ↔ captación (0083): es lo que permite que
           // la tarjeta de la grilla se marque "captada" y que la fila de
           // /chile/captacion sepa volver a este inmueble.

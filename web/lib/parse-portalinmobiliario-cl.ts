@@ -112,6 +112,16 @@ export interface ParsedListingDetail {
   comuna: string | null
   advertiser_name: string | null
   advertiser_type: string
+  advertiser_id: string | null
+  advertiser_logo: string | null
+  // Código canónico de la propiedad en Mercado Libre (persiste entre
+  // re-publicaciones, ver docs/PLAN-ANUNCIOS-CL.md) y código interno de la
+  // corredora — las dos claves que usa el dedup (Nivel 1) para agrupar
+  // anuncios de la misma corredora bajo una sola ficha.
+  property_code: string | null
+  seller_reference: string | null
+  has_video: boolean
+  video_modal_url: string | null
   photos: string[]
   description: string | null
   // Ficha técnica completa (V4) — claves para identificar la propiedad exacta
@@ -290,12 +300,49 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')
       : (advertiser_name ? 'professional' : 'unknown')
 
+    // advertiser_id = seller_id de Mercado Libre (id ESTABLE de la corredora,
+    // clave de identidad de corredoras_cl y del dedup por código interno).
+    // Mismos 3 fallbacks que el parser del barrido masivo (scraper/lib/
+    // parse-portalinmobiliario.mjs): blob → dataLayer de GTM → logo de tienda.
+    const SELLER_LOGO_RE = /https:\/\/[\w.-]*mlstatic\.com\/(?:classifieds_accounts\/MLC_real_estate_agency|storage\/vis-accounts)\/(\d+)_vip[-_][^"'\\\s>]*/
+    const logoMatch = html.match(SELLER_LOGO_RE)
+    let advertiser_id: string | null = eventData?.seller_id != null ? String(eventData.seller_id) : null
+    if (!advertiser_id) {
+      const gtm = html.match(/"sellerId"\s*:\s*(\d+)/)
+      if (gtm) advertiser_id = gtm[1]
+    }
+    if (!advertiser_id && logoMatch) advertiser_id = logoMatch[1]
+    const advertiser_logo = logoMatch ? logoMatch[0] : null
+
+    // Código de propiedad ML (persiste entre re-publicaciones): bloque
+    // `seller_profile(.rex)?.bottom_extra_info[]` con título "Código de la
+    // propiedad" → subtitles[0].text.
+    let property_code: string | null = null
+    for (const item of sellerProfile?.bottom_extra_info ?? []) {
+      if (/c[oó]digo de la propiedad/i.test(item?.title?.text ?? '')) {
+        property_code = item?.subtitles?.[0]?.text ?? null
+        break
+      }
+    }
+
+    // Código interno de la corredora: componente `code_internal`, label
+    // "Código interno <ref>" — mutuamente excluyente con property_code en la
+    // muestra real (nunca aparecen ambos en la misma ficha).
+    const codeInternalLabel = comps.code_internal?.label?.text ?? comps.fixed?.code_internal?.label?.text ?? null
+    const seller_reference = codeInternalLabel
+      ? codeInternalLabel.replace(/^c[oó]digo interno\s*/i, '').trim() || null
+      : null
+
     const description = comps.description?.content ?? comps.description_rex?.content ?? null
 
-    // URL del modal con la galería completa y total de fotos
+    // URL del modal con la galería completa, total de fotos y video: el
+    // archivo real del video nunca aparece como URL directa en el HTML
+    // estático, solo el booleano y la URL de este modal.
     const galleryMediaCounters = gallery?.media_counters ?? []
     const galleryUrl = galleryMediaCounters.find((m: any) => m?.type === 'photos')?.url ?? null
     const photosTotalCount = gallery?.total_count ?? (photos.length || null)
+    const has_video: boolean = gallery?.has_video ?? false
+    const video_modal_url = galleryMediaCounters.find((m: any) => m?.type === 'video')?.url ?? null
 
     const specs = extractTechSpecs(html, title, description)
     // Superficie del inmueble = superficie CONSTRUIDA, nunca el terreno.
@@ -314,7 +361,9 @@ export function parsePortalListingDetail(html: string): ParsedListingDetail | nu
       bathrooms,
       latitude, longitude,
       address, comuna,
-      advertiser_name, advertiser_type,
+      advertiser_name, advertiser_type, advertiser_id, advertiser_logo,
+      property_code, seller_reference,
+      has_video, video_modal_url,
       photos: photos.slice(0, 60),
       description,
       gallery_url: galleryUrl,

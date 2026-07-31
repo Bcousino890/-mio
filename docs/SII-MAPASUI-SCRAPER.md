@@ -62,19 +62,18 @@ El objetivo operativo es **scrapear sin pausas y sin caerse**. Tres piezas:
    `scraper/sii-scraper/.launch-sii-mapasui` en `main` dispara
    `scrape-sii-mapasui.yml`, que mata el scrape en curso y relanza en modo cola
    (continúa donde quedó). No hace falta apretarlo para caídas normales: el
-   **watchdog** (`scraper/sii-scraper/watchdog-ingest-sii-mapasui.sh`, en el
-   cron del VPS cada 10 min) ya relanza solo si el proceso murió o se colgó ≥6 h.
-   El botón es para forzar el relanzamiento de inmediato o reanudar tras un
-   incidente mayor.
+   **watchdog** (`scraper/sii-scraper/watchdog-ingest.sh`, en el cron del VPS
+   cada 30 min, instalado por `infra/deploy.sh`) ya relanza solo si el proceso
+   murió o se colgó ≥6 h. El botón es para forzar el relanzamiento de inmediato
+   o reanudar tras un incidente mayor.
 
-   El watchdog corría antes en un scheduled workflow de GitHub cada 30 min
-   (`ingest-sii-mapasui-now.yml`). Se movió al cron del VPS: el workflow solo
-   levantaba un runner facturado por minuto para abrir un SSH y lanzar el mismo
-   script que ya vivía en el VPS, y encima GitHub retrasaba tanto los scheduled
-   runs que se veían huecos de 2-3 h. Ese workflow sigue existiendo **solo como
-   disparo manual** y llama a este mismo script. Lo instala
-   `infra/install-crons.sh` en cada deploy; logs en
-   `/var/log/casafari/watchdog-sii-mapasui.log`.
+   La ingesta que ese watchdog dispara es **incremental en dos niveles**: si el
+   `.jsonl` no cambió desde la última corrida ni se abre la BD (marcador
+   `.mtime`), y si sí creció se leen solo los bytes nuevos desde el checkpoint
+   de `sii_mapasui_ingest_state_cl` (migración 0089) en lotes de 500 filas. Esto
+   último es lo que hace barata la comuna **en curso**, que es justo la que el
+   atajo por mtime nunca puede saltarse: releerla entera fila a fila es lo que
+   reventaba el túnel SSH del workflow con «Broken pipe» a los 5 minutos.
 
 Para forzar **una sola comuna** (ignorando la cola), usar el `workflow_dispatch`
 de `scrape-sii-mapasui.yml` con el input `comuna_code` (vacío = cola).
