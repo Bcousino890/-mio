@@ -534,6 +534,20 @@ function sellerStatusInfoFromDom(html) {
  * Prioriza el blob "Nordic" embebido (ver extractNordicBlob/extractInitialState)
  * si existe; de lo contrario cae a selectores DOM con regex.
  */
+// Versión del parser de fichas de detalle. Sube en 1 cada vez que un cambio
+// aquí puede corregir datos ya guardados con la versión anterior (un campo mal
+// extraído, un valor que ahora se rescata donde antes se perdía). No sube por
+// cambios que no tocan la extracción (refactors, tests, comentarios).
+//
+// Por qué existe: hasta ahora, cada vez que arreglábamos el parser había que
+// escribir a mano una migración que re-encolara las fichas afectadas (0087,
+// 0088, 0089) — funciona, pero depende de acordarse y de identificar bien el
+// alcance cada vez. Con esta versión guardada por ficha
+// (listings_cl.parser_version), el mantenimiento de colas (ver
+// queue-maintenance-cl.mjs) puede encontrar solo las fichas leídas con una
+// versión vieja y re-encolarlas él solo, sin una migración ad-hoc por arreglo.
+export const CURRENT_PARSER_VERSION = 1
+
 export async function parseDetailPage(html, external_id, deps = {}) {
   const { fetchGallery = fetchGalleryPhotos, fetchGalleryById = fetchGalleryByItemId } = deps
   try {
@@ -855,6 +869,7 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       videos,  // URLs de video directas si alguna vez aparecen embebidas (raro)
       description,
       features,  // características destacadas del inmueble (amenities)
+      parser_version: CURRENT_PARSER_VERSION,
     }
   } catch {
     // Estructura inesperada de la ficha: degradar a `null`, igual que un

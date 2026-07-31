@@ -198,12 +198,12 @@ export async function upsertListingCl(client, parsed, options = {}) {
        price, price_uf, price_usd, usd_rate, usd_rate_date, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos, photos_total_count,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
-       portal_first_seen_at,
+       portal_first_seen_at, parser_version,
        status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
        $18,$19,$20,$21,$22,$23,$24,$25,$35,$36,$37,$38,
-       $26,$27,$28,$30,$31,$32,$33,$34,
+       $26,$27,$28,$30,$31,$32,$33,$34,$39,
        'active', true, $29, $29, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
@@ -220,6 +220,10 @@ export async function upsertListingCl(client, parsed, options = {}) {
        -- COALESCE: si esta pasada no pudo leer el total declarado, no se pisa
        -- con null un valor bueno — sin él no se puede saber si faltan fotos.
        photos_total_count = COALESCE(EXCLUDED.photos_total_count, listings_cl.photos_total_count),
+       -- Sube siempre que se re-lea la ficha (nunca en falso: solo se llega
+       -- aquí tras un parseo que sí devolvió datos), así que no hace falta
+       -- COALESCE: pisar con la versión actual es justo el objetivo.
+       parser_version = EXCLUDED.parser_version,
        property_code = EXCLUDED.property_code, advertiser_id = EXCLUDED.advertiser_id,
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
        has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
@@ -248,6 +252,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       portalFirstSeenAt,
       parsed.photos_total_count ?? null,
       priceUsd, usdRate, usdRateDate,
+      parsed.parser_version ?? null,
     ]
   )
   const listingId = upserted[0].id

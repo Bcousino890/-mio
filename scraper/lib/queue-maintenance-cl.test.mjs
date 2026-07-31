@@ -112,15 +112,37 @@ test('reenqueueStaleListingsCl: re-encola las fichas que llevan más tiempo sin 
 
   const res = await reenqueueStaleListingsCl(client)
   assert.deepEqual(res, { reenqueued: 400 })
-  assert.deepEqual(params, [400])
-  // Primero las que tienen MENOS fotos guardadas que las que declara el portal
-  // (comprobación exacta, no un umbral inventado), y dentro de eso las que
-  // llevan más tiempo sin bajarse — las del parser viejo tienen NULL.
-  assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
+  assert.deepEqual(params, [400, null])
+  // Al final de todo, las que llevan más tiempo sin bajarse — las nunca leídas
+  // (parser_version NULL) van antes por la rama de "parser viejo".
   assert.match(sql, /l\.detail_parsed_at ASC NULLS FIRST/)
 })
 
-test('la prioridad por "le faltan fotos" se limita a una vez al día', async () => {
+test('prioridad 0: fichas incompletas — les falta algo que un anuncio bien scrapeado siempre tiene', async () => {
+  // Es la prioridad 1 del sistema: que cada ficha tenga fotos, ubicación,
+  // corredora con nombre real, descripción, características y superficie.
+  let sql = null
+  const client = { async query(s) { sql = s.replace(/\s+/g, ' ').trim(); return { rowCount: 0 } } }
+  await reenqueueStaleListingsCl(client)
+
+  assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
+  assert.match(sql, /l\.address IS NULL/)
+  assert.match(sql, /l\.latitude IS NULL OR l\.longitude IS NULL/)
+  assert.match(sql, /l\.advertiser_name IS NULL OR btrim\(l\.advertiser_name\) = ''/)
+  assert.match(sql, /lower\(btrim\(l\.advertiser_name\)\) = 'corredora'/)
+  assert.match(sql, /l\.description IS NULL OR btrim\(l\.description\) = ''/)
+  // Por CASE, no por OR: jsonb_array_length() lanza excepción sobre un jsonb
+  // que no sea array, y Postgres no garantiza el orden de evaluación de un OR.
+  assert.match(sql, /CASE WHEN jsonb_typeof\(l\.features\) = 'array' THEN jsonb_array_length\(l\.features\) = 0 ELSE true END/)
+  assert.match(sql, /l\.square_meters IS NULL/)
+  // A propósito NO exige property_code/seller_reference: un tercio del catálogo
+  // no trae código interno porque la corredora nunca lo puso, no porque se
+  // perdiera al scrapear. Exigirlo perseguiría un hueco que no existe.
+  assert.doesNotMatch(sql, /property_code IS NULL/)
+  assert.doesNotMatch(sql, /seller_reference IS NULL/)
+})
+
+test('la prioridad de incompletas se limita a una vez al día', async () => {
   // Hay huecos que NO se pueden cerrar nunca. Verificado contra el portal en
   // MLC-4191870754: declara 30 fotos y la unión de sus dos únicas fuentes (el
   // blob de la ficha y el modal de galería) da 29 — la trigésima no existe en
@@ -141,22 +163,35 @@ test('la prioridad por "le faltan fotos" se limita a una vez al día', async () 
   assert.match(sql, /state IN \('created', 'active'\)/)
 })
 
-test('reenqueueStaleListingsCl: NO elige por "tiene pocas fotos" — ese criterio no converge', async () => {
+test('prioridad 1: parser viejo, sin freno de 24 h — versionar siempre se puede cerrar solo', async () => {
+  // A diferencia de un hueco de datos (que puede no existir), "leído con
+  // versión vieja" SIEMPRE se resuelve con solo re-pedir la página: en cuanto
+  // se re-lee, parser_version queda al día y no vuelve a entrar por esto. No
+  // necesita el freno de 24 h que sí hace falta para los huecos permanentes.
+  let sql = null
+  const client = { async query(s) { sql = s.replace(/\s+/g, ' ').trim(); return { rowCount: 0 } } }
+  await reenqueueStaleListingsCl(client, { currentParserVersion: 3 })
+
+  assert.match(sql, /l\.parser_version IS NULL/)
+  assert.match(sql, /l\.parser_version < \$2/)
+  // Esta rama, a diferencia de la de incompletas, no lleva el freno de 24h.
+  const ramaParserVersion = sql.match(/WHEN l\.parser_version[\s\S]*?THEN 1/)?.[0] ?? ''
+  assert.doesNotMatch(ramaParserVersion, /24 hours/)
+})
+
+test('reenqueueStaleListingsCl: NO elige por "tiene pocas fotos" con un umbral fijo — ese criterio no converge', async () => {
   // Regresión de producción. El criterio original era el rastro del parser
-  // viejo: 5 fotos o menos, o advertiser_name vacío/"Corredora". Sirve de
-  // backfill, pero un anuncio que DE VERDAD tiene 3 fotos lo cumple siempre:
-  // se re-scrapeaba, seguía teniendo 3, y volvía a entrar en la tanda de media
-  // hora después. Medido: el 6% del catálogo (74 de 1.200 anuncios con 1-4
-  // fotos) girando en bucle, ~19.000 descargas diarias que no cambian un dato,
-  // gastando GB del proxy residencial y dándole al portal motivos para volver a
-  // bloquear la IP (ya devolvió 403 una vez).
+  // viejo: 5 fotos o menos. Sirve de backfill, pero un anuncio que DE VERDAD
+  // tiene 3 fotos lo cumple siempre: se re-scrapeaba, seguía teniendo 3, y
+  // volvía a entrar en la tanda de media hora después. Medido: el 6% del
+  // catálogo (74 de 1.200 anuncios con 1-4 fotos) girando en bucle, ~19.000
+  // descargas diarias que no cambian un dato, gastando GB del proxy residencial
+  // y dándole al portal motivos para volver a bloquear la IP (403 ya visto).
   let sql = null
   const client = { async query(s) { sql = s.replace(/\s+/g, ' ').trim(); return { rowCount: 0 } } }
   await reenqueueStaleListingsCl(client)
 
-  // Nada de umbrales inventados ni de filtrar por el nombre de la corredora.
   assert.doesNotMatch(sql, /<= 5/)
-  assert.doesNotMatch(sql, /'corredora'/)
   // Las fotos solo se miran contra el total que declara el portal, que es una
   // comprobación exacta y sí converge.
   assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
@@ -177,7 +212,7 @@ test('reenqueueStaleListingsCl: acepta un tamaño de tanda propio', async () => 
   let params = null
   const client = { async query(_s, p) { params = p; return { rowCount: 7 } } }
   assert.deepEqual(await reenqueueStaleListingsCl(client, { limit: 50 }), { reenqueued: 7 })
-  assert.deepEqual(params, [50])
+  assert.deepEqual(params, [50, null])
 })
 
 test('reenqueueStaleListingsCl: un fallo no tumba el pipeline que lo invoca', async () => {

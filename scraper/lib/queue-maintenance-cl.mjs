@@ -111,19 +111,41 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
  * de paso es lo único que detecta bajadas de precio en anuncios ya guardados
  * (el discovery solo encola el detalle de los que aún NO están en la base).
  *
- * Delante de todo van las fichas a las que les FALTAN fotos: `photos_total_count`
- * (migración 0086) es el total que declara el portal, así que "guardadas <
- * declaradas" es una comprobación exacta y no un umbral inventado.
+ * Delante de todo van las fichas INCOMPLETAS: les falta algo que un anuncio
+ * scrapeado bien siempre debería tener — fotos (según `photos_total_count`,
+ * migración 0086), ubicación, corredora con nombre real, código de la
+ * propiedad en el portal, descripción, características o superficie. Es la
+ * prioridad 1 del sistema: que cada ficha tenga todo lo que el portal da.
  *
- * Pero esa prioridad se limita a una vez cada 24 h por ficha, y no es un
- * detalle: HAY anuncios cuyo hueco no se puede cerrar nunca. Verificado contra
- * el portal en MLC-4191870754 — declara 30 fotos y la unión de sus dos únicas
+ * Ese "delante de todo" se limita a una vez cada 24 h por ficha, y no es un
+ * detalle: HAY huecos que no se pueden cerrar nunca. Verificado contra el
+ * portal en MLC-4191870754 — declara 30 fotos y la unión de sus dos únicas
  * fuentes (el blob de la ficha y el modal de galería) da 29. La foto número 30
  * no existe en ningún sitio al que se pueda llegar. Sin el límite temporal esas
- * fichas encabezarían la cola en cada pasada, para siempre: exactamente el
- * bucle que este cambio venía a quitar, en pequeño. Con el límite cuestan un
- * re-scrapeo al día y, si el portal llega a publicar la que falta, se recoge
- * dentro de esas 24 h.
+ * fichas encabezarían la cola en cada pasada, para siempre — el mismo bucle
+ * que este cambio vino a quitar. Con el límite cuestan un re-scrapeo al día;
+ * si el portal llega a publicarlo, se recoge dentro de esas 24 h.
+ *
+ * No se exige `property_code`/`seller_reference` de forma absoluta a propósito:
+ * un tercio del catálogo no trae código interno porque la corredora nunca lo
+ * puso, no porque se perdiera al scrapear — exigirlo perseguiría un hueco que
+ * no existe. Si algún día se mide que `property_code` SÍ es universal, se
+ * puede sumar aquí con el mismo criterio.
+ *
+ * Después de las incompletas van las de PARSER VIEJO: `parser_version`
+ * (migración 0091) sube cada vez que un arreglo del parser puede corregir
+ * datos ya guardados (fotos que no eran fotos, superficies imposibles…). Antes
+ * cada arreglo necesitaba su propia migración que re-encolara a mano (0087,
+ * 0088, 0089); ahora basta con subir CURRENT_PARSER_VERSION y esta cola
+ * encuentra sola a quien quedó atrás. No necesita el freno de 24 h: en cuanto
+ * se re-lee, la ficha queda con la versión actual y no vuelve a entrar por
+ * este motivo — a diferencia de un hueco de datos, "versión vieja" siempre se
+ * puede cerrar con solo pedir la página otra vez.
+ *
+ * Por último, la ROTACIÓN normal: `detail_parsed_at` (migración 0085), la
+ * ficha que lleva más tiempo sin abrirse va primero. Es lo único que detecta
+ * rebajas de precio en anuncios ya guardados (el discovery solo encola el
+ * detalle de los que aún NO están en la base).
  *
  * NO se usa `last_seen_at` para ordenar: lo mueve también el barrido del
  * listado, que ve el anuncio sin abrir su ficha.
@@ -132,8 +154,12 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
  * base (prioridad 100): completar el catálogo va antes que refrescarlo.
  *
  * Idempotente: no re-encola lo que ya está pendiente o ejecutándose.
+ *
+ * @param {number} [opts.currentParserVersion] - CURRENT_PARSER_VERSION del
+ *   parser (parse-portalinmobiliario.mjs), inyectado por el caller para no
+ *   crear una dependencia circular entre el parser y el mantenimiento de colas.
  */
-export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
+export async function reenqueueStaleListingsCl(client, { limit = 400, currentParserVersion = null } = {}) {
   try {
     const { rowCount } = await client.query(
       `INSERT INTO pgboss.job (name, data, priority)
@@ -149,15 +175,35 @@ export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
            WHERE j.name = 'detail-cl' AND j.state IN ('created', 'active')
              AND j.data->>'externalId' = l.external_id
          )
-       ORDER BY CASE WHEN jsonb_typeof(l.photos) = 'array'
-                       AND l.photos_total_count IS NOT NULL
-                       AND jsonb_array_length(l.photos) < l.photos_total_count
-                       AND (l.detail_parsed_at IS NULL
-                            OR l.detail_parsed_at < now() - interval '24 hours')
-                     THEN 0 ELSE 1 END,
+       ORDER BY CASE
+                  WHEN (l.detail_parsed_at IS NULL OR l.detail_parsed_at < now() - interval '24 hours')
+                    AND (
+                      (jsonb_typeof(l.photos) = 'array' AND l.photos_total_count IS NOT NULL
+                         AND jsonb_array_length(l.photos) < l.photos_total_count)
+                      OR l.address IS NULL
+                      OR l.latitude IS NULL OR l.longitude IS NULL
+                      OR l.advertiser_name IS NULL OR btrim(l.advertiser_name) = ''
+                         OR lower(btrim(l.advertiser_name)) = 'corredora'
+                      OR l.description IS NULL OR btrim(l.description) = ''
+                      -- CASE, no jsonb_typeof(...) <> 'array' OR jsonb_array_length(...):
+                      -- Postgres NO garantiza el orden de evaluación de un OR, y
+                      -- jsonb_array_length() lanza excepción sobre un jsonb que no
+                      -- sea array. Con CASE la rama que llama a la función solo se
+                      -- evalúa cuando ya se comprobó que sí es un array.
+                      OR (CASE WHEN jsonb_typeof(l.features) = 'array'
+                               THEN jsonb_array_length(l.features) = 0
+                               ELSE true END)
+                      OR l.square_meters IS NULL
+                    )
+                  THEN 0
+                  WHEN l.parser_version IS NULL
+                    OR ($2::int IS NOT NULL AND l.parser_version < $2)
+                  THEN 1
+                  ELSE 2
+                END,
                 l.detail_parsed_at ASC NULLS FIRST
        LIMIT $1`,
-      [limit]
+      [limit, currentParserVersion]
     )
     return { reenqueued: rowCount ?? 0 }
   } catch (e) {
