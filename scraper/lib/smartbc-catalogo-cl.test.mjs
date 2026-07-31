@@ -70,6 +70,20 @@ test('la comuna casa ignorando tildes y mayúsculas, y devuelve la grafía del c
   assert.equal(n.comuna('Til  Til'), 'Til Til')
 })
 
+test('"Til Til" casa con "Tiltil": las dos taxonomías parten el topónimo distinto', () => {
+  // Única discrepancia real entre nuestras 56 comunas y sus 346, comprobado
+  // contra el catálogo en vivo.
+  const n = buildNormalizer(CATALOGO)
+  assert.equal(n.comuna('Til Til'), 'Til Til')
+  const conGrafiaOficial = buildNormalizer({
+    ...CATALOGO,
+    comunas: [{ name: 'Tiltil', region: 'Metropolitana' }],
+  })
+  assert.equal(conGrafiaOficial.comuna('Til Til'), 'Tiltil', 'se envía la grafía del catálogo')
+  assert.equal(conGrafiaOficial.regionDeComuna('Til Til'), 'Metropolitana')
+  assert.equal(conGrafiaOficial.faltantes.comunas.size, 0)
+})
+
 test('una comuna que no está en el catálogo NO viaja: se registra como faltante', () => {
   const n = buildNormalizer(CATALOGO)
   assert.equal(n.comuna('Comuna Inventada'), null)

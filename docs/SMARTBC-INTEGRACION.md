@@ -4,9 +4,9 @@ Empuja las captaciones ya trabajadas de `-mio` al CRM comercial de SmartBC vía 
 API pública v1, para eliminar el alta manual (hoy: la marca `property_cl.smart_crm_at`,
 que solo declara "ya la subí a mano").
 
-**Estado: implementado y validado en dry-run contra la API real. Sin ejecutar
-todavía contra la base de datos de producción** (esta sesión no tiene acceso a
-`DATABASE_URL`; ver §8).
+**Estado: implementado y verificado contra la API real, incluida una prueba de
+contrato con escrituras (§10). Falta la corrida contra la base de datos de
+producción** — esta sesión no tiene acceso a `DATABASE_URL`.
 
 | Pieza | Fichero |
 |---|---|
@@ -16,7 +16,7 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 | Sincronizador (consulta, lotes, diffs, log) | `scraper/lib/smartbc-sync-cl.mjs` |
 | CLI | `scraper/sync-smartbc-cl.mjs` |
 | Log de sincronización | `db/migrations/0091_smartbc_sync_cl.sql` |
-| Tests (93, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,catalogo-cl,sync-cl}.test.mjs` |
+| Tests (94, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,catalogo-cl,sync-cl}.test.mjs` |
 
 ---
 
@@ -50,6 +50,12 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 > texto plegado. Lo que no exista en el catálogo **no viaja**: se acumula en
 > `faltantes` y sale en el resumen de la corrida, para llevárselo al equipo de
 > SmartBC en vez de forzarlo como texto libre.
+>
+> **Cruce completo hecho: 56/56 comunas y 3/3 regiones nuestras casan con su
+> catálogo, sin discrepancias de región.** La única que no casaba al principio era
+> `Til Til`, que ellos escriben `Tiltil` (la grafía oficial). No es una comuna
+> ausente sino el mismo topónimo partido distinto, así que se resuelve en el mapeo:
+> el índice de comunas se construye con dos claves, con y sin espacios.
 
 ---
 

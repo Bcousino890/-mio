@@ -32,6 +32,11 @@ export function fold(s) {
     .trim()
 }
 
+/** Igual que `fold` pero además sin espacios: "Til Til" y "Tiltil" colisionan. */
+export function sinEspacios(s) {
+  return fold(s).replace(/\s+/g, '')
+}
+
 /**
  * Variantes bajo las que buscar una región. Las dos taxonomías difieren sobre
  * todo en el prefijo ("Región de …", "Región del …") y en el sufijo geográfico
@@ -94,11 +99,18 @@ export function buildNormalizer(catalogo) {
   for (const c of catalogo.comunas ?? []) {
     const nombre = nombreDe(c)
     if (!nombre) continue
-    comunaPorClave.set(fold(nombre), {
+    const entry = {
       name: nombre,
       region: typeof c === 'object' ? (c.region ?? null) : null,
       regionCode: typeof c === 'object' ? (c.region_code ?? null) : null,
-    })
+    }
+    comunaPorClave.set(fold(nombre), entry)
+    // Segunda clave sin espacios. Las dos taxonomías parten algunos topónimos
+    // de forma distinta —nosotros "Til Til", el catálogo oficial "Tiltil"— y esa
+    // es la única discrepancia real entre nuestras 56 comunas y sus 346. Se
+    // resuelve aquí, en el mapeo, que es donde toca: no se inventa un valor,
+    // se reconoce el mismo nombre escrito de otra manera.
+    comunaPorClave.set(sinEspacios(nombre), entry)
   }
 
   const zonaPorComuna = new Map()
@@ -131,7 +143,7 @@ export function buildNormalizer(catalogo) {
 
     comuna(name) {
       if (!name) return null
-      const hit = comunaPorClave.get(fold(name))
+      const hit = comunaPorClave.get(fold(name)) ?? comunaPorClave.get(sinEspacios(name))
       if (hit) return hit.name
       faltantes.comunas.add(name)
       return null
@@ -139,7 +151,8 @@ export function buildNormalizer(catalogo) {
 
     /** La región oficial de una comuna del catálogo, mejor que la nuestra. */
     regionDeComuna(name) {
-      const hit = name ? comunaPorClave.get(fold(name)) : null
+      if (!name) return null
+      const hit = comunaPorClave.get(fold(name)) ?? comunaPorClave.get(sinEspacios(name))
       return hit?.region ?? null
     },
 
