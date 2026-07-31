@@ -710,6 +710,15 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // Logo de la corredora, derivable del id — para la ficha de corredora (H4/H5).
     // NULL si el vendedor no tiene logo de tienda oficial.
     const advertiser_logo = logoMatch ? logoMatch[0] : null
+
+    // Slug de la tienda oficial DENTRO del propio portal (H23 — barrido de
+    // inventario completo por corredora, no por comuna). Presente en el enlace
+    // "Ir a la tienda oficial de <nombre>" de cualquier ficha, cuando el
+    // vendedor tiene tienda. A diferencia de web_propia_url no hace falta
+    // registrarlo a mano: sale de la misma ficha que ya se scrapea.
+    const storeSlugMatch = html.match(/href="https:\/\/www\.portalinmobiliario\.com\/tienda\/([a-z0-9-]+)"/i)
+    const advertiser_store_slug = storeSlugMatch ? storeSlugMatch[1] : null
+
     const sellerType = eventData?.seller_type ?? null
     const advertiser_type = sellerType
       ? (sellerType === 'real_estate_agency' ? 'professional' : 'particular')
@@ -810,6 +819,7 @@ export async function parseDetailPage(html, external_id, deps = {}) {
       advertiser_name, advertiser_type,
       advertiser_id,
       advertiser_logo,
+      advertiser_store_slug,
       seller_reference,
       posted_days_ago,  // antigüedad real declarada por el portal (ver parsePostedDaysAgo)
       photos: photos.slice(0, 30),  // Cap a 30 fotos (antes era 40)

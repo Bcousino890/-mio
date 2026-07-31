@@ -24,8 +24,8 @@ const LOGO_URL = {
   visAccounts: (id) => `https://http2.mlstatic.com/storage/vis-accounts/${id}_vip-67b6dc3f-204c-4e51-95f3-b286c5b44a6e.jpg`,
 };
 
-/** HTML mínimo con blob Nordic + (opcional) dataLayer GTM + (opcional) logo. */
-function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null, logoFormat = 'classifieds' } = {}) {
+/** HTML mínimo con blob Nordic + (opcional) dataLayer GTM + (opcional) logo/tienda. */
+function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null, logoFormat = 'classifieds', storeSlug = null, storeName = 'Corredora' } = {}) {
   const initialState = {
     track: { melidata_event: { event_data: { domain_id: 'MLC-INDIVIDUAL_HOUSES_FOR_SALE', ...eventData } } },
     components: { header: { title: 'Casa en Las Condes' } },
@@ -34,6 +34,9 @@ function detailHtml({ eventData = {}, gtmSellerId = null, logoId = null, logoFor
   let html = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r=${JSON.stringify(blob)};self.__x=1</script></head><body>`;
   if (gtmSellerId != null) html += `<script>dataLayer.push({"pageId":"VIP","sellerId":${gtmSellerId},"status":"active"});</script>`;
   if (logoId != null) html += `<img src="${LOGO_URL[logoFormat](logoId)}" alt="Logo">`;
+  // Enlace real "Ir a la tienda oficial de <nombre>" (verificado contra HTML de
+  // Remax Diamante) — la fuente del store slug (H23).
+  if (storeSlug != null) html += `<span>Ir a la tienda oficial de </span><a href="https://www.portalinmobiliario.com/tienda/${storeSlug}" target="_self">${storeName}</a>`;
   html += '</body></html>';
   return html;
 }
@@ -76,4 +79,18 @@ test('sin ninguna fuente de id → advertiser_id null (no revienta)', async () =
 test('prioridad: el blob gana al GTM si ambos están', async () => {
   const p = await parseDetailPage(detailHtml({ eventData: { seller_id: 111 }, gtmSellerId: 999 }), 'MLC-6', NO_GALLERY);
   assert.equal(p.advertiser_id, '111');
+});
+
+// ── advertiser_store_slug: tienda oficial dentro del portal (H23) ───────────
+// Habilita el barrido de inventario COMPLETO de una corredora (RM entera, sin
+// depender de qué comunas estén activadas) — ver discovery-corredora-tienda-cl.mjs.
+
+test('advertiser_store_slug se captura del enlace "Ir a la tienda oficial de"', async () => {
+  const p = await parseDetailPage(detailHtml({ eventData: { seller_id: 234292543 }, storeSlug: 'remax-diamante', storeName: 'Remax Diamante' }), 'MLC-7', NO_GALLERY);
+  assert.equal(p.advertiser_store_slug, 'remax-diamante');
+});
+
+test('sin tienda oficial → advertiser_store_slug null (no revienta)', async () => {
+  const p = await parseDetailPage(detailHtml({ eventData: { seller_id: 111 } }), 'MLC-8', NO_GALLERY);
+  assert.equal(p.advertiser_store_slug, null);
 });

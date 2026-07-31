@@ -78,7 +78,7 @@ const MIN_SWEEP_COVERAGE = 0.98
  * ya hunde el porcentaje). `declared` desconocido o 0 → no se puede juzgar, se
  * da por bueno (los guardas de `seen.size > 0` cubren ese caso).
  */
-function coverageOk(seenCount, declared, minFraction) {
+export function coverageOk(seenCount, declared, minFraction) {
   if (declared == null || declared <= 0) return true
   return (declared - seenCount) <= MAX_BAND_SHORTFALL || seenCount / declared >= minFraction
 }

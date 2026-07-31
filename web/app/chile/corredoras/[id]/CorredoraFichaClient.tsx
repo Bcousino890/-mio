@@ -3,7 +3,7 @@
 import PropertyModal, { type Property } from '@/components/chile/PropertyClModal'
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Globe, Phone, ExternalLink, Package, History, Timer, ShieldCheck, GitCompareArrows, ImageOff } from 'lucide-react'
+import { ArrowLeft, Globe, Phone, ExternalLink, Package, History, Timer, ShieldCheck, GitCompareArrows, ImageOff, Mail, MapPin, MessageCircle, Users, Copy, Check } from 'lucide-react'
 
 type InventoryItem = {
   property_cl_id: string
@@ -25,12 +25,34 @@ type InventoryItem = {
   own_cover_photo: string | null
 }
 
+// Persona publicada por la corredora en su propia web (migración 0088).
+type Persona = {
+  full_name: string
+  role_raw: string | null
+  role_kind: 'jefatura' | 'ejecutivo' | 'desconocido'
+  email: string | null
+  phone: string | null
+  source_url: string | null
+  last_seen_at: string | null
+}
+
 type Ficha = {
   id: string
   advertiser_id: string | null
   name: string | null
   logo_url: string | null
   phones: string[] | null
+  // Ficha de empresa: sale de la web propia, no del portal (el portal no
+  // publica teléfonos). `contact_status` explica por qué falta cuando falta.
+  contact_phones: string[] | null
+  contact_whatsapp: string[] | null
+  contact_emails: string[] | null
+  contact_address: string | null
+  contact_socials: Record<string, string> | null
+  contact_source_urls: string[] | null
+  contact_status: 'pending' | 'ok' | 'empty' | 'no_web' | 'error' | null
+  contact_updated_at: string | null
+  personas: Persona[] | null
   web_propia_url: string | null
   crm_platform: string
   active_listings_count: number
@@ -104,6 +126,160 @@ function InvThumb({ src }: { src: string | null }) {
   }
   // eslint-disable-next-line @next/next/no-img-element
   return <img src={src} alt="" onError={() => setErr(true)} loading="lazy" className="w-full h-full object-cover" />
+}
+
+/** Teléfono en E.164 → "+56 9 9537 7271" (como se lee en Chile). */
+function fmtPhone(e164: string): string {
+  const m = e164.match(/^\+56(9)(\d{4})(\d{4})$/)
+  if (m) return `+56 ${m[1]} ${m[2]} ${m[3]}`
+  const f = e164.match(/^\+56(\d{1,2})(\d{4})(\d{4})$/)
+  return f ? `+56 ${f[1]} ${f[2]} ${f[3]}` : e164
+}
+
+/** Botón de copiar al portapapeles: en captación se copia el número, no se teclea. */
+function CopyBtn({ value }: { value: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      onClick={() => { navigator.clipboard?.writeText(value); setDone(true); setTimeout(() => setDone(false), 1200) }}
+      title="Copiar"
+      className="text-slate-600 hover:text-slate-300 shrink-0"
+    >
+      {done ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+    </button>
+  )
+}
+
+const CONTACT_EMPTY_MSG: Record<string, string> = {
+  no_web: 'Sin web propia registrada. El portal no publica teléfonos, así que no hay de dónde sacarlo: registra su dominio para poder enriquecerla.',
+  empty: 'Su web no publica teléfono ni email de contacto.',
+  error: 'La última lectura de su web falló. Se reintenta en la próxima pasada.',
+  pending: 'Todavía sin enriquecer.',
+}
+
+const ROLE_STYLE: Record<Persona['role_kind'], string> = {
+  jefatura: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  ejecutivo: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+  desconocido: 'bg-slate-700/40 text-slate-400 border-slate-700',
+}
+
+/**
+ * Ficha de empresa: cómo contactar a la corredora y a quién. Todo viene de lo
+ * que ella misma publica en su web (ver docs/CONTACTO-CORREDORAS-CL.md); por eso
+ * cada bloque enlaza a la URL de origen y se muestra la fecha de la lectura.
+ */
+function ContactoCard({ ficha }: { ficha: Ficha }) {
+  const phones = ficha.contact_phones ?? []
+  const whatsapp = new Set(ficha.contact_whatsapp ?? [])
+  const emails = ficha.contact_emails ?? []
+  const personas = ficha.personas ?? []
+  const socials = Object.entries(ficha.contact_socials ?? {})
+  const status = ficha.contact_status ?? 'pending'
+  const hasContacto = phones.length > 0 || emails.length > 0 || !!ficha.contact_address || socials.length > 0
+
+  if (!hasContacto && personas.length === 0) {
+    return (
+      <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl px-4 py-3 mb-6 text-xs text-slate-500">
+        <span className="text-slate-400 font-medium">Ficha de empresa · </span>
+        {CONTACT_EMPTY_MSG[status] ?? CONTACT_EMPTY_MSG.pending}
+      </div>
+    )
+  }
+
+  const jefaturas = personas.filter(p => p.role_kind === 'jefatura')
+  const resto = personas.filter(p => p.role_kind !== 'jefatura')
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-6">
+      {/* Contacto de la empresa */}
+      <div className="bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3">
+        <h3 className="text-[11px] uppercase tracking-wide text-slate-500 mb-2">Contacto</h3>
+        <div className="space-y-1.5">
+          {phones.map(p => (
+            <div key={p} className="flex items-center gap-2 text-sm">
+              {whatsapp.has(p)
+                ? <MessageCircle size={13} className="text-emerald-400 shrink-0" />
+                : <Phone size={13} className="text-slate-500 shrink-0" />}
+              <a href={`tel:${p}`} className="text-slate-200 hover:text-amber-400">{fmtPhone(p)}</a>
+              {whatsapp.has(p) && (
+                <a href={`https://wa.me/${p.replace('+', '')}`} target="_blank" rel="noopener noreferrer"
+                   className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  WhatsApp
+                </a>
+              )}
+              <CopyBtn value={p} />
+            </div>
+          ))}
+          {emails.map(e => (
+            <div key={e} className="flex items-center gap-2 text-sm min-w-0">
+              <Mail size={13} className="text-slate-500 shrink-0" />
+              <a href={`mailto:${e}`} className="text-slate-200 hover:text-amber-400 truncate">{e}</a>
+              <CopyBtn value={e} />
+            </div>
+          ))}
+          {ficha.contact_address && (
+            <div className="flex items-start gap-2 text-sm">
+              <MapPin size={13} className="text-slate-500 shrink-0 mt-0.5" />
+              <span className="text-slate-300">{ficha.contact_address}</span>
+            </div>
+          )}
+          {socials.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {socials.map(([net, url]) => (
+                <a key={net} href={url} target="_blank" rel="noopener noreferrer"
+                   className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700/50 border border-slate-600 text-slate-300 hover:text-amber-400 capitalize">
+                  {net}
+                </a>
+              ))}
+            </div>
+          )}
+          {!hasContacto && (
+            <div className="text-xs text-slate-500">{CONTACT_EMPTY_MSG[status] ?? CONTACT_EMPTY_MSG.pending}</div>
+          )}
+        </div>
+        {ficha.contact_updated_at && (
+          <div className="text-[10px] text-slate-600 mt-2 pt-2 border-t border-slate-700/60">
+            Leído de su web el {new Date(ficha.contact_updated_at).toLocaleDateString('es-CL')}
+            {(ficha.contact_source_urls ?? []).length > 0 && (
+              <> · <a href={ficha.contact_source_urls![0]} target="_blank" rel="noopener noreferrer" className="hover:text-cyan-400 underline">ver origen</a></>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Equipo */}
+      <div className="bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3">
+        <h3 className="text-[11px] uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5">
+          <Users size={12} /> Equipo
+          {personas.length > 0 && <span className="text-slate-600">({personas.length})</span>}
+        </h3>
+        {personas.length === 0 ? (
+          <div className="text-xs text-slate-500">Su web no publica nombres del equipo.</div>
+        ) : (
+          <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+            {[...jefaturas, ...resto].map(p => (
+              <div key={p.full_name} className="flex items-start gap-2 text-sm">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-200">{p.full_name}</span>
+                    {p.role_raw && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full border capitalize ${ROLE_STYLE[p.role_kind]}`}>
+                        {p.role_raw}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                    {p.phone && <a href={`tel:${p.phone}`} className="hover:text-amber-400">{fmtPhone(p.phone)}</a>}
+                    {p.email && <a href={`mailto:${p.email}`} className="hover:text-amber-400 truncate">{p.email}</a>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function Stat({ icon, label, value, hint, accent }: { icon: React.ReactNode; label: string; value: string; hint?: string; accent: string }) {
@@ -219,6 +395,9 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
               <Stat icon={<ShieldCheck size={14} />} label="Exclusividad" value={pct(ficha.exclusivity_ratio)} hint="solo ella publica" accent="bg-emerald-500/15 text-emerald-400" />
               <Stat icon={<GitCompareArrows size={14} />} label="En canje" value={String(ficha.shared_count)} hint="comparte con otra" accent="bg-amber-500/15 text-amber-400" />
             </div>
+
+            {/* Ficha de empresa: contacto + equipo (migración 0088) */}
+            <ContactoCard ficha={ficha} />
 
             {/* Inventario */}
             <div className="flex items-center justify-between mb-2 flex-wrap gap-2">

@@ -123,13 +123,18 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
     if (px) args.push('-x', px)
     args.push(url)
 
-    execFile('curl', args, { maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // encoding 'buffer': el cuerpo se decodifica según su charset real
+    // (decodeHtmlBuffer), no siempre como UTF-8. El marcador de estado y el
+    // corte se buscan en latin1, donde 1 byte = 1 carácter y los índices del
+    // string valen como índices del buffer.
+    execFile('curl', args, { maxBuffer: 32 * 1024 * 1024, encoding: 'buffer' }, (err, stdoutBuf, stderrBuf) => {
+      const stdout = stdoutBuf?.length ? stdoutBuf.toString('latin1') : ''
       if (err && !stdout) {
-        return resolve({ ok: false, status: 0, reason: stderr || err.message })
+        return resolve({ ok: false, status: 0, reason: stderrBuf?.toString('utf8') || err.message })
       }
       const m = stdout.match(/\n__HTTP_STATUS__:(\d+)\s*$/)
       const status = m ? Number(m[1]) : 0
-      const html = m ? stdout.slice(0, m.index) : stdout
+      const html = decodeHtmlBuffer(m ? stdoutBuf.subarray(0, m.index) : stdoutBuf)
       if (status !== 200) {
         return resolve({ ok: false, status, reason: `HTTP ${status}` })
       }
@@ -139,6 +144,29 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
       resolve({ ok: true, html })
     })
   })
+}
+
+/**
+ * Decodifica el cuerpo respetando el charset que declara la propia página.
+ *
+ * Muchas webs de corredoras corren sobre ASP clásico y sirven ISO-8859-1: leerlas
+ * como UTF-8 parte los apellidos en el acento ("Vicuña" → "Vicu"), que es
+ * precisamente el dato que la ficha de empresa necesita entero. Si no declara un
+ * charset de un byte, se decodifica UTF-8 — el comportamiento de siempre.
+ *
+ * @param {Buffer} buf
+ * @returns {string}
+ */
+export function decodeHtmlBuffer(buf) {
+  // La prueba decisiva no es lo que la página DECLARA (hay webs que declaran
+  // iso-8859-1 y sirven UTF-8), sino si los bytes son UTF-8 válido: si lo son,
+  // es UTF-8; si no, es un charset de un byte y windows-1252 lo cubre
+  // (superconjunto de ISO-8859-1, que es lo que sirve el ASP chileno).
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf)
+  }
 }
 
 export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))

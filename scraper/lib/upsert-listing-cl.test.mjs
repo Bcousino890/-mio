@@ -67,7 +67,8 @@ test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no re
   assert.equal(param(31), false); // has_video
   assert.equal(param(32), null); // video_modal_url
   assert.equal(param(33), null); // advertiser_logo
-  assert.equal(param(34), null); // portal_first_seen_at
+  assert.equal(param(34), null); // advertiser_store_slug
+  assert.equal(param(35), null); // portal_first_seen_at
 });
 
 test('photos_total_count (el total que declara el portal) se persiste', async () => {
@@ -76,7 +77,7 @@ test('photos_total_count (el total que declara el portal) se persiste', async ()
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 24 });
   assert.match(client.inserted.sql, /photos_total_count/);
-  assert.equal(client.inserted.params[34], 24); // $35
+  assert.equal(client.inserted.params[25], 24); // $26
   // Y al refrescar no se pisa con null un total que ya se conocía.
   assert.match(client.inserted.sql, /photos_total_count = COALESCE\(EXCLUDED\.photos_total_count, listings_cl\.photos_total_count\)/);
 });
@@ -86,6 +87,13 @@ test('advertiser_logo se persiste en el INSERT', async () => {
   await upsertListingCl(client, { ...BASE_PARSED, advertiser_logo: 'https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg' });
   assert.match(client.inserted.sql, /advertiser_logo/);
   assert.ok(client.inserted.params.includes('https://http2.mlstatic.com/storage/vis-accounts/234292543_vip-x.jpg'));
+});
+
+test('advertiser_store_slug (tienda oficial, H23) se persiste en el INSERT', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, advertiser_store_slug: 'cym-propiedades' });
+  assert.match(client.inserted.sql, /advertiser_store_slug/);
+  assert.ok(client.inserted.params.includes('cym-propiedades'));
 });
 
 test('portal_first_seen_at: se calcula desde posted_days_ago + scrapedAt (antigüedad REAL del portal)', async () => {

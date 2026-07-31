@@ -162,13 +162,16 @@ export async function upsertListingCl(client, parsed, options = {}) {
        price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos, photos_total_count,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
+       advertiser_store_slug,
        portal_first_seen_at,
        status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-       $18,$19,$20,$21,$22,$23,$24,$25,$35,
-       $26,$27,$28,$30,$31,$32,$33,$34,
-       'active', true, $29, $29, now()
+       $18,$19,$20,$21,$22,$23,$24,$25,$26,
+       $27,$28,$29,$30,$31,$32,$33,
+       $34,
+       $35,
+       'active', true, $36, $36, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
        source_type = EXCLUDED.source_type, source_url = EXCLUDED.source_url,
@@ -187,6 +190,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
        seller_reference = EXCLUDED.seller_reference, features = EXCLUDED.features,
        has_video = EXCLUDED.has_video, video_modal_url = EXCLUDED.video_modal_url,
        advertiser_logo = EXCLUDED.advertiser_logo,
+       advertiser_store_slug = EXCLUDED.advertiser_store_slug,
        -- COALESCE: si esta pasada no pudo parsear "hace N días" (subtitle
        -- cambió de forma, o vino null), no se pisa un valor ya bueno con null.
        portal_first_seen_at = COALESCE(EXCLUDED.portal_first_seen_at, listings_cl.portal_first_seen_at),
@@ -203,13 +207,13 @@ export async function upsertListingCl(client, parsed, options = {}) {
       priceClp, priceUf, ufRate, ufRateDate, currency, parsed.bedrooms ?? null, parsed.bathrooms ?? null,
       parsed.square_meters ?? null, parsed.property_type ?? null,
       comunaId, parsed.comuna ?? null, localidad, parsed.address ?? null, parsed.latitude ?? null, parsed.longitude ?? null,
-      parsed.description ?? null, JSON.stringify(parsed.photos ?? []),
+      parsed.description ?? null, JSON.stringify(parsed.photos ?? []), parsed.photos_total_count ?? null,
       parsed.property_code ?? null, parsed.advertiser_id ?? null, parsed.seller_reference ?? null,
-      scrapedAt,
       JSON.stringify(parsed.features ?? []),
       parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
+      parsed.advertiser_store_slug ?? null,
       portalFirstSeenAt,
-      parsed.photos_total_count ?? null,
+      scrapedAt,
     ]
   )
   const listingId = upserted[0].id
