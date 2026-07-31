@@ -540,7 +540,10 @@ test('el payload rellena las secciones de la ficha con datos del origen', () => 
   assert.equal(payload.address_scraped, 'Av. Apoquindo 1234')
   assert.equal(payload.address_real, 'AV APOQUINDO 1234')
   assert.equal(payload.address_verified, true)
-  assert.equal(payload.rol_propiedad, '795-198')
+  // Formato OFICIAL del SII, no el canónico interno: la base guarda '795-198'
+  // para poder comparar, pero al CRM va el rol como lo imprime el SII y como
+  // sale en el certificado de la Tesorería.
+  assert.equal(payload.rol_propiedad, '00795-00198')
   assert.equal(payload.owner.name, 'María Pérez')
   assert.equal(payload.owner.phone, '+56912345678')
   assert.equal(payload.contacts.length, 2)
@@ -576,6 +579,8 @@ test('metadata lleva la auditoría del match que SmartBC no tiene dónde guardar
   const { metadata } = buildCaptacionPayload(BUNDLE)
   assert.equal(metadata.origen, 'casafari-mio')
   assert.equal(metadata.captacion_id, CAP_ID)
+  // metadata es la pista de auditoría: lleva el rol interno, el que permite
+  // volver a nuestra base. El que se lee en la ficha es `rol_propiedad`.
   assert.equal(metadata.sii_rol, '795-198')
   assert.equal(metadata.match_score, 0.97)
   assert.equal(metadata.match_verified, true)

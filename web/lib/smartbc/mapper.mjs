@@ -26,6 +26,7 @@ import { PASSTHROUGH } from './catalogo.mjs'
 // Los parentescos viven aparte porque también los usa la ficha de Captación en
 // el navegador, y este módulo importa node:crypto (ver relaciones.mjs).
 import { splitRelaciones } from './relaciones.mjs'
+import { formatRolCl } from '../rol-format.mjs'
 export { splitRelaciones }
 
 /**
@@ -610,7 +611,13 @@ export function buildCaptacionPayload(bundle, {
     address_verified: cap.match_verified === true ? true : null,
     latitude: numOrNull(cap.latitude),
     longitude: numOrNull(cap.longitude),
-    rol_propiedad: trunc(cap.sii_rol, 50),
+    // En formato OFICIAL (manzana y predio a cinco dígitos, "03810-00021"), no
+    // en el canónico interno. La base guarda el rol sin ceros a la izquierda
+    // porque es el formato de sii_roles_cl y con él se cruzan ficha, catastro y
+    // caché de TGR (migración 0093) — pero eso es una decisión NUESTRA para
+    // comparar. Al CRM va el rol como lo imprime el SII y como sale en el
+    // certificado de la Tesorería, que es el que va a teclear quien lo busque.
+    rol_propiedad: trunc(formatRolCl(cap.sii_rol), 50),
 
     // ── Propietario ─────────────────────────────────────────────────────────
     // `confirmed` ausente a propósito: ver CONFIRMED_NOTE.
@@ -644,6 +651,9 @@ export function buildCaptacionPayload(bundle, {
       captacion_id: cap.id,
       property_cl_id: cap.property_cl_id ?? null,
       listing_cl_id: cap.listing_cl_id ?? null,
+      // El rol en formato CANÓNICO INTERNO, a propósito: metadata es la pista
+      // de auditoría y es el valor con el que se puede volver a nuestra base.
+      // El que se lee en la ficha es `rol_propiedad`, en formato oficial.
       sii_rol: cap.sii_rol ?? null,
       sii_comuna_code: cap.sii_comuna_code ?? null,
       // Auditoría del match que SmartBC no tiene dónde guardar: su ficha tiene
