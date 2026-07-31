@@ -17,8 +17,9 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
-  Phone, Layers, Landmark, MessageCircle, BadgeCheck, AlertTriangle, Save,
+  Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
+import { PhoneRow, useCopy } from '@/components/chile/DealerFicha'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
 
@@ -86,7 +87,10 @@ export type Property = {
 }
 
 // Teléfono de contacto del dueño (DealerNet). Misma forma que captaciones_cl.phones.
-export type CrmPhone = { numero: string; tipo?: string; whatsapp?: boolean; fuente?: string; calidad?: number }
+export type CrmPhone = {
+  numero: string; tipo?: string | null; whatsapp?: boolean | null; fuente?: string; calidad?: number | null
+  categoria?: string; idimagen?: string | null; relacion?: string | null; ranking?: number | null
+}
 // El inmueble ya presente en el CRM de captación (captaciones_cl), resuelto por rol.
 export type CrmInfo = {
   captacion_id: string
@@ -251,6 +255,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   )
   const [manualPinDirty, setManualPinDirty] = useState(false)
   const [savingPin, setSavingPin] = useState(false)
+  const { copiedKey: copiedPhoneKey, copy: copyPhone } = useCopy()
   // Feedback del rol SII resuelto bajo el pin + su guardado en captación
   // (best-effort, ver PATCH /api/chile/property-cl). `captacionId` habilita el
   // link a /chile/captacion?id=<id> para abrir esa captación puntual.
@@ -892,13 +897,21 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 )}
                                 {shownCrm.phones && shownCrm.phones.length > 0 ? (
-                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                  <div className="space-y-1 mt-1.5">
                                     {shownCrm.phones.map((ph, i) => (
-                                      <span key={i} className="inline-flex items-center gap-1.5 text-xs bg-slate-800 border border-slate-600/50 rounded-full pl-2 pr-2 py-0.5">
-                                        <a href={`tel:${ph.numero.replace(/[^\d+]/g, '')}`} className="font-mono text-slate-100 hover:text-emerald-300 inline-flex items-center gap-1"><Phone size={11} /> {ph.numero}</a>
-                                        {ph.whatsapp && <a href={`https://wa.me/${ph.numero.replace(/[^\d]/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:text-emerald-300" title="WhatsApp"><MessageCircle size={12} /></a>}
-                                        {ph.tipo && <span className="text-[10px] text-slate-500">{ph.tipo}</span>}
-                                      </span>
+                                      <PhoneRow
+                                        key={`${ph.numero}-${i}`}
+                                        phone={{
+                                          phone_e164: ph.numero,
+                                          categoria: ph.categoria ?? 'alternativo',
+                                          clasificacion: ph.tipo ?? null,
+                                          ind_whatsapp: ph.whatsapp ?? null,
+                                          idimagen: ph.idimagen ?? null,
+                                          relacion: ph.relacion ?? null,
+                                        }}
+                                        copied={copiedPhoneKey === `phone-${i}`}
+                                        onCopy={() => copyPhone(`phone-${i}`, ph.numero)}
+                                      />
                                     ))}
                                   </div>
                                 ) : (
