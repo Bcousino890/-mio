@@ -111,10 +111,19 @@ export async function pruneDuplicateJobsCl(client, queues = DEDUP_KEY_BY_QUEUE) 
  * de paso es lo único que detecta bajadas de precio en anuncios ya guardados
  * (el discovery solo encola el detalle de los que aún NO están en la base).
  *
- * Delante de todo van las fichas a las que les FALTAN fotos de verdad:
- * `photos_total_count` (migración 0086) es el total que declara el portal, así
- * que "guardadas < declaradas" es una comprobación exacta, no un umbral
- * inventado — y también converge, porque al completarse deja de cumplirse.
+ * Delante de todo van las fichas a las que les FALTAN fotos: `photos_total_count`
+ * (migración 0086) es el total que declara el portal, así que "guardadas <
+ * declaradas" es una comprobación exacta y no un umbral inventado.
+ *
+ * Pero esa prioridad se limita a una vez cada 24 h por ficha, y no es un
+ * detalle: HAY anuncios cuyo hueco no se puede cerrar nunca. Verificado contra
+ * el portal en MLC-4191870754 — declara 30 fotos y la unión de sus dos únicas
+ * fuentes (el blob de la ficha y el modal de galería) da 29. La foto número 30
+ * no existe en ningún sitio al que se pueda llegar. Sin el límite temporal esas
+ * fichas encabezarían la cola en cada pasada, para siempre: exactamente el
+ * bucle que este cambio venía a quitar, en pequeño. Con el límite cuestan un
+ * re-scrapeo al día y, si el portal llega a publicar la que falta, se recoge
+ * dentro de esas 24 h.
  *
  * NO se usa `last_seen_at` para ordenar: lo mueve también el barrido del
  * listado, que ve el anuncio sin abrir su ficha.
@@ -143,6 +152,8 @@ export async function reenqueueStaleListingsCl(client, { limit = 400 } = {}) {
        ORDER BY CASE WHEN jsonb_typeof(l.photos) = 'array'
                        AND l.photos_total_count IS NOT NULL
                        AND jsonb_array_length(l.photos) < l.photos_total_count
+                       AND (l.detail_parsed_at IS NULL
+                            OR l.detail_parsed_at < now() - interval '24 hours')
                      THEN 0 ELSE 1 END,
                 l.detail_parsed_at ASC NULLS FIRST
        LIMIT $1`,

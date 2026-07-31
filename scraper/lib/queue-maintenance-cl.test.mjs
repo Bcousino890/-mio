@@ -118,6 +118,19 @@ test('reenqueueStaleListingsCl: re-encola las fichas que llevan más tiempo sin 
   // llevan más tiempo sin bajarse — las del parser viejo tienen NULL.
   assert.match(sql, /jsonb_array_length\(l\.photos\) < l\.photos_total_count/)
   assert.match(sql, /l\.detail_parsed_at ASC NULLS FIRST/)
+})
+
+test('la prioridad por "le faltan fotos" se limita a una vez al día', async () => {
+  // Hay huecos que NO se pueden cerrar nunca. Verificado contra el portal en
+  // MLC-4191870754: declara 30 fotos y la unión de sus dos únicas fuentes (el
+  // blob de la ficha y el modal de galería) da 29 — la trigésima no existe en
+  // ningún sitio alcanzable. Sin límite temporal, esas fichas encabezarían la
+  // cola en cada pasada para siempre: el mismo bucle que este cambio quita.
+  let sql = null
+  const client = { async query(s) { sql = s.replace(/\s+/g, ' ').trim(); return { rowCount: 0 } } }
+  await reenqueueStaleListingsCl(client)
+
+  assert.match(sql, /detail_parsed_at < now\(\) - interval '24 hours'/)
   // Solo lo publicado ahora: re-bajar bajas no aporta.
   assert.match(sql, /l\.is_active/)
   // Prioridad 0: por debajo de los anuncios que aún NO están en la base (100).
