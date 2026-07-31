@@ -32,8 +32,10 @@ import {
   queryDealernetBuscadorMultiple,
   dealernetRetcodeMessage,
   computeRutDv,
+  dedupePhones,
   DEFAULT_DEALERNET_PRODUCTS,
   type DealernetCandidato,
+  type DealernetPhone,
 } from '@/lib/dealernet'
 // Caché compartida con las API routes de DealerNet (/api/chile/dealernet-buscar
 // y /api/chile/dealernet-lookup) — sin esto, este pipeline volvía a golpear el
@@ -1420,14 +1422,14 @@ export async function finishDealernetByRut(
   // /chile/dealer, u otra captación) — reusar evita pagar la consulta de nuevo.
   const cached = await getCachedContactByRut(rutNum, rutDv, DEFAULT_DEALERNET_PRODUCTS)
 
-  let phones: { phone_e164: string; clasificacion: string | null; categoria: string; ind_whatsapp: boolean | null; product_code: string; calidad: number | null }[]
+  let phones: DealernetPhone[]
   let emails: { email: string; categoria: string; product_code: string }[]
   // Nombre del titular según la propia consulta DealerNet — respaldo de
   // owner_name cuando TGR no corrió.
   let titularName: string | null = null
 
   if (cached) {
-    phones = cached.phones as any
+    phones = cached.phones
     emails = cached.emails as any
     titularName = (cached.contact as any).nombre_titular ?? null
     await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: cached.contact.retcode, success: true, fromCache: true, candidatosN: cached.phones.length, source: 'captacion' })
@@ -1494,13 +1496,19 @@ export async function finishDealernetByRut(
     titularName = lookup.nombreTitular
   }
 
-  const phonesJson = phones.map((p) => ({
+  // Mismo teléfono puede salir de varios productos (3407/3408/3410) — se
+  // deduplica igual que en la ficha Dealer (dealernet-lookup) para no repetir
+  // cada número una vez por producto que lo confirmó.
+  const phonesJson = dedupePhones(phones).map((p) => ({
     numero: p.phone_e164,
     tipo: p.clasificacion,
     categoria: p.categoria,
     whatsapp: p.ind_whatsapp,
     fuente: p.product_code,
     calidad: p.calidad,
+    idimagen: p.idimagen,
+    relacion: p.relacion,
+    ranking: p.ranking,
   }))
   const emailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
 
