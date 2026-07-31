@@ -31,12 +31,28 @@ interface IngestaStatus {
   ultima_ingesta: string | null
   segundos_desde_ultima: number | null
   nuevos_ultimos_15min: number
+  pendiente_bytes?: number
+}
+
+// Estado por archivo JSONL del VPS (sii_mapasui_ingest_state_cl, migración
+// 0090). Es lo que responde "¿qué falta?": cuánto del output en disco ya está
+// en la BD y si el último barrido quedó a medias.
+interface ArchivoRow {
+  archivo: string
+  lineas: number
+  predios: number
+  lineas_invalidas: number
+  byte_offset: number
+  file_size: number
+  pendiente_bytes: number
+  ultima_corrida: string | null
+  ultimo_avance: string | null
 }
 
 // Presentación de cada nivel del latido. `al_dia` (scrape en reposo, cron
 // horario al día) es un estado SANO y se pinta en calma, no como alarma.
 const NIVEL_UI: Record<NivelIngesta, { dot: string; pulse: boolean; label: string }> = {
-  ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lotes cada ~10 min)' },
+  ingestando: { dot: 'bg-green-400', pulse: true, label: 'Ingesta activa (lote reciente)' },
   al_dia: { dot: 'bg-emerald-500', pulse: false, label: 'Al día (scrape en reposo · datos completos)' },
   estancado: { dot: 'bg-amber-500', pulse: false, label: 'Sin ingesta reciente' },
   sin_datos: { dot: 'bg-slate-500', pulse: false, label: 'Sin datos todavía' },
@@ -54,6 +70,19 @@ interface Stats {
   }
   por_comuna: ComunaRow[]
   ultimos: UltimoRow[]
+  archivos?: ArchivoRow[]
+}
+
+function formatoBytes(n: number) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function formatoFecha(iso: string | null) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 function formatoCLP(n: number | null) {
@@ -112,6 +141,8 @@ export default function SiiMapasuiStats() {
   }
 
   const { ingesta_status, globales, por_comuna, ultimos } = stats
+  const archivos = stats.archivos ?? []
+  const pendienteTotal = ingesta_status.pendiente_bytes ?? 0
 
   return (
     <div className="space-y-6">
@@ -137,6 +168,11 @@ export default function SiiMapasuiStats() {
               </span>
             </div>
             <div className="text-xs text-slate-500">
+              {pendienteTotal > 0 && (
+                <span className="text-amber-500 mr-3">
+                  {formatoBytes(pendienteTotal)} del output en disco sin ingestar
+                </span>
+              )}
               {ingesta_status.nuevos_ultimos_15min.toLocaleString('es-CL')} predios nuevos en los últimos 15 min
             </div>
           </div>
@@ -183,6 +219,55 @@ export default function SiiMapasuiStats() {
           </table>
         </div>
       </div>
+
+      {/* Estado de la ingesta por archivo JSONL del VPS */}
+      {archivos.length > 0 && (
+        <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">
+          <h3 className="text-xs uppercase tracking-wide text-slate-500 mb-3">
+            Ingesta por archivo (output/predios del VPS)
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-[var(--c-border-card)]">
+                  <th className="py-2 pr-4">Archivo</th>
+                  <th className="py-2 pr-4">Líneas leídas</th>
+                  <th className="py-2 pr-4">Predios</th>
+                  <th className="py-2 pr-4">Leído</th>
+                  <th className="py-2 pr-4">Pendiente</th>
+                  <th className="py-2 pr-4">Último avance</th>
+                  <th className="py-2 pr-4">Última corrida</th>
+                </tr>
+              </thead>
+              <tbody>
+                {archivos.map((a) => (
+                  <tr key={a.archivo} className="border-b border-[var(--c-border-card)]">
+                    <td className="py-2 pr-4">{a.archivo}</td>
+                    <td className="py-2 pr-4">{a.lineas.toLocaleString('es-CL')}</td>
+                    <td className="py-2 pr-4">{a.predios.toLocaleString('es-CL')}</td>
+                    <td className="py-2 pr-4 text-slate-400">
+                      {formatoBytes(a.byte_offset)}
+                      {a.file_size > 0 && (
+                        <span className="text-slate-500"> / {formatoBytes(a.file_size)}</span>
+                      )}
+                    </td>
+                    <td className={`py-2 pr-4 ${a.pendiente_bytes > 0 ? 'text-amber-500' : 'text-slate-500'}`}>
+                      {a.pendiente_bytes > 0 ? formatoBytes(a.pendiente_bytes) : '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-slate-500">{formatoFecha(a.ultimo_avance)}</td>
+                    <td className="py-2 pr-4 text-slate-500">{formatoFecha(a.ultima_corrida)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-slate-500 mt-3">
+            La ingesta es incremental: cada corrida lee solo las líneas nuevas del JSONL desde su último
+            checkpoint. &quot;Pendiente&quot; en cero significa que todo lo que hay en disco ya está en{' '}
+            <code>sii_mapasui_predios_cl</code>.
+          </p>
+        </div>
+      )}
 
       {/* Últimos ingestados */}
       <div className="rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] p-4">

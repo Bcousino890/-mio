@@ -62,9 +62,18 @@ El objetivo operativo es **scrapear sin pausas y sin caerse**. Tres piezas:
    `scraper/sii-scraper/.launch-sii-mapasui` en `main` dispara
    `scrape-sii-mapasui.yml`, que mata el scrape en curso y relanza en modo cola
    (continúa donde quedó). No hace falta apretarlo para caídas normales: el
-   **watchdog** (`ingest-sii-mapasui-now.yml`, cada 30 min) ya relanza solo si
-   el proceso murió o se colgó ≥6 h. El botón es para forzar el relanzamiento de
-   inmediato o reanudar tras un incidente mayor.
+   **watchdog** (`scraper/sii-scraper/watchdog-ingest.sh`, en el cron del VPS
+   cada 30 min, instalado por `infra/deploy.sh`) ya relanza solo si el proceso
+   murió o se colgó ≥6 h. El botón es para forzar el relanzamiento de inmediato
+   o reanudar tras un incidente mayor.
+
+   La ingesta que ese watchdog dispara es **incremental en dos niveles**: si el
+   `.jsonl` no cambió desde la última corrida ni se abre la BD (marcador
+   `.mtime`), y si sí creció se leen solo los bytes nuevos desde el checkpoint
+   de `sii_mapasui_ingest_state_cl` (migración 0090) en lotes de 500 filas. Esto
+   último es lo que hace barata la comuna **en curso**, que es justo la que el
+   atajo por mtime nunca puede saltarse: releerla entera fila a fila es lo que
+   reventaba el túnel SSH del workflow con «Broken pipe» a los 5 minutos.
 
 Para forzar **una sola comuna** (ignorando la cola), usar el `workflow_dispatch`
 de `scrape-sii-mapasui.yml` con el input `comuna_code` (vacío = cola).

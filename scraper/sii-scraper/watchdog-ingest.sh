@@ -109,4 +109,11 @@ if [ ! -d node_modules/pg ]; then
   npm install --omit=dev --no-audit --no-fund
 fi
 echo "▶ Ingestando sii-scraper/output/predios/ en sii_mapasui_predios_cl..."
-node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios
+# flock -n: run-sii-mapasui.sh corre su propia ingesta incremental mientras
+# scrapea, así que esta vuelta del cron puede caer justo encima. Con el
+# checkpoint por bytes de la migración 0090 saltarse una vuelta no pierde nada
+# — la siguiente recoge lo que falte — y evita dos ingestas peleando por la
+# misma tabla.
+flock -n /tmp/casafari-ingest-sii-mapasui.lock \
+  node ingest-sii-mapasui.mjs --dir sii-scraper/output/predios \
+  || echo "⏭ Otra ingesta tiene el lock (o falló) — se reintenta en la próxima vuelta."

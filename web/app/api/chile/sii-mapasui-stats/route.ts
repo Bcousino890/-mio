@@ -9,31 +9,42 @@ import { pool } from '@/lib/db'
  * `tgr-stats`, pero para la tabla de procedencia scraping (mapasui).
  *
  * Nota: a diferencia de TGR (que escribe rol por rol), esta tabla se llena por
- * LOTES — la ingesta incremental de run-sii-mapasui.sh re-ingesta el JSONL
- * cada SII_INGEST_INTERVAL_SEC (default 600 s), y el cron de respaldo
- * (ingest-sii-mapasui-now.yml, cada 30 min) lo re-ingesta aunque el scrape ya
- * haya terminado. El upsert bumpea updated_at aunque el lote no traiga predios
- * nuevos, así que GREATEST(created_at, updated_at) refleja la última escritura.
+ * LOTES — la ingesta incremental de run-sii-mapasui.sh corre cada
+ * SII_INGEST_INTERVAL_SEC (default 600 s), y el watchdog del cron del VPS
+ * (watchdog-ingest.sh, cada 30 min) la repasa aunque el scrape ya
+ * haya terminado.
+ *
+ * El latido sale de `sii_mapasui_ingest_state_cl` (migración 0090), NO del
+ * updated_at de los predios. Dos razones:
+ *   1. Desde 0090 la ingesta es incremental: si no hay líneas nuevas no se
+ *      reescribe ninguna fila, así que updated_at se quedaría congelado y el
+ *      panel gritaría "estancado" con el pipeline perfectamente sano.
+ *   2. Al revés, antes mentía en el otro sentido: el cron llevaba días
+ *      muriéndose con "Broken pipe" a los 5 min y aun así alcanzaba a
+ *      reescribir filas, así que el panel decía "Al día · datos completos"
+ *      mientras la ingesta fallaba corrida tras corrida.
+ * `ultima_corrida` marca cuándo el ingest MIRÓ el archivo (aunque no trajera
+ * nada) y `ultimo_avance` cuándo trajo líneas nuevas de verdad.
  *
  * El latido tiene TRES niveles, no un binario activo/inactivo, porque "scrape
  * en reposo / comuna completa" es un estado SANO y no debe pintarse como la
  * alarma de "pipeline muerto 19 h" que motivó este panel:
  *   - ingestando (<15 min): el scrape está escribiendo ahora mismo, o acaba de
  *     correr un lote/cron. 1.5× la cadencia incremental de 600 s.
- *   - al_dia (<6 h): sin lote reciente pero el cron de respaldo lo mantiene
- *     fresco; típico cuando el scrape de la comuna ya terminó. NO es problema.
- *   - estancado (>=6 h): ni la ingesta incremental ni el cron de respaldo
- *     escribieron en horas — el pipeline (o GitHub Actions / VPS / DB) está
- *     realmente caído y hay que mirarlo.
+ *   - al_dia (<2 h): sin lote reciente pero el watchdog lo mantiene fresco;
+ *     típico cuando el scrape de la comuna ya terminó. NO es problema.
+ *   - estancado (>=2 h): ni la ingesta incremental ni el watchdog escribieron
+ *     en horas — el pipeline (o el VPS / la DB) está realmente caído.
  *
- * ¿Por qué 6 h y no 2 h? Los scheduled runs de GitHub Actions se descartan y
- * retrasan mucho: aun pidiendo el cron cada 30 min, se han observado gaps
- * reales de ~3 h30 entre corridas. 6 h deja margen de sobra sobre ese jitter
- * (sin falsas alarmas en reposo normal) pero sigue MUY por debajo de las 19 h
- * que el usuario consideró un fallo, así que una caída real se detecta a tiempo.
+ * La ventana era de 6 h mientras el respaldo vivía en un scheduled workflow de
+ * GitHub: esos runs se descartan y retrasan tanto que se veían gaps reales de
+ * ~3 h30 aun pidiéndolo cada 30 min, y había que tolerarlos para no dar falsas
+ * alarmas. Con el watchdog ya en el cron del VPS (cada 30 min, sin jitter)
+ * ese margen sobra: 2 h siguen siendo 4 vueltas seguidas perdidas antes de
+ * encender la alarma, y una caída real se ve 4 h antes que hasta ahora.
  */
 const VENTANA_INGESTANDO_SEG = 15 * 60
-const VENTANA_AL_DIA_SEG = 6 * 60 * 60
+const VENTANA_AL_DIA_SEG = 2 * 60 * 60
 
 type NivelIngesta = 'ingestando' | 'al_dia' | 'estancado' | 'sin_datos'
 
@@ -84,15 +95,51 @@ export async function GET() {
       `),
     ])
 
+    // Estado por archivo (0090). Tolerante a que la migración aún no esté
+    // aplicada en este entorno: el panel sigue funcionando con el latido viejo.
+    const archivosRes = await pool
+      .query(`
+        SELECT archivo, byte_offset, file_size, lineas, predios, lineas_invalidas,
+               ultima_corrida, ultimo_avance
+        FROM sii_mapasui_ingest_state_cl
+        ORDER BY archivo
+      `)
+      .catch(() => ({ rows: [] as Record<string, unknown>[] }))
+
     const g = globalRes.rows[0]
     const hb = heartbeatRes.rows[0]
 
-    const ultimaIngesta = hb.ultima as Date | null
-    const segundosDesdeUltima = ultimaIngesta ? (Date.now() - new Date(ultimaIngesta).getTime()) / 1000 : null
+    const fechas = [
+      hb.ultima as Date | null,
+      ...archivosRes.rows.map((r) => (r.ultima_corrida ?? null) as Date | null),
+    ]
+      .filter((d): d is Date => Boolean(d))
+      .map((d) => new Date(d).getTime())
+
+    const ultimaIngesta = fechas.length ? new Date(Math.max(...fechas)) : null
+    const segundosDesdeUltima = ultimaIngesta ? (Date.now() - ultimaIngesta.getTime()) / 1000 : null
     const nivel = nivelIngesta(segundosDesdeUltima)
     // `activo` se mantiene por compatibilidad: verdadero salvo que el pipeline
     // esté realmente estancado (>=2 h sin escritura) o sin datos.
     const activo = nivel === 'ingestando' || nivel === 'al_dia'
+
+    const archivos = archivosRes.rows.map((r) => {
+      const byteOffset = Number(r.byte_offset ?? 0)
+      const fileSize = Number(r.file_size ?? 0)
+      return {
+        archivo: String(r.archivo),
+        lineas: Number(r.lineas ?? 0),
+        predios: Number(r.predios ?? 0),
+        lineas_invalidas: Number(r.lineas_invalidas ?? 0),
+        byte_offset: byteOffset,
+        file_size: fileSize,
+        // Bytes que el último barrido dejó sin leer (una corrida cortada a la
+        // mitad). En marcha normal esto es 0: se ingesta hasta el final.
+        pendiente_bytes: Math.max(0, fileSize - byteOffset),
+        ultima_corrida: (r.ultima_corrida ?? null) as Date | null,
+        ultimo_avance: (r.ultimo_avance ?? null) as Date | null,
+      }
+    })
 
     return NextResponse.json({
       success: true,
@@ -102,7 +149,9 @@ export async function GET() {
         ultima_ingesta: ultimaIngesta,
         segundos_desde_ultima: segundosDesdeUltima,
         nuevos_ultimos_15min: Number(hb.recientes),
+        pendiente_bytes: archivos.reduce((acc, a) => acc + a.pendiente_bytes, 0),
       },
+      archivos,
       globales: {
         total: Number(g.total),
         comunas: Number(g.comunas),

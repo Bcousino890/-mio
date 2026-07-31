@@ -159,7 +159,7 @@ PY
   echo "▶ Modo COLA — ${#COMUNA_CODES[@]} comuna(s): ${COMUNA_NOMBRES[*]}"
 fi
 
-# Estado en disco para el watchdog (ingest-sii-mapasui-now.yml).
+# Estado en disco para el watchdog (watchdog-ingest.sh).
 cat > "$PARAMS_FILE" <<PARAMS
 SII_RPS=${SII_RPS}
 SII_CONCURRENCY=${SII_CONCURRENCY}
@@ -211,13 +211,25 @@ fi
 # ingest-sii-mapasui.mjs solo LEE el .jsonl (no lo bloquea) y su INSERT ON
 # CONFLICT DO UPDATE es idempotente, así que re-ingestar archivos en
 # crecimiento es seguro.
+#
+# El flock la serializa con el watchdog del cron del VPS
+# (watchdog-ingest.sh, en el cron del VPS): sin él, dos ingestas podían
+# solaparse sobre la misma tabla. Acá
+# es -n (si el cron ya está ingestando, esta vuelta se salta: la siguiente
+# recoge igual lo que falte gracias al checkpoint de la migración 0090).
 SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"
+INGEST_LOCK="/tmp/casafari-ingest-sii-mapasui.lock"
 (
+  # pipefail: sin esto el estado del pipeline sería el de `sed` (siempre 0) y
+  # el aviso de "otra ingesta en curso" no se imprimiría nunca.
+  set -o pipefail
   while sleep "$SII_INGEST_INTERVAL_SEC"; do
     if [ -d output/predios ]; then
       echo "▶ [ingesta incremental $(date -Iseconds)]"
-      DATABASE_URL="$DATABASE_URL" node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios 2>&1 \
-        | sed 's/^/  [ingest] /'
+      DATABASE_URL="$DATABASE_URL" flock -n "$INGEST_LOCK" \
+        node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios 2>&1 \
+        | sed 's/^/  [ingest] /' \
+        || echo "  [ingest] ⏭ otra ingesta en curso (o falló) — se reintenta en ${SII_INGEST_INTERVAL_SEC}s"
     fi
   done
 ) &
@@ -264,7 +276,8 @@ JSON
 
   echo "▶ [3/3] Ingestando predios en sii_mapasui_predios_cl..."
   if [ -d output/predios ]; then
-    DATABASE_URL="$DATABASE_URL" node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios
+    DATABASE_URL="$DATABASE_URL" flock -w 900 "$INGEST_LOCK" \
+      node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios
   else
     echo "⚠ No se generó output/predios para ${nombre} — nada que ingestar."
   fi
@@ -284,7 +297,8 @@ wait "$INGEST_LOOP_PID" 2>/dev/null || true
 INGEST_LOOP_PID=""
 if [ -d output/predios ]; then
   echo "▶ Ingesta final de cierre (todas las comunas)..."
-  DATABASE_URL="$DATABASE_URL" node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios || true
+  DATABASE_URL="$DATABASE_URL" flock -w 900 "$INGEST_LOCK" \
+    node "$REPO_DIR/scraper/ingest-sii-mapasui.mjs" --dir output/predios || true
 fi
 
 # Marcador de cola completa: el watchdog deja de relanzar cuando existe. Solo
