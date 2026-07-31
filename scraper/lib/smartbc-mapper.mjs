@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash } from 'node:crypto'
+import { PASSTHROUGH } from './smartbc-catalogo-cl.mjs'
 
 /**
  * "Confirmada" NO significa lo mismo en los dos sistemas y confundirlo corrompe
@@ -320,10 +321,15 @@ export function publicationNumber(externalId) {
  * separe bien los dos orígenes. Mandarlos sueltos duplicaría la misma corredora
  * dos veces en la pestaña y falsearía el "nº de corredoras" del inmueble.
  */
-export function buildListings(listings, { principalId = null, principalTitle = null, principalRaw = {} } = {}) {
+export function buildListings(listings, {
+  principalId = null,
+  principalTitle = null,
+  principalRaw = {},
+  normalizer = PASSTHROUGH,
+} = {}) {
   const extrasFor = (l) => (l.id === principalId
-    ? { title: principalTitle, raw: principalRaw }
-    : { title: null, raw: {} })
+    ? { title: principalTitle, raw: principalRaw, normalizer }
+    : { title: null, raw: {}, normalizer })
   const portales = listings.filter((l) => l.source_type === 'portal')
   const webs = listings.filter((l) => l.source_type !== 'portal')
   const webByCorredora = new Map()
@@ -366,7 +372,7 @@ export function buildListings(listings, { principalId = null, principalTitle = n
  * `cap.raw_extracted.sqm_construida`. Para el resto se omiten en vez de
  * rellenarlos con los del anuncio principal, que es otro anuncio.
  */
-function avisoFrom(l, web, { title = null, raw = {} } = {}) {
+function avisoFrom(l, web, { title = null, raw = {}, normalizer = PASSTHROUGH } = {}) {
   const stored = asArray(l.stored_photos)
   const photoUrls = stored.map((sp) => sp?.bucket_url).filter(isHttpUrl)
   const fallbackPhotos = asArray(l.photos).filter(isHttpUrl)
@@ -388,9 +394,12 @@ function avisoFrom(l, web, { title = null, raw = {} } = {}) {
     bathrooms: intOrNull(l.bathrooms),
     square_meters: intOrNull(l.square_meters),
     useful_square_meters: intOrNull(raw.sqm_construida),
-    region: trunc(l.comuna_region, 120),
-    commune: trunc(l.comuna_name ?? l.comuna_raw, 120),
-    zone: trunc(l.localidad, 120),
+    region: trunc(
+      normalizer.region(normalizer.regionDeComuna(l.comuna_name ?? l.comuna_raw) ?? l.comuna_region),
+      120,
+    ),
+    commune: trunc(normalizer.comuna(l.comuna_name ?? l.comuna_raw), 120),
+    zone: trunc(normalizer.zona(l.comuna_name ?? l.comuna_raw, l.localidad), 120),
     address_scraped: trunc(l.address, LIMITS.addressScraped),
     latitude: numOrNull(l.latitude),
     longitude: numOrNull(l.longitude),
@@ -432,8 +441,13 @@ export function pruneNulls(obj) {
  * @param {object} [options]
  * @param {string|null} [options.stage]      etapa inicial (solo se aplica al crear)
  * @param {boolean} [options.includeNotes]   línea de procedencia en `notes`
+ * @param {object} [options.normalizer]      catálogo de SmartBC (smartbc-catalogo-cl.mjs)
  */
-export function buildCaptacionPayload(bundle, { stage = 'assigned', includeNotes = true } = {}) {
+export function buildCaptacionPayload(bundle, {
+  stage = 'assigned',
+  includeNotes = true,
+  normalizer = PASSTHROUGH,
+} = {}) {
   const cap = bundle.captacion
   const comuna = bundle.comuna ?? {}
   const property = bundle.property ?? {}
@@ -497,9 +511,18 @@ export function buildCaptacionPayload(bundle, { stage = 'assigned', includeNotes
     portal_publication_number: publicationNumber(principal.external_id),
 
     // ── Ubicación ───────────────────────────────────────────────────────────
-    region: trunc(comuna.region, 120),
-    commune: trunc(comuna.name ?? cap.comuna_label, 120),
-    zone: trunc(property.localidad ?? principal.localidad, 120),
+    // Normalizadas contra el catálogo de SmartBC: lo que no exista allí no
+    // viaja (queda en normalizer.faltantes para reportárselo), en vez de
+    // colarse como texto libre en un campo del equipo.
+    region: trunc(
+      normalizer.region(normalizer.regionDeComuna(comuna.name ?? cap.comuna_label) ?? comuna.region),
+      120,
+    ),
+    commune: trunc(normalizer.comuna(comuna.name ?? cap.comuna_label), 120),
+    zone: trunc(
+      normalizer.zona(comuna.name ?? cap.comuna_label, property.localidad ?? principal.localidad),
+      120,
+    ),
     address_scraped: trunc(cap.address, LIMITS.addressScraped),
     // Dirección exacta del catastro SII para el rol resuelto: mejor dato que el
     // del aviso. Es campo del equipo — si ya escribieron una, la API la protege.
@@ -526,6 +549,7 @@ export function buildCaptacionPayload(bundle, { stage = 'assigned', includeNotes
       principalId: principal.id ?? null,
       principalTitle: cap.title ?? null,
       principalRaw: raw,
+      normalizer,
     }).map(pruneNulls),
 
     // `attempts` NO se envía: el origen no registra intentos de contacto con el

@@ -16,6 +16,7 @@ import {
   syncOnce,
 } from './smartbc-sync-cl.mjs'
 import { buildCaptacionPayload, externalIdFor, payloadHash } from './smartbc-mapper.mjs'
+import { PASSTHROUGH } from './smartbc-catalogo-cl.mjs'
 
 const CAP_ID = '11111111-1111-1111-1111-111111111111'
 const PROP_ID = 'pppppppp-0000-0000-0000-000000000001'
@@ -197,7 +198,7 @@ test('los anuncios se agrupan por property_cl e incluyen el que originó la capt
 test('un alta nueva se envía y se registra con su request_id y admin_url', async () => {
   const db = makeDb()
   const smartbc = makeSmartbc(okBatch('created'))
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
 
   assert.deepEqual(
     { total: summary.total, created: summary.created, failed: summary.failed },
@@ -224,7 +225,7 @@ test('una captación sin cambios no llega a la API pero sí queda registrada', a
     captaciones: [{ ...CAP, payload_hash: payloadHash(payload), last_payload: payload, synced_at: new Date() }],
   })
   const smartbc = makeSmartbc(okBatch())
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
 
   assert.equal(summary.unchanged, 1)
   assert.equal(smartbc.calls.length, 0, 'no se gasta cuota en lo que no cambió')
@@ -248,7 +249,7 @@ test('un lote de 100 con un elemento inválido procesa los 99 buenos y reporta e
         : { index, ok: true, external_id: it.external_id, action: 'created', id: `sbc-${index}` }),
   }))
 
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
   assert.equal(smartbc.calls.length, 1, 'un solo lote de 100')
   assert.equal(smartbc.calls[0].items.length, 100)
   assert.equal(summary.created, 99)
@@ -304,7 +305,7 @@ test('un elemento con enum inválido no bloquea al resto: se aparta y el lote se
     }
   })
 
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
   assert.equal(smartbc.calls.length, 2, 'un reintento tras apartar el malo')
   assert.equal(smartbc.calls[1].items.length, 2, 'reenvía solo los buenos')
   assert.equal(summary.created, 2)
@@ -320,7 +321,7 @@ test('si el lote entero falla, todas sus captaciones quedan marcadas como fallid
   const err = Object.assign(new Error('clave revocada'), { status: 401, code: 'unauthorized', requestId: 'req_401' })
   const smartbc = makeSmartbc(() => { throw err })
 
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
   assert.equal(summary.failed, 1)
   const write = db.writes.at(-1)
   assert.ok(write.params.includes('unauthorized'))
@@ -330,7 +331,7 @@ test('si el lote entero falla, todas sus captaciones quedan marcadas como fallid
 test('en dry-run no se guarda el hash: nada se escribió en SmartBC', async () => {
   const db = makeDb()
   const smartbc = makeSmartbc(okBatch('created'))
-  const summary = await syncOnce({ client: db, smartbc }, { dryRun: true })
+  const summary = await syncOnce({ client: db, smartbc }, { dryRun: true, normalizer: PASSTHROUGH })
 
   assert.equal(summary.created, 1)
   assert.equal(smartbc.calls[0].opts.dryRun, true)
@@ -346,7 +347,7 @@ test('más de 100 pendientes se parten en lotes de 100', async () => {
   }))
   const db = makeDb({ captaciones, listings: [] })
   const smartbc = makeSmartbc(okBatch('created'))
-  await syncOnce({ client: db, smartbc }, { limit: 150 })
+  await syncOnce({ client: db, smartbc }, { limit: 150, normalizer: PASSTHROUGH })
 
   assert.deepEqual(smartbc.calls.map((c) => c.items.length), [100, 50])
   assert.notEqual(
@@ -356,10 +357,73 @@ test('más de 100 pendientes se parten en lotes de 100', async () => {
   )
 })
 
+test('el catálogo se descarga una vez por corrida y normaliza la comuna', async () => {
+  const db = makeDb()
+  const pedidos = []
+  const smartbc = {
+    calls: [],
+    async catalogo(tipo, query = {}) {
+      pedidos.push(tipo)
+      if (tipo === 'regiones') return { data: [{ name: 'Metropolitana', code: 'RM' }] }
+      if (tipo === 'comunas') return { data: [{ name: 'Las Condes', region: 'Metropolitana' }] }
+      return { data: [{ name: 'El Golf' }] }
+    },
+    async batch(items, opts) {
+      this.calls.push({ items, opts })
+      return okBatch('created')(items)
+    },
+  }
+
+  await syncOnce({ client: db, smartbc })
+  assert.deepEqual(pedidos, ['regiones', 'comunas', 'zonas'], 'una descarga, no una por captación')
+
+  const enviado = smartbc.calls[0].items[0]
+  assert.equal(enviado.commune, 'Las Condes')
+  assert.equal(enviado.region, 'Metropolitana', 'la región sale del catálogo, no de nuestra taxonomía')
+  assert.equal(enviado.zone, 'El Golf')
+})
+
+test('una comuna fuera del catálogo no viaja y se reporta al final', async () => {
+  const db = makeDb({ captaciones: [{ ...CAP, comuna_name: 'Comuna Inventada' }] })
+  const smartbc = {
+    calls: [],
+    async catalogo(tipo) {
+      if (tipo === 'regiones') return { data: [{ name: 'Metropolitana' }] }
+      if (tipo === 'comunas') return { data: [{ name: 'Las Condes', region: 'Metropolitana' }] }
+      return { data: [] }
+    },
+    async batch(items, opts) {
+      this.calls.push({ items, opts })
+      return okBatch('created')(items)
+    },
+  }
+
+  const summary = await syncOnce({ client: db, smartbc })
+  assert.equal(smartbc.calls[0].items[0].commune, undefined, 'no se cuela como texto libre')
+  assert.ok(summary.faltantesCatalogo.some((l) => l.includes('Comuna Inventada')))
+})
+
+test('si el catálogo no se puede descargar, la ubicación no viaja (no texto libre)', async () => {
+  const db = makeDb()
+  const smartbc = {
+    calls: [],
+    async catalogo() { throw new Error('503') },
+    async batch(items, opts) {
+      this.calls.push({ items, opts })
+      return okBatch('created')(items)
+    },
+  }
+
+  const avisos = []
+  await syncOnce({ client: db, smartbc }, { log: (m) => avisos.push(m) })
+  assert.equal(smartbc.calls[0].items[0].commune, undefined)
+  assert.ok(avisos.some((m) => m.includes('catálogo')), 'y se avisa de que pasó')
+})
+
 test('sin pendientes no se llama a la API', async () => {
   const db = makeDb({ captaciones: [] })
   const smartbc = makeSmartbc(okBatch())
-  const summary = await syncOnce({ client: db, smartbc })
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
   assert.equal(summary.total, 0)
   assert.equal(smartbc.calls.length, 0)
 })

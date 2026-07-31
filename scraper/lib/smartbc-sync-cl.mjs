@@ -32,6 +32,12 @@ import {
   isEmptyPatch,
   payloadHash,
 } from './smartbc-mapper.mjs'
+import {
+  PASSTHROUGH,
+  buildNormalizer,
+  fetchCatalogo,
+  reportarFaltantes,
+} from './smartbc-catalogo-cl.mjs'
 
 export const BATCH_SIZE = 100   // tope de SmartBC por llamada a /batch
 
@@ -82,8 +88,16 @@ SELECT cap.*,
   ) com ON true
  WHERE s.captacion_id IS NULL
     OR s.synced_at IS NULL
-    OR s.last_action = 'failed'
     OR cap.updated_at > s.synced_at
+    -- Un fallo se reintenta solo si tiene sentido reintentarlo. Un
+    -- validation_error significa que el dato está mal EN NUESTRO SISTEMA:
+    -- reenviarlo igual volvería a fallar en cada corrida, para siempre,
+    -- gastando cuota y llenando el log del mismo error. Se vuelve a intentar
+    -- únicamente cuando la captación cambió en el origen (alguien arregló el
+    -- dato). Los demás errores (429, 500, 503, red) sí son transitorios.
+    OR (s.last_action = 'failed' AND (
+          s.last_error_code IS DISTINCT FROM 'validation_error'
+          OR cap.updated_at > s.last_error_at))
  ORDER BY cap.updated_at
  LIMIT $1
 `
@@ -153,7 +167,7 @@ export function toBundle(cap, listings) {
  * Decide qué hacer con una captación: nada, alta completa o PATCH diferencial.
  * Devuelve `{ action, item, payload, hash }` donde `item` es lo que va al lote.
  */
-export function planItem(cap, listings, options) {
+export function planItem(cap, listings, options = {}) {
   const payload = buildCaptacionPayload(toBundle(cap, listings), options)
   const hash = payloadHash(payload)
 
@@ -192,16 +206,17 @@ export function idempotencyKeyFor(items, prefix = 'mio-sync') {
 /**
  * Índices del lote que la validación rechazó, sacados de `details`.
  *
- * Comprobado en vivo contra la API (dry-run): un elemento que incumple el
- * SCHEMA (un enum inventado, un tipo equivocado) NO se reporta por elemento —
- * tumba el lote entero con un 400, porque el cuerpo se valida antes de procesar
- * nada. Lo que sí hace la respuesta es nombrar cada campo malo con su índice
- * (`items.1.property_type`), y eso es lo que permite recuperarse.
+ * RED DE SEGURIDAD, ya no el camino normal. SmartBC corrigió el bug por el que
+ * un elemento que incumplía el schema tumbaba el lote entero con un 400 (el
+ * cuerpo se validaba antes de procesar nada). Hoy /batch valida elemento a
+ * elemento y responde 200 con `{index, ok:false, error}` en los malos —
+ * verificado en vivo: total 3, created 2, failed 1.
  *
- * Sin esto, una sola captación con un dato raro bloquearía a las otras 99 en
- * cada corrida, para siempre. (Los errores de NEGOCIO — un email de agente que
- * no existe, por ejemplo — sí vienen por elemento, en `warnings`, y no rompen
- * el lote.)
+ * Esto se conserva porque el arreglo es reciente y el coste es cero: si una
+ * versión anterior del servidor sigue en pie en algún entorno, una captación
+ * con un dato sucio bloquearía a las otras 99 en cada corrida. Cuando el
+ * comportamiento nuevo lleve tiempo asentado, se puede borrar junto a
+ * sendBatchApartandoInvalidos().
  */
 export function badIndicesFrom(error) {
   const out = new Map()
@@ -336,14 +351,36 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
   } = opts
 
   const captaciones = await selectPendingCaptaciones(client, { limit })
-  const summary = { total: captaciones.length, created: 0, updated: 0, unchanged: 0, failed: 0, requestIds: [] }
+  const summary = {
+    total: captaciones.length, created: 0, updated: 0, unchanged: 0, failed: 0,
+    requestIds: [], faltantesCatalogo: [],
+  }
   if (!captaciones.length) return summary
 
   const listingsByCap = await loadListings(client, captaciones)
 
+  // El catálogo geográfico se descarga UNA vez por corrida y se reutiliza para
+  // todo el lote: son 2 peticiones + 1 por comuna distinta, frente a las 120/min
+  // del límite. Las zonas solo se piden para las comunas que de verdad aparecen
+  // en este lote.
+  let normalizer = opts.normalizer ?? PASSTHROUGH
+  if (!opts.normalizer) {
+    const comunasDeInteres = [...new Set(
+      captaciones.map((c) => c.comuna_name ?? c.comuna_label).filter(Boolean),
+    )]
+    try {
+      normalizer = buildNormalizer(await fetchCatalogo(smartbc, { comunasDeInteres }))
+    } catch (err) {
+      // Sin catálogo NO se manda texto libre: se deja el campo vacío y se avisa.
+      // Mandar nuestra nomenclatura a ciegas es justo lo que el contrato prohíbe.
+      log(`⚠ no se pudo descargar el catálogo (${err.message}); región/comuna/zona no viajarán`)
+      normalizer = buildNormalizer({ regiones: [], comunas: [], zonasPorComuna: new Map() })
+    }
+  }
+
   const planned = []
   for (const cap of captaciones) {
-    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes })
+    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes, normalizer })
     if (plan.action === 'unchanged') {
       summary.unchanged++
       // Se registra igual: deja el rastro de que la captación se revisó hoy y
@@ -360,6 +397,12 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
     }
     planned.push({ cap, plan })
   }
+
+  // Lo que no casó contra el catálogo se reporta entero al final, para poder
+  // llevárselo de una vez al equipo de SmartBC en vez de comuna a comuna.
+  summary.faltantesCatalogo = reportarFaltantes(normalizer.faltantes)
+  for (const linea of summary.faltantesCatalogo) log(`⚠ ${linea}`)
+
   if (!planned.length) return summary
 
   // Lotes de 100: es el tope de la API y mantiene el cuerpo lejos de los 2 MB.
@@ -420,9 +463,18 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
 
       if (!r || r.ok === false) {
         summary.failed++
+        // `details[].field` es la parte accionable ("qué campo está mal"): se
+        // guarda junto al mensaje para que el log diga dónde mirar en el origen,
+        // no solo que algo falló.
+        const campos = (r?.error?.details ?? [])
+          .map((d) => `${d.field}: ${d.message}`)
+          .join(' · ')
         const err = {
           code: r?.error?.code ?? 'missing_result',
-          message: r?.error?.message ?? 'SmartBC no devolvió resultado para este elemento',
+          message: [
+            r?.error?.message ?? 'SmartBC no devolvió resultado para este elemento',
+            campos,
+          ].filter(Boolean).join(' — '),
           status: null,
           requestId: response.requestId,
         }

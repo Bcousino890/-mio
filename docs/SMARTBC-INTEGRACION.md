@@ -12,10 +12,11 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 |---|---|
 | Cliente HTTP (auth, reintentos, idempotencia, rate limit) | `scraper/lib/smartbc-client.mjs` |
 | Mapeo campo a campo (funciones puras) | `scraper/lib/smartbc-mapper.mjs` |
+| Normalización geográfica contra su catálogo | `scraper/lib/smartbc-catalogo-cl.mjs` |
 | Sincronizador (consulta, lotes, diffs, log) | `scraper/lib/smartbc-sync-cl.mjs` |
 | CLI | `scraper/sync-smartbc-cl.mjs` |
 | Log de sincronización | `db/migrations/0091_smartbc_sync_cl.sql` |
-| Tests (68, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,sync-cl}.test.mjs` |
+| Tests (91, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,catalogo-cl,sync-cl}.test.mjs` |
 
 ---
 
@@ -28,17 +29,26 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 | `GET /api/v1/catalogos?tipo=enums` | Las 7 listas cerradas, idénticas a la documentación |
 | `GET /api/v1/catalogos?tipo=pipelines` | Pipeline `Captaciones` (default) con 9 etapas: `draft`, `preliminary_data`, `assigned` ("Para llamar"), `contacting`, `field_visit`, `revision`, `confirmed`, `converted_to_property`, `rejected` |
 | `GET /api/v1/catalogos?tipo=usuarios` | 7 usuarios del equipo |
-| `GET /api/v1/catalogos?tipo=regiones` | **`[]` vacío** |
-| `GET /api/v1/catalogos?tipo=comunas` | **`[]` vacío** (probado sin filtro y con `?region=`) |
-| `GET /api/v1/catalogos?tipo=zonas` | **`[]` vacío** |
+| `GET /api/v1/catalogos?tipo=regiones` | ⏳ pendiente de propagación (ver abajo) |
+| `GET /api/v1/catalogos?tipo=comunas` | ⏳ ídem |
+| `GET /api/v1/catalogos?tipo=zonas` | ⏳ ídem |
 
-> **Hallazgo a resolver con SmartBC.** El contrato pide normalizar región y comuna
-> contra el catálogo, pero los tres catálogos geográficos vienen vacíos. En el
-> OpenAPI, `region` y `commune` son texto libre (`string`, máx. 120), así que la
-> normalización real ocurre en su servidor. Mientras esos catálogos no se publiquen,
-> normalizamos contra **nuestra** tabla `chile_comunas` (346 comunas, nombre y región
-> oficiales) y verificamos comuna a comuna en dry-run que SmartBC las acepte sin
-> `warnings`. No inventamos texto libre, pero tampoco podemos validar contra su lista.
+> **Reportado y arreglado por SmartBC.** Los tres catálogos geográficos devolvían
+> `[]`: sus tablas maestras estaban vacías porque el seed original abortaba por dos
+> comillas sin escapar (`'O'Higgins'`). Lo reescribieron —16 regiones, 346 comunas,
+> 31 sectores— y el handler ya no devuelve `[]` cuando falla la base de datos, sino
+> un error explícito. El filtro `?region=` ahora acepta nombre o código (`RM`), sin
+> distinguir tildes ni mayúsculas, y cada comuna trae `region_code`.
+>
+> El arreglo llevaba migración, así que a las 19:08 UTC todavía devolvía `[]` — su
+> despliegue automático más 10 minutos de caché del maestro geográfico. **Antes de
+> la primera corrida real hay que comprobar que `?tipo=regiones` devuelve 16.**
+>
+> `scraper/lib/smartbc-catalogo-cl.mjs` traduce nuestra nomenclatura a la suya
+> ("Región Metropolitana de Santiago" → "Metropolitana", "nunoa" → "Ñuñoa") sobre
+> texto plegado. Lo que no exista en el catálogo **no viaja**: se acumula en
+> `faltantes` y sale en el resumen de la corrida, para llevárselo al equipo de
+> SmartBC en vez de forzarlo como texto libre.
 
 ---
 
@@ -122,9 +132,9 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 
 | SmartBC | Origen | Notas |
 |---|---|---|
-| `region` | `com.region` | ej. "Región Metropolitana de Santiago". Catálogo remoto vacío (§1) |
-| `commune` | `com.name` ?? `cap.comuna_label` | **campo del equipo**: solo se escribe si está vacío |
-| `zone` | `p.localidad` ?? `l.localidad` | sector/balneario con identidad propia |
+| `region` | `com.region`, normalizada | Se toma la región **de la comuna del catálogo** (más fiable que la nuestra) y se traduce a su grafía |
+| `commune` | `com.name` ?? `cap.comuna_label`, normalizada | **campo del equipo**: solo se escribe si está vacío. Si no está en el catálogo, no viaja (§1) |
+| `zone` | `p.localidad` ?? `l.localidad`, normalizada | Sector/balneario. Si la comuna no tiene zonas descargadas, pasa tal cual: no se puede afirmar que falte |
 | `subzone` | — | el origen no tiene ese nivel |
 | `address_scraped` | `cap.address` | dirección tal cual la publicó el aviso |
 | `address_real` | `cap.sii_direccion` | **campo del equipo**. Es la dirección exacta del catastro SII para el rol resuelto — mejor dato que el del aviso. Se envía: si el equipo ya puso una, la API la protege sola |
@@ -247,27 +257,35 @@ Se implementaron con el valor recomendado; ninguna está enterrada en el código
 
 ---
 
-## 7. Hallazgo: un elemento inválido SÍ tumba el lote
+## 7. El lote ya no aborta (reportado y arreglado)
 
-Comprobado en vivo contra la API (en dry-run, sin escribir):
+Antes, un elemento que incumplía el schema tumbaba el lote entero con un `400`,
+en contra de lo que prometía su propia documentación: el cuerpo se validaba
+completo antes de procesar ningún elemento. SmartBC lo corrigió — ahora `/batch`
+valida el sobre y cada elemento por separado. Verificado en vivo:
 
 ```
-POST /api/v1/captaciones/batch  →  400 validation_error
-details: [ {"field":"items.1.property_type","message":"Invalid input"},
-           {"field":"items.3.currency","message":"Invalid input"} ]
+POST /api/v1/captaciones/batch  →  200
+meta.summary: {"total":3,"created":2,"updated":0,"unchanged":0,"failed":1}
+data[1]: {"ok":false,"error":{"code":"validation_error",
+          "details":[{"field":"property_type","message":"Invalid input"}]}}
 ```
 
-El criterio de aceptación nº 6 dice que "un lote de 100 con un elemento inválido
-procesa los 99 buenos y reporta el malo, sin abortar". **Eso solo se cumple para
-errores de negocio, no de schema.** El cuerpo entero se valida antes de procesar
-nada, así que un enum inventado o un tipo equivocado devuelve `400` para las 100.
-Lo que sí hace la respuesta es **nombrar cada índice malo**.
+El sincronizador ya leía los resultados por elemento, así que el camino normal no
+cambia. Dos consecuencias sí:
 
-Por eso `sendBatchApartandoInvalidos()` aparta los elementos que `details` señala
-y reenvía el resto. Sin eso, una sola captación con un dato raro bloquearía a las
-otras 99 en cada corrida, indefinidamente.
+- **`details[].field` se guarda en el log.** Es la parte accionable: dice qué
+  campo arreglar en el origen, no solo que algo falló.
+- **Un `validation_error` no se reintenta.** `PENDING_SQL` excluye las captaciones
+  que fallaron por validación hasta que su `updated_at` avance — el dato está mal
+  en nuestro sistema y reenviarlo volvería a fallar en cada corrida, para siempre.
+  Los errores transitorios (`429`, `500`, `503`, red) sí se reintentan.
 
-En cambio los errores de **negocio** sí vienen por elemento y no rompen nada — un
+`sendBatchApartandoInvalidos()` se conserva como red de seguridad por si alguna
+instancia sigue con el comportamiento antiguo; cuando el arreglo lleve tiempo
+asentado se puede borrar.
+
+Los errores de **negocio** siempre vinieron por elemento y siguen igual: un
 `assigned_to_email` que no existe devuelve `200` con
 `warnings: ["No hay ningún usuario con el email …"]`.
 
