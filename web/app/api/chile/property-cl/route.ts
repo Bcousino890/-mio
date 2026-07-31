@@ -57,6 +57,7 @@ const LISTINGS_JSON = `
       'source_type', l.source_type,
       'portal', l.portal,
       'source_url', l.source_url,
+      'property_code', l.property_code,
       'is_active', l.is_active,
       'manual_property_lock', l.manual_property_lock,
       'seller_reference', l.seller_reference,
@@ -136,6 +137,10 @@ export async function GET(request: NextRequest) {
   const id = sp.get('id')?.trim()
   const operation = sp.get('operation')
   const comunaName = sp.get('comuna')?.trim()
+  // Buscador por código o URL (código de propiedad, código de anuncio MLC-id,
+  // código interno del CRM `ref_code`, o URL pegada del portal): ver bloque
+  // más abajo donde se arma la condición SQL.
+  const q = sp.get('q')?.trim() || null
   const comunaCode = sp.get('comuna_code')?.trim()
   const priceMin = sp.get('price_min') ? Number(sp.get('price_min')) : null
   const priceMax = sp.get('price_max') ? Number(sp.get('price_max')) : null
@@ -202,6 +207,26 @@ export async function GET(request: NextRequest) {
     }
     if (operation && operation !== 'all') conditions.push(`${F.operation} = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
+    if (q) {
+      // Acepta: código de propiedad ML ("5495"), código interno de la
+      // corredora (seller_reference), código interno del CRM (ref_code, ej.
+      // "PI-2607-00042"), código/URL del anuncio (MLC-id, ej. "MLC-2009525691"
+      // o una URL completa de portalinmobiliario.com que lo contenga), o la
+      // URL del anuncio pegada tal cual.
+      const mlcMatch = q.match(/MLC-?(\d+)/i)
+      const mlcId = mlcMatch ? `MLC-${mlcMatch[1]}` : null
+      const likeParam = addParam(`%${q}%`)
+      const exactParam = addParam(q)
+      const listingMatch = mlcId
+        ? `${listUngrouped ? 'l' : 'lq'}.external_id = ${addParam(mlcId)}`
+        : `(${listUngrouped ? 'l' : 'lq'}.property_code = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.seller_reference = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.external_id ILIKE ${likeParam})`
+      const sourceUrlMatch = `${listUngrouped ? 'l' : 'lq'}.source_url ILIKE ${likeParam}`
+      conditions.push(
+        listUngrouped
+          ? `(p.ref_code ILIKE ${likeParam} OR ${listingMatch} OR ${sourceUrlMatch})`
+          : `(p.ref_code ILIKE ${likeParam} OR EXISTS (SELECT 1 FROM listings_cl lq WHERE lq.property_cl_id = p.id AND (${listingMatch} OR ${sourceUrlMatch})))`
+      )
+    }
     if (comunaCode) conditions.push(`c.sii_comuna_code = ${addParam(comunaCode)}`)
     if (priceMin !== null) conditions.push(`${F.price} >= ${addParam(priceMin)}`)
     if (priceMax !== null) conditions.push(`${F.price} <= ${addParam(priceMax)}`)

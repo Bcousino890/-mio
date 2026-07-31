@@ -36,6 +36,7 @@ export type Listing = {
   // el dedup automático ya no lo reagrupa por su cuenta.
   manual_property_lock?: boolean
   seller_reference: string | null
+  property_code: string | null
   photos: string[]
   description: string | null
   address: string | null
@@ -1011,7 +1012,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-1.5">
-                        <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
+                        <span className="text-[11px] text-slate-500 font-mono truncate">{l.external_id}{l.property_code && <> · cód. {l.property_code}</>}{l.seller_reference && <> · ref. {l.seller_reference}</>}</span>
                         <div className="flex items-center gap-2 shrink-0">
                           {p.listings.length > 1 && (
                             <button onClick={() => doSplit(l.listing_id)} disabled={splittingId != null}
