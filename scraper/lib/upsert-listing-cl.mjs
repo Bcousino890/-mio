@@ -45,6 +45,34 @@ function normalizarMoneda(currency) {
   return MONEDAS_SOPORTADAS.has(currency) ? currency : 'CLP'
 }
 
+/**
+ * Qué set de fotos se guarda: el recién bajado o el que ya había.
+ *
+ * El modal de galería del portal responde de forma inconsistente. Verificado en
+ * vivo sobre MLC-4014327318: teníamos 14 fotos guardadas y tres peticiones
+ * seguidas al modal devolvieron 9 — no un error, un 200 con menos fotos. Como
+ * el upsert hacía `photos = EXCLUDED.photos` sin condiciones, el siguiente
+ * re-scrapeo habría reemplazado 14 fotos buenas por 9. Y con la rotación
+ * pasando por todo el catálogo, eso ocurriría tarde o temprano en cualquier
+ * ficha: cada respuesta floja del portal borraba fotos para siempre.
+ *
+ * Se acepta el set nuevo si NO encoge, o si trae todas las que el portal
+ * declara ahora — ese segundo caso es el que permite reflejar que el vendedor
+ * borró fotos de verdad, en vez de quedarse con URLs muertas. Si encoge sin
+ * llegar al total declarado, es una respuesta parcial: se conserva lo que había.
+ */
+function fotosAGuardar(existing, parsed) {
+  const nuevas = parsed.photos ?? []
+  const guardadas = Array.isArray(existing?.photos) ? existing.photos : []
+  if (guardadas.length === 0) return nuevas
+  if (nuevas.length >= guardadas.length) return nuevas
+
+  const declaradas = parsed.photos_total_count
+  if (declaradas != null && nuevas.length >= declaradas) return nuevas
+
+  return guardadas
+}
+
 async function resolveComunaId(client, comunaRaw) {
   if (!comunaRaw) return { comunaId: null, localidad: null }
   const { comuna, localidad } = normalizeComuna(comunaRaw)
@@ -132,6 +160,8 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const priceClp = resolvePriceClp(parsed, ufRate)
   const priceUf = resolvePriceUf(parsed)
   const currency = normalizarMoneda(parsed.currency)
+  // Una respuesta parcial del modal de galería no puede borrar fotos buenas.
+  const photos = fotosAGuardar(existing, parsed)
 
   // Antigüedad REAL del aviso según el portal (parsed.posted_days_ago, desde el
   // subtitle de la ficha) — first_seen_at mide cuándo NOSOTROS lo vimos, que
@@ -145,7 +175,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
     price_uf: priceUf,
     currency,
     advertiser_name: parsed.advertiser_name ?? null,
-    photos: parsed.photos ?? [],
+    photos,
     description: parsed.description ?? null,
     square_meters: parsed.square_meters ?? null,
     bedrooms: parsed.bedrooms ?? null,
@@ -203,7 +233,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       priceClp, priceUf, ufRate, ufRateDate, currency, parsed.bedrooms ?? null, parsed.bathrooms ?? null,
       parsed.square_meters ?? null, parsed.property_type ?? null,
       comunaId, parsed.comuna ?? null, localidad, parsed.address ?? null, parsed.latitude ?? null, parsed.longitude ?? null,
-      parsed.description ?? null, JSON.stringify(parsed.photos ?? []),
+      parsed.description ?? null, JSON.stringify(photos),
       parsed.property_code ?? null, parsed.advertiser_id ?? null, parsed.seller_reference ?? null,
       scrapedAt,
       JSON.stringify(parsed.features ?? []),
