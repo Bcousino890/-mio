@@ -16,7 +16,7 @@ import dynamic from 'next/dynamic'
 import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
-  Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
+  Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
   Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 import { PhoneRow, useCopy } from '@/components/chile/DealerFicha'
@@ -791,6 +791,10 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       // Al alternar las clases, el contenedor del mapa que ya está
                       // montado cambia de tamaño y su ResizeObserver interno redibuja
                       // Leaflet al tamaño nuevo, conservando el centro.
+                      //
+                      // Agrandar/achicar es ahora un botón MÁS del stack de controles
+                      // del propio mapa: cuando vivía aquí, quedaba superpuesto al
+                      // control de zoom de Leaflet y tapaba el "+".
                       <div
                         className={mapExpanded
                           ? 'fixed inset-0 z-[1300] bg-black/85 flex items-center justify-center p-4 sm:p-8'
@@ -811,12 +815,9 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             highlightGeojson={resolved?.parcel?.geojson ?? null}
                             showParcels={showParcels}
                             comunaCode={p.sii_comuna_code}
+                            expanded={mapExpanded}
+                            onToggleExpand={() => setMapExpanded((v) => !v)}
                           />
-                          <button onClick={(e) => { e.stopPropagation(); setMapExpanded((v) => !v) }}
-                            title={mapExpanded ? 'Achicar mapa' : 'Agrandar mapa'}
-                            className="absolute top-2 right-2 z-[1400] p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80">
-                            {mapExpanded ? <Minimize2 size={16} /> : <Maximize2 size={14} />}
-                          </button>
                         </div>
                       </div>
                     )}
