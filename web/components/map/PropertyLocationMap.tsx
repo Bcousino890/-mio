@@ -18,7 +18,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { corredoraColor } from '@/lib/corredora-pin-colors'
 
 export interface LatLng { latitude: number; longitude: number }
 export interface CorredoraPin extends LatLng { label: string }
@@ -66,6 +67,11 @@ export default function PropertyLocationMap({
   const highlightLayerRef = useRef<any>(null)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const loadingRef = useRef(false)
+  // Leaflet se carga con import() dinámico: hasta que resuelve no hay mapa. Sin
+  // esta señal, los efectos que pintan capas corrían una sola vez con el mapa
+  // todavía en null, salían por el early-return y —al no cambiar sus deps— ya
+  // no volvían a correr: los pines de corredora NUNCA llegaban a dibujarse.
+  const [ready, setReady] = useState(false)
 
   // Refs para que los listeners registrados una sola vez (al init) vean siempre
   // el valor actual de las props sin recrear el mapa.
@@ -169,6 +175,7 @@ export default function PropertyLocationMap({
       resizeObserverRef.current = ro
 
       loadParcels()
+      setReady(true)
     })
 
     return () => {
@@ -177,6 +184,7 @@ export default function PropertyLocationMap({
       if (mapRef.current) {
         mapRef.current.remove()
         mapRef.current = null
+        setReady(false)
         realMarkerRef.current = null
         corredoraLayerRef.current = null
         parcelLayerRef.current = null
@@ -197,7 +205,9 @@ export default function PropertyLocationMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showParcels])
 
-  // ── Pines declarados por cada corredora (azules, con tooltip) ───────────────
+  // ── Pines declarados por cada corredora (numerados, un color cada uno) ──────
+  // El número y el color coinciden con la leyenda de la ficha: así se sabe de un
+  // vistazo qué pin declaró cada corredora, y cuál de todos es el verde (real).
   useEffect(() => {
     const map = mapRef.current
     const L = LRef.current
@@ -205,17 +215,30 @@ export default function PropertyLocationMap({
     if (corredoraLayerRef.current) { corredoraLayerRef.current.remove(); corredoraLayerRef.current = null }
     if (!corredoraPins || corredoraPins.length === 0) return
     const group = L.layerGroup()
-    corredoraPins.forEach((p) => {
-      const m = L.circleMarker([p.latitude, p.longitude], {
-        radius: 7, color: '#ffffff', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.95,
+    corredoraPins.forEach((p, i) => {
+      const color = corredoraColor(i)
+      const icon = L.divIcon({
+        className: '',
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+        html: `<div style="width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.55);color:#fff;font:700 12px/22px system-ui,-apple-system,sans-serif;text-align:center">${i + 1}</div>`,
       })
-      m.bindTooltip(p.label, { direction: 'top' })
+      const m = L.marker([p.latitude, p.longitude], { icon, zIndexOffset: 400 })
+      m.bindTooltip(`${i + 1} · ${p.label}`, { direction: 'top', offset: [0, -14] })
       group.addLayer(m)
     })
     group.addTo(map)
     corredoraLayerRef.current = group
+
+    // Con varias corredoras los pines pueden caer fuera del encuadre inicial
+    // (zoom 18 sobre el pin principal) y parecía que "no había pines". Encuadrar
+    // todos garantiza que se vean; maxZoom evita acercarse de más si están juntos.
+    const pts: [number, number][] = corredoraPins.map((p) => [p.latitude, p.longitude])
+    const rp = realPinRef.current
+    if (rp) pts.push([rp.latitude, rp.longitude])
+    if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [48, 48], maxZoom: 18 })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(corredoraPins)])
+  }, [JSON.stringify(corredoraPins), ready])
 
   // ── Pin real (verde, arrastrable) ───────────────────────────────────────────
   useEffect(() => {
@@ -230,20 +253,31 @@ export default function PropertyLocationMap({
       realMarkerRef.current.setLatLng([realPin.latitude, realPin.longitude])
       return
     }
+    // Verde + etiqueta "REAL": rodeado de pines numerados de colores, un círculo
+    // más no bastaba para distinguir cuál es la corrección del equipo.
     const icon = L.divIcon({
       className: '',
-      iconAnchor: [11, 11],
-      html: `<div style="width:22px;height:22px;border-radius:50%;background:#22c55e;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.45)"></div>`,
+      iconSize: [64, 48],
+      iconAnchor: [32, 15],
+      html: `<div style="display:flex;flex-direction:column;align-items:center;cursor:grab">
+        <div style="width:28px;height:28px;border-radius:50%;background:#22c55e;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.55)"></div>
+        <div style="margin-top:3px;padding:1px 6px;border-radius:6px;background:#22c55e;border:1px solid rgba(255,255,255,.85);color:#052e16;font:700 9px/1.5 system-ui,-apple-system,sans-serif;letter-spacing:.05em;white-space:nowrap">REAL</div>
+      </div>`,
     })
     const marker = L.marker([realPin.latitude, realPin.longitude], { icon, draggable: true, zIndexOffset: 1000 }).addTo(map)
+    marker.bindTooltip('Pin real · arrástralo para corregir', { direction: 'top', offset: [0, -18] })
     marker.on('dragend', () => {
       const pos = marker.getLatLng()
       onRealPinChangeRef.current?.({ latitude: pos.lat, longitude: pos.lng })
     })
     realMarkerRef.current = marker
-    map.panTo([realPin.latitude, realPin.longitude], { animate: true })
+    // Solo recentrar si el pin real cae fuera del encuadre: si ya se ve, mover
+    // el mapa sacaría de cuadro los pines de corredora recién encuadrados.
+    if (!map.getBounds().contains([realPin.latitude, realPin.longitude])) {
+      map.panTo([realPin.latitude, realPin.longitude], { animate: true })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [realPin?.latitude, realPin?.longitude])
+  }, [realPin?.latitude, realPin?.longitude, ready])
 
   // ── Parcela resuelta bajo el pin real (resaltada en verde) ──────────────────
   useEffect(() => {
@@ -256,7 +290,7 @@ export default function PropertyLocationMap({
     highlightLayerRef.current = layer
     realMarkerRef.current?.setZIndexOffset?.(1000)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightGeojson])
+  }, [highlightGeojson, ready])
 
   return <div ref={containerRef} className="w-full h-full" />
 }
