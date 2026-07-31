@@ -153,6 +153,15 @@ export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
  * proxy para cuando de verdad hace falta (criterio del plan H10). Es UN intento
  * lógico para el circuit-breaker de withResilience (que envuelve esta función).
  */
+// Siempre por proxy (decisión del usuario, 2026-07-31): la IP del VPS no debe
+// quedar expuesta al portal. Antes se probaba DIRECTO primero y solo se caía a
+// Evomi al fallar — más barato en GB, pero cada petición directa enseñaba la IP
+// del servidor, y el portal ya nos devolvió un 403 una vez. Con el plan de 100
+// GB/mes el tráfico cabe de sobra, así que se prefiere no volver a arriesgar el
+// bloqueo. `PI_SOLO_PROXY=0` permite volver al comportamiento anterior sin
+// tocar código, por si hiciera falta diagnosticar.
+const PI_SOLO_PROXY = process.env.PI_SOLO_PROXY !== '0'
+
 async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
   // "Éxito" para PI NO es solo HTTP 200: la variante LIGERA que PI sirve a
   // algunas IPs (p. ej. datacenter) responde 200 pero SIN el blob Nordic, y el
@@ -160,6 +169,12 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
   // (IP de la VPS) recibe la variante ligera, se cae a Evomi (residencial CL),
   // que suele recibir la buena — en vez de aceptar un 200 inútil.
   const hasBlob = (r) => r.ok && typeof r.html === 'string' && r.html.includes('__NORDIC_RENDERING_CTX__')
+
+  if (PI_SOLO_PROXY) {
+    const soloProxy = await fetchHtml(url, { useProxy: true, profile })
+    if (hasBlob(soloProxy)) return soloProxy
+    return soloProxy.ok ? { ...soloProxy, reason: 'sin blob Nordic (variante ligera)' } : soloProxy
+  }
 
   const direct = await fetchHtml(url, { useProxy: false, profile })
   if (hasBlob(direct)) return direct

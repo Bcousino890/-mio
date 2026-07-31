@@ -541,6 +541,92 @@ export async function discoverTarget(client, target, deps = {}) {
  * que interval_hours) — el scheduler del worker encola un discovery por cada uno.
  * Devuelve el payload listo para el job (con comuna_name/region ya resueltos).
  */
+/**
+ * Barrido de CABECERA: solo la punta del listado, para detectar ALTAS rápido.
+ *
+ * El barrido completo (discoverTarget) recorre toda la comuna con sus bandas de
+ * precio — cientos de páginas — porque para saber qué se DIO DE BAJA hay que
+ * verlo todo. Pero para detectar lo que se acaba de publicar no hace falta: el
+ * listado se pide ordenado por más reciente, así que las altas están siempre en
+ * la primera página. Barrer la comuna entera cada 30 minutos costaría ~200x más
+ * tráfico para descubrir exactamente lo mismo.
+ *
+ * Profundidad adaptativa: baja la página siguiente solo si TODOS los avisos de
+ * la actual eran desconocidos — señal de que las altas pueden seguir más abajo.
+ * En un día tranquilo se queda en una página; en uno movido baja las que hagan
+ * falta hasta `maxPages`.
+ *
+ * NUNCA da de baja ni toca `last_run_at`/`last_success_at`: esas decisiones son
+ * del barrido completo, que es el único que ve la comuna entera. Confundirlos
+ * daría de baja media comuna por no aparecer en la primera página.
+ */
+export async function scanHeadTarget(client, target, deps = {}) {
+  const {
+    fetch = fetchHtmlResilient,
+    parseList = parseListPage,
+    parseMeta = parseListMeta,
+    enqueueDetail = async () => {},
+    maxPages = 3,
+    politenessMs = 1500,
+    sleep = SLEEP,
+    includeDevelopments = false,
+  } = deps
+
+  const slug = comunaSlug(target.comuna_name)
+  const rslug = regionSlug(target.region)
+  let pages = 0, enqueued = 0, portalTotal = null, reason = null
+
+  for (let page = 1; page <= maxPages; page++) {
+    const url = buildListUrl({
+      comunaSlug: slug, regionSlug: rslug, operation: target.operation,
+      propertyType: target.property_type, offset: (page - 1) * PAGE_SIZE, sortRecent: true,
+    })
+    const res = await fetch(url, { profile: 'portalinmobiliario' })
+    if (!res.ok) {
+      const is404 = res.status === 404 || /\b404\b/.test(res.reason ?? '')
+      reason = is404 ? 'sin inventario (404)' : `fetch p${page}: ${res.reason ?? 'fallo'}`
+      break
+    }
+    pages++
+    if (page === 1) portalTotal = parseMeta(res.html).total
+
+    const listings = parseList(res.html)
+    const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
+    if (usable.length === 0) break
+
+    const known = await existingExternalIds(client, usable.map((l) => l.external_id))
+    let nuevos = 0
+    for (const l of usable) {
+      if (!known.has(l.external_id)) { await enqueueDetail(l.external_id, l.source_url); enqueued++; nuevos++ }
+    }
+
+    // Si alguno ya se conocía, las altas de esta pasada terminan aquí: lo de más
+    // abajo es todavía más antiguo.
+    if (nuevos < usable.length) break
+    if (page < maxPages) await sleep(politenessMs)
+  }
+
+  return { target_id: target.id, pages, enqueued, portal_total: portalTotal, reason }
+}
+
+/**
+ * Objetivos para el barrido de CABECERA (altas): todos los activos, sin mirar
+ * `interval_hours` — su cadencia la marca el propio scheduler, no la tabla.
+ */
+export async function selectHeadTargets(client, { limit = 50 } = {}) {
+  const { rows } = await client.query(
+    `SELECT t.id, t.comuna_id, c.name AS comuna_name, c.region,
+            t.operation, t.property_type
+     FROM scrape_targets_cl t
+     JOIN chile_comunas c ON c.id = t.comuna_id
+     WHERE t.enabled = true
+     ORDER BY t.priority ASC, c.name
+     LIMIT $1`,
+    [limit]
+  )
+  return rows
+}
+
 export async function selectDueTargets(client, { limit = 50 } = {}) {
   const { rows } = await client.query(
     `SELECT t.id, t.comuna_id, c.name AS comuna_name, c.region,
