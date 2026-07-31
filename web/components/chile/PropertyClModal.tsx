@@ -16,10 +16,11 @@ import dynamic from 'next/dynamic'
 import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
-  Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
+  Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
   Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+import { corredoraColor } from '@/lib/corredora-pin-colors'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
 
@@ -333,17 +334,22 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
   // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
   // para no apilar pines idénticos).
+  // Cuando dos corredoras declaran la MISMA coordenada sale un solo pin (si no,
+  // quedan apilados y solo se ve el de arriba): ese pin se etiqueta con todas
+  // las corredoras que comparten el punto, en vez de perder los nombres.
   const corredoraPins = useMemo(() => {
-    const seen = new Set<string>()
-    const pins: { latitude: number; longitude: number; label: string }[] = []
+    const byCoord = new Map<string, { latitude: number; longitude: number; names: string[] }>()
     for (const l of p.listings) {
       if (l.latitude == null || l.longitude == null) continue
       const key = `${l.latitude.toFixed(6)},${l.longitude.toFixed(6)}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      pins.push({ latitude: l.latitude, longitude: l.longitude, label: l.advertiser_name || 'Corredora' })
+      const name = l.advertiser_name || 'Corredora'
+      const hit = byCoord.get(key)
+      if (hit) { if (!hit.names.includes(name)) hit.names.push(name) ; continue }
+      byCoord.set(key, { latitude: l.latitude, longitude: l.longitude, names: [name] })
     }
-    return pins
+    return [...byCoord.values()].map(e => ({
+      latitude: e.latitude, longitude: e.longitude, label: e.names.join(' · '),
+    }))
   }, [p.listings])
 
   // Poner/mover el pin real (arrastre, clic en el mapa o en una parcela).
@@ -786,6 +792,10 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       // Al alternar las clases, el contenedor del mapa que ya está
                       // montado cambia de tamaño y su ResizeObserver interno redibuja
                       // Leaflet al tamaño nuevo, conservando el centro.
+                      //
+                      // Agrandar/achicar es ahora un botón MÁS del stack de controles
+                      // del propio mapa: cuando vivía aquí, quedaba superpuesto al
+                      // control de zoom de Leaflet y tapaba el "+".
                       <div
                         className={mapExpanded
                           ? 'fixed inset-0 z-[1300] bg-black/85 flex items-center justify-center p-4 sm:p-8'
@@ -806,20 +816,33 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             highlightGeojson={resolved?.parcel?.geojson ?? null}
                             showParcels={showParcels}
                             comunaCode={p.sii_comuna_code}
+                            expanded={mapExpanded}
+                            onToggleExpand={() => setMapExpanded((v) => !v)}
                           />
-                          <button onClick={(e) => { e.stopPropagation(); setMapExpanded((v) => !v) }}
-                            title={mapExpanded ? 'Achicar mapa' : 'Agrandar mapa'}
-                            className="absolute top-2 right-2 z-[1400] p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80">
-                            {mapExpanded ? <Minimize2 size={16} /> : <Maximize2 size={14} />}
-                          </button>
                         </div>
                       </div>
                     )}
                     {geo && (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-[11px] text-slate-400">
-                        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-500 border border-white/70" /> Pin de cada corredora ({corredoraPins.length})</span>
-                        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white/70" /> Pin real {manualPin ? '· arrástralo' : ''}</span>
-                        {showParcels && <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm border border-amber-400" /> Parcela catastro · clic para fijar</span>}
+                      // Leyenda pin a pin: cada corredora con el MISMO número y
+                      // color que lleva su pin en el mapa (antes eran todos del
+                      // mismo azul y no se sabía cuál era de quién), y el verde
+                      // "REAL" aparte para no confundirlo con los declarados.
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-2 text-[11px] text-slate-400">
+                        {corredoraPins.map((pin, i) => (
+                          <span key={`${pin.latitude},${pin.longitude}`} className="inline-flex items-center gap-1.5" title={pin.label}>
+                            <span
+                              className="w-4 h-4 shrink-0 rounded-full border border-white/80 text-white text-[9px] font-bold flex items-center justify-center"
+                              style={{ backgroundColor: corredoraColor(i) }}
+                            >{i + 1}</span>
+                            <span className="max-w-[13rem] truncate">{pin.label}</span>
+                          </span>
+                        ))}
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="w-4 h-4 shrink-0 rounded-full bg-emerald-500 border border-white/80" />
+                          <span className="text-emerald-300 font-medium">Pin real</span>
+                          {manualPin ? <span className="text-slate-500">· arrástralo</span> : <span className="text-slate-500">· sin poner</span>}
+                        </span>
+                        {showParcels && <span className="inline-flex items-center gap-1.5"><span className="w-4 h-4 shrink-0 rounded-sm border border-amber-400" /> Parcela catastro · clic para fijar</span>}
                       </div>
                     )}
                     <div className="bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-300">

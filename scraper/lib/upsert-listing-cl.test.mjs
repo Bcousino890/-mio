@@ -199,14 +199,18 @@ test('anuncio en una moneda que el esquema no acepta → se guarda igual, sin pr
   // la ficha NO se guardaba nunca y su job volvía a fallar en cada pasada.
   // Visto en el panel de salud: 4 fichas con
   // 'new row for relation "listings_cl" violates check constraint'.
+  // El ejemplo era USD, pero desde que se cableó su tasa (usd-rate-cl.mjs) esa
+  // moneda SÍ se soporta. El caso sigue vivo con cualquier otra: el parser copia
+  // `currency_id` de Mercado Libre tal cual, así que basta con que el portal
+  // publique en euros para volver a la situación original.
   const client = makeClient();
-  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' });
+  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'EUR' });
 
   const sql = client.inserted.sql;
   const param = (n) => client.inserted.params[n - 1]; // $N → params[N-1]
   // La moneda que llega a la base es una de las dos que el CHECK permite.
-  assert.ok(['CLP', 'UF'].includes(param(13)));
-  // Y el importe NO se copia: 450.000 dólares no son 450.000 pesos.
+  assert.ok(['CLP', 'UF', 'USD'].includes(param(13)));
+  // Y el importe NO se copia: 450.000 euros no son 450.000 pesos.
   assert.equal(param(9), null);  // price (CLP)
   assert.equal(param(10), null); // price_uf
   // Pero la ficha entra: es lo que se estaba perdiendo entera.
@@ -269,4 +273,57 @@ test('una ficha nueva guarda lo que traiga, sin nada con qué comparar', async (
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 3 });
   assert.equal(JSON.parse(client.inserted.params[24]).length, 3);
+});
+
+// ─── anuncios publicados en dólares ──────────────────────────────────────────
+
+test('anuncio en USD: se guarda el importe publicado y el CLP convertido con la tasa', async () => {
+  // Antes estos anuncios no se guardaban (el CHECK de currency los rechazaba) y
+  // luego se guardaban sin precio, porque copiar 450.000 dólares como 450.000
+  // pesos habría envenenado el precio/m² y los filtros.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' },
+    { usdRate: 950, usdRateDate: '2026-07-31' });
+
+  const param = (n) => client.inserted.params[n - 1];
+  assert.equal(param(13), 'USD');            // la moneda publicada se conserva
+  assert.equal(param(36), 450_000);          // price_usd = importe publicado
+  assert.equal(param(9), 427_500_000);       // price (CLP) = 450.000 × 950
+  assert.equal(param(37), 950);              // usd_rate usada
+  assert.equal(param(38), '2026-07-31');     // y su fecha, para poder auditarlo
+});
+
+test('anuncio en USD sin tasa disponible: se guarda sin precio, nunca con uno falso', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' });
+  assert.equal(client.inserted.params[8], null);   // price (CLP)
+  assert.equal(client.inserted.params[35], 450_000); // price_usd sí se conserva
+});
+
+test('anuncio en USD: mover el tipo de cambio NO es un cambio de precio', async () => {
+  // Mismo caso que la UF: price (CLP) es derivado, así que compararlo marcaría
+  // una rebaja falsa cada vez que se mueve el dólar.
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 427_500_000, price_uf: null, price_usd: 450_000, currency: 'USD',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' },
+    { usdRate: 980, usdRateDate: '2026-08-01' });
+  assert.equal(changeType, null);
+});
+
+test('anuncio en USD: una rebaja de verdad SÍ se detecta', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 427_500_000, price_uf: null, price_usd: 450_000, currency: 'USD',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, price: 420_000, currency: 'USD' },
+    { usdRate: 950, usdRateDate: '2026-07-31' });
+  assert.equal(changeType, 'price_change');
 });
