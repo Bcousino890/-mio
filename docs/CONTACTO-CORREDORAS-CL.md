@@ -1,6 +1,6 @@
 # Ficha de empresa de la corredora: ¿de dónde sale el teléfono?
 
-**2026-07-29 · Plan Anuncios CL · H4/H21 · migración `0083_corredora_contacto_cl.sql`**
+**2026-07-29 · Plan Anuncios CL · H4/H21 · migración `0088_corredora_contacto_cl.sql`**
 
 Pregunta de partida: *¿se puede obtener el número de teléfono de cada corredora,
 para armar una ficha de empresa (web, teléfono, ejecutivas, jefes/dueños)?*

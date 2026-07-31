@@ -2,7 +2,7 @@
 //
 // Correr:  node --test scraper/lib/dedup-cl-corredora-store-slug.test.mjs
 //
-// `advertiser_store_slug` (persistido en listings_cl desde 0084, extraído del
+// `advertiser_store_slug` (persistido en listings_cl desde 0089, extraído del
 // enlace "Ir a la tienda oficial de..." en cualquier ficha ya scrapeada) se
 // propaga a corredoras_cl.portal_store_slug con el MISMO criterio que el logo
 // (0075/dedup-cl-corredora-logo.test.mjs): el más reciente no nulo entre los

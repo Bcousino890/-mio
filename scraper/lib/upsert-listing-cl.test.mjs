@@ -60,12 +60,26 @@ test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no re
   const client = makeClient();
   const res = await upsertListingCl(client, BASE_PARSED); // sin has_video/video_modal_url/advertiser_logo/posted_days_ago
   assert.equal(res.changeType, 'new');
-  const idx = client.inserted.params.length;
-  assert.equal(client.inserted.params[idx - 5], false); // has_video
-  assert.equal(client.inserted.params[idx - 4], null); // video_modal_url
-  assert.equal(client.inserted.params[idx - 3], null); // advertiser_logo
-  assert.equal(client.inserted.params[idx - 2], null); // advertiser_store_slug
-  assert.equal(client.inserted.params[idx - 1], null); // portal_first_seen_at
+  // Por posición absoluta ($N), no contando desde el final: añadir un campo
+  // nuevo al INSERT desplazaba el final y rompía este test sin que nada
+  // estuviera mal de verdad.
+  const param = (n) => client.inserted.params[n - 1];
+  assert.equal(param(31), false); // has_video
+  assert.equal(param(32), null); // video_modal_url
+  assert.equal(param(33), null); // advertiser_logo
+  assert.equal(param(34), null); // advertiser_store_slug
+  assert.equal(param(35), null); // portal_first_seen_at
+});
+
+test('photos_total_count (el total que declara el portal) se persiste', async () => {
+  // Sin este número no se puede saber si a una ficha le faltan fotos: 3 fotos
+  // guardadas es correcto si el aviso tiene 3, y un fallo si tiene 24.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 24 });
+  assert.match(client.inserted.sql, /photos_total_count/);
+  assert.equal(client.inserted.params[25], 24); // $26
+  // Y al refrescar no se pisa con null un total que ya se conocía.
+  assert.match(client.inserted.sql, /photos_total_count = COALESCE\(EXCLUDED\.photos_total_count, listings_cl\.photos_total_count\)/);
 });
 
 test('advertiser_logo se persiste en el INSERT', async () => {
@@ -121,4 +135,102 @@ test('re-upsert idéntico (mismo has_video) → sin changeType', async () => {
   const res = await upsertListingCl(client, { ...BASE_PARSED, has_video: true, video_modal_url: 'https://vm/y' });
   assert.equal(res.changeType, null);
   assert.equal(client.versionLog.length, 0);
+});
+
+// ─── Cambio de precio: solo el PUBLICADO cuenta ──────────────────────────────
+// Blinda el bug de producción: `price` (CLP) de un anuncio en UF es un valor
+// DERIVADO (price_uf × la tasa UF del día). Como la UF sube casi a diario,
+// comparar CLP marcaba "cambio de precio" en TODOS los anuncios en UF en cada
+// refresco, sin que el vendedor tocara nada: 1.979 cambios en 24h, la inmensa
+// mayoría falsos, ahogando las rebajas reales que es justo lo que se quiere ver.
+
+const UF_PARSED = { ...BASE_PARSED, price: 14000, currency: 'UF' };
+
+test('anuncio en UF: subir la tasa UF NO es un cambio de precio', async () => {
+  // Mismo precio publicado (14.000 UF), tasa de ayer 40.000 → hoy 40.844,79.
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 560_000_000, price_uf: 14000, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, UF_PARSED, { ufRate: 40844.79, ufRateDate: '2026-07-28' });
+  assert.equal(changeType, null, 'la UF del día no puede inventar un cambio de precio');
+  assert.equal(client.versionLog.length, 0, 'ni escribir una fila en el histórico');
+});
+
+test('anuncio en UF: una rebaja REAL en UF sí se registra', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 571_827_060, price_uf: 14000, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(
+    client, { ...UF_PARSED, price: 13000 }, { ufRate: 40844.79, ufRateDate: '2026-07-28' },
+  );
+  assert.equal(changeType, 'price_change');
+});
+
+test('anuncio en CLP: el cambio se detecta sobre el CLP publicado', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, price: 480_000_000 });
+  assert.equal(changeType, 'price_change');
+});
+
+test('anuncio en UF sin price_uf previo (fila vieja) → no se inventa un cambio', async () => {
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 560_000_000, price_uf: null, currency: 'UF',
+      advertiser_name: 'Test Corredora', photos: ['a', 'b'], description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const { changeType } = await upsertListingCl(client, UF_PARSED, { ufRate: 40844.79, ufRateDate: '2026-07-28' });
+  assert.equal(changeType, null);
+});
+
+// ─── moneda no soportada ─────────────────────────────────────────────────────
+
+test('anuncio en una moneda que el esquema no acepta → se guarda igual, sin precio inventado', async () => {
+  // Regresión de producción. El parser copia `currency_id` del blob de Mercado
+  // Libre tal cual cuando no es "CLF" (= UF), así que un anuncio publicado en
+  // otra moneda llegaba al INSERT con un código que el CHECK de 0028 rechaza:
+  // la ficha NO se guardaba nunca y su job volvía a fallar en cada pasada.
+  // Visto en el panel de salud: 4 fichas con
+  // 'new row for relation "listings_cl" violates check constraint'.
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' });
+
+  const sql = client.inserted.sql;
+  const param = (n) => client.inserted.params[n - 1]; // $N → params[N-1]
+  // La moneda que llega a la base es una de las dos que el CHECK permite.
+  assert.ok(['CLP', 'UF'].includes(param(13)));
+  // Y el importe NO se copia: 450.000 dólares no son 450.000 pesos.
+  assert.equal(param(9), null);  // price (CLP)
+  assert.equal(param(10), null); // price_uf
+  // Pero la ficha entra: es lo que se estaba perdiendo entera.
+  assert.match(sql, /INSERT INTO listings_cl/);
+  assert.ok(client.inserted.params.includes('Test Corredora'));
+});
+
+test('CLP y UF siguen pasando intactas', async () => {
+  const clp = makeClient();
+  await upsertListingCl(clp, { ...BASE_PARSED, price: 500_000_000, currency: 'CLP' });
+  assert.equal(clp.inserted.params[12], 'CLP'); // $13
+  assert.equal(clp.inserted.params[8], 500_000_000); // $9 price
+
+  const uf = makeClient();
+  await upsertListingCl(uf, { ...BASE_PARSED, price: 12_000, currency: 'UF' }, { ufRate: 40_000, ufRateDate: '2026-07-30' });
+  assert.equal(uf.inserted.params[12], 'UF');
+  assert.equal(uf.inserted.params[9], 12_000); // $10 price_uf
+  assert.equal(uf.inserted.params[8], 480_000_000); // $9 price = 12.000 × 40.000
 });

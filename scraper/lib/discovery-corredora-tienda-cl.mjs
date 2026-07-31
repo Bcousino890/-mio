@@ -19,7 +19,7 @@
 // entienden `parseListPage`/`parseListMeta`. Cero parser nuevo, solo un builder
 // de URL distinto y el barrido scopeado por corredora en vez de por comuna.
 //
-// `advertiser_store_slug` (por anuncio, 0084) y `corredoras_cl.portal_store_slug`
+// `advertiser_store_slug` (por anuncio, 0089) y `corredoras_cl.portal_store_slug`
 // (por corredora) se descubren solos durante el scraping normal de fichas —a
 // diferencia de `web_propia_url`, que hay que registrar a mano— porque el
 // enlace "Ir a la tienda oficial de <nombre>" es parte del HTML estándar de

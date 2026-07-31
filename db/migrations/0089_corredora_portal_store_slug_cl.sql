@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0084 · portal_store_slug: la tienda oficial de la corredora EN el propio
+-- 0089 · portal_store_slug: la tienda oficial de la corredora EN el propio
 --        Portal Inmobiliario (plan Anuncios CL · H4/H23 — barrido sin techo)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Hallazgo que motiva esta migración: el barrido de anuncios es HOY por comuna

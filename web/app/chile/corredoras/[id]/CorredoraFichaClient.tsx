@@ -25,7 +25,7 @@ type InventoryItem = {
   own_cover_photo: string | null
 }
 
-// Persona publicada por la corredora en su propia web (migración 0083).
+// Persona publicada por la corredora en su propia web (migración 0088).
 type Persona = {
   full_name: string
   role_raw: string | null
@@ -396,7 +396,7 @@ export default function CorredoraFichaClient({ id }: { id: string }) {
               <Stat icon={<GitCompareArrows size={14} />} label="En canje" value={String(ficha.shared_count)} hint="comparte con otra" accent="bg-amber-500/15 text-amber-400" />
             </div>
 
-            {/* Ficha de empresa: contacto + equipo (migración 0083) */}
+            {/* Ficha de empresa: contacto + equipo (migración 0088) */}
             <ContactoCard ficha={ficha} />
 
             {/* Inventario */}

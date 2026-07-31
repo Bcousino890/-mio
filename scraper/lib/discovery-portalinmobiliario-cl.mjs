@@ -252,16 +252,22 @@ async function markDelisted(client, target, seenExternalIds, scrapedAt) {
   return ids.length
 }
 
-async function updateTargetStats(client, targetId, { scrapedAt, completed, listingCount, portalTotal }) {
+async function updateTargetStats(client, targetId, { scrapedAt, completed, listingCount, portalTotal, reason }) {
+  // `notes` guarda POR QUÉ terminó así el barrido. Sin esto, un barrido que
+  // devuelve 0 anuncios es indistinguible de una comuna vacía, de un bloqueo del
+  // portal o de un fallo de red: el motivo se calculaba y se tiraba. Visto en
+  // producción al activar 3 comunas nuevas — seis barridos seguidos a 0 sin
+  // manera de saber la causa.
   await client.query(
     `UPDATE scrape_targets_cl SET
        last_run_at = $2,
        last_success_at = CASE WHEN $3 THEN $2 ELSE last_success_at END,
        last_listing_count = $4,
        portal_reported_count = COALESCE($5, portal_reported_count),
+       notes = $6,
        updated_at = now()
      WHERE id = $1`,
-    [targetId, scrapedAt, completed, listingCount, portalTotal]
+    [targetId, scrapedAt, completed, listingCount, portalTotal, reason ?? null]
   )
 }
 
@@ -519,7 +525,7 @@ export async function discoverTarget(client, target, deps = {}) {
     delisted = await markDelisted(client, target, seen, scrapedAt)
   }
 
-  await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal })
+  await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal, reason })
 
   // Backfill: tras un barrido forzado que completó, apagar force_refetch para
   // no re-bajar todo en cada ciclo (solo era una pasada de puesta al día).

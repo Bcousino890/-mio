@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import {
   extractListing, setRolFromPin, resolveRolAtPoint, findCrmCaptacionByRol,
+  linkCaptacionToProperty,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
 
@@ -60,6 +61,9 @@ const LISTINGS_JSON = `
       'manual_property_lock', l.manual_property_lock,
       'seller_reference', l.seller_reference,
       'photos', COALESCE(l.photos, '[]'::jsonb),
+      -- Cuántas declara el portal: sin este número no se puede saber si a la
+      -- ficha le faltan fotos o si el aviso simplemente tiene pocas.
+      'photos_total_count', l.photos_total_count,
       'description', l.description,
       'address', l.address,
       'latitude', l.latitude,
@@ -79,13 +83,21 @@ const LISTINGS_JSON = `
   ), '[]'::jsonb) AS listings
 `
 
-// ¿Ya está el inmueble (por su rol SII confirmado a mano) en el CRM de
-// captación, con dueño/teléfonos para llamar? Se resuelve por rol_matriz +
-// comuna. Solo corre cuando hay rol confirmado (barato: captaciones_cl está
-// indexada por sii_rol) — si no, NULL. Alimenta el aviso "ya subido, llamar"
-// de la ficha.
+// ¿Está ya captado el inmueble en el CRM de captación (dueño/teléfonos para
+// llamar)? Se busca primero por el ENLACE guardado al captar desde la ficha
+// (property_cl.captacion_id, 0083) y, como respaldo, por rol_matriz + comuna
+// (captaciones creadas antes del enlace o desde /chile/captar-url).
+//
+// Va tanto en el detalle como en la LISTA: es lo que permite que la tarjeta de
+// la grilla lleve la etiqueta "captada" sin una consulta aparte.
+// "Captada" = tiene el enlace guardado. Es una sola condición sobre una columna
+// indexada, así que sirve igual para la etiqueta de la tarjeta, para el filtro y
+// para el contador — los tres dicen exactamente lo mismo. El enlace lo escriben
+// el PATCH de la ficha, el pipeline al fijar el rol y el backfill de la 0083.
+const CAPTADA_PREDICATE = `p.captacion_id IS NOT NULL`
+
 const CRM_JSON = `
-  (CASE WHEN p.rol_matriz IS NOT NULL AND c.sii_comuna_code IS NOT NULL THEN (
+  (CASE WHEN p.captacion_id IS NOT NULL OR (p.rol_matriz IS NOT NULL AND c.sii_comuna_code IS NOT NULL) THEN (
      SELECT jsonb_build_object(
        'captacion_id', cap.id,
        'owner_name', cap.owner_name,
@@ -99,8 +111,11 @@ const CRM_JSON = `
        'updated_at', cap.updated_at
      )
      FROM captaciones_cl cap
-     WHERE cap.sii_rol = p.rol_matriz AND cap.sii_comuna_code = c.sii_comuna_code
-     ORDER BY (cap.owner_name IS NOT NULL) DESC, (cap.phones IS NOT NULL) DESC, cap.updated_at DESC
+     WHERE cap.id = p.captacion_id
+        OR (p.rol_matriz IS NOT NULL AND c.sii_comuna_code IS NOT NULL
+            AND cap.sii_rol = p.rol_matriz AND cap.sii_comuna_code = c.sii_comuna_code)
+     ORDER BY (cap.id = p.captacion_id) DESC,
+              (cap.owner_name IS NOT NULL) DESC, (cap.phones IS NOT NULL) DESC, cap.updated_at DESC
      LIMIT 1
    ) ELSE NULL END) AS crm
 `
@@ -129,6 +144,11 @@ export async function GET(request: NextRequest) {
   // "En canje / sin exclusividad": misma propiedad publicada por >1 corredora.
   const onlyMultiCorredora = sp.get('only_multi_corredora') === 'true'
   const onlyConfirmed = sp.get('only_confirmed') === 'true'
+  // Estado de captación del inmueble: "ya la trabajé" (tiene ficha en
+  // captaciones_cl) y "ya la subí al CRM externo (Smart)". Son los dos estados
+  // que la grilla marca con etiqueta, así que también se pueden filtrar.
+  const onlyCaptadas = sp.get('only_captadas') === 'true'
+  const onlySmart = sp.get('only_smart') === 'true'
   // AGRUPAR (`grouped=1`) = una ficha por INMUEBLE: junta los anuncios que
   // comparten corredora + código interno, incluidos los que la misma corredora
   // publica a la vez en venta y en arriendo. Es opt-in a propósito: por defecto
@@ -189,6 +209,8 @@ export async function GET(request: NextRequest) {
     if (bedroomsMin !== null) conditions.push(`${F.bedrooms} >= ${addParam(bedroomsMin)}`)
     if (onlyMultiCorredora) conditions.push('p.corredora_count > 1')
     if (onlyConfirmed) conditions.push(`p.location_confidence = 'confirmed'`)
+    if (onlyCaptadas) conditions.push(CAPTADA_PREDICATE)
+    if (onlySmart) conditions.push('p.smart_crm_at IS NOT NULL')
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
 
@@ -200,6 +222,8 @@ export async function GET(request: NextRequest) {
          COUNT(*) AS total,
          COUNT(*) FILTER (WHERE p.corredora_count > 1) AS multi_corredora,
          COUNT(*) FILTER (WHERE p.location_confidence = 'confirmed') AS confirmed,
+         COUNT(*) FILTER (WHERE ${CAPTADA_PREDICATE}) AS captadas,
+         COUNT(*) FILTER (WHERE p.smart_crm_at IS NOT NULL) AS smart,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY ${F.price})
            FILTER (WHERE ${F.price} > 0) AS median_price
        ${fromClause} ${whereClause}`,
@@ -211,6 +235,8 @@ export async function GET(request: NextRequest) {
       total,
       multi_corredora: Number(statsRow.multi_corredora ?? 0),
       confirmed: Number(statsRow.confirmed ?? 0),
+      captadas: Number(statsRow.captadas ?? 0),
+      smart: Number(statsRow.smart ?? 0),
       median_price: statsRow.median_price != null ? Math.round(Number(statsRow.median_price)) : null,
     }
 
@@ -258,6 +284,9 @@ export async function GET(request: NextRequest) {
         -- Marca manual "ya subida al CRM externo (Smart)" — para no duplicar el
         -- alta comercial; se enciende/apaga desde la ficha (0082).
         p.smart_crm_at,
+        -- Enlace a la captación creada desde la ficha (0083): la tarjeta lo usa
+        -- para marcar "captada" y la ficha para abrir /chile/captacion.
+        p.captacion_id,
         -- Sello de la última unión/separación MANUAL (0079): la ficha lleva el
         -- distintivo "unido a mano" para no confundir un grupo curado por el
         -- equipo con uno propuesto por el score del dedup.
@@ -322,6 +351,19 @@ export async function GET(request: NextRequest) {
 //      al pipeline de captación (dueño vía TGR, contacto vía DealerNet) sin
 //      que el equipo tenga que volver a pegar la URL en /chile/captar-url.
 // Es best-effort: si falla, el pin igual queda guardado.
+// URL de origen con la que captar la ficha: el aviso activo más reciente que
+// tenga source_url. Solo se usa como respaldo cuando el cliente no la manda.
+async function findListingSourceUrl(propertyId: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT source_url FROM listings_cl
+      WHERE property_cl_id = $1 AND source_url IS NOT NULL AND source_url <> ''
+      ORDER BY is_active DESC, last_seen_at DESC
+      LIMIT 1`,
+    [propertyId],
+  )
+  return rows[0]?.source_url ?? null
+}
+
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
@@ -354,15 +396,22 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'latitude/longitude deben ser números (o ambos null para borrar)' }, { status: 400 })
     }
 
+    // El "¿se está borrando el pin?" viaja como un booleano propio ($4) en vez
+    // de preguntar `CASE WHEN $2 IS NULL`. Con esa forma, Postgres no podía
+    // deducir el tipo de $2 (el driver no declara tipos y `$2 IS NULL` no da
+    // ninguna pista) y la consulta reventaba SIEMPRE con
+    // «could not determine data type of parameter $2»: el pin manual nunca se
+    // llegó a guardar, y con él tampoco el rol ni la captación. La ficha lo
+    // ocultaba porque daba por buena la respuesta sin mirar `success`.
     const { rows } = await pool.query(
       `UPDATE property_cl SET
          manual_latitude = $2, manual_longitude = $3,
-         manual_pin_set_at = CASE WHEN $2 IS NULL THEN NULL ELSE now() END,
-         location_confidence = CASE WHEN $2 IS NULL THEN location_confidence ELSE 'confirmed' END,
+         manual_pin_set_at = CASE WHEN $4 THEN NULL ELSE now() END,
+         location_confidence = CASE WHEN $4 THEN location_confidence ELSE 'confirmed' END,
          updated_at = now()
        WHERE id = $1
        RETURNING id, manual_latitude, manual_longitude, manual_pin_set_at, location_confidence`,
-      [id, clearing ? null : latitude, clearing ? null : longitude]
+      [id, clearing ? null : latitude, clearing ? null : longitude, clearing]
     )
     if (rows.length === 0) {
       return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
@@ -400,20 +449,35 @@ export async function PATCH(request: NextRequest) {
         captacionError = e instanceof Error ? e.message : 'Error al resolver el rol bajo el pin'
       }
 
-      // Si además viene la URL del aviso cuya ubicación se está corrigiendo,
+      // Si además tenemos la URL del aviso cuya ubicación se está corrigiendo,
       // crear/actualizar su captación con el rol ya resuelto — así el pin
       // corregido entra solo al pipeline de captación (dueño vía TGR, contacto
       // vía DealerNet) sin volver a pegar la URL en /chile/captar-url.
-      if (rol && typeof source_url === 'string' && source_url) {
+      //
+      // La URL la manda el cliente (el aviso que se está viendo en la ficha),
+      // pero si no viene la buscamos aquí: dejar de captar por un campo que el
+      // front no envió era justo el caso de "guardé y no pasó nada" — la ficha
+      // quedaba con rol y sin captación, sin dueño ni teléfonos.
+      const listingUrl = (typeof source_url === 'string' && source_url)
+        ? source_url
+        : await findListingSourceUrl(id)
+
+      if (rol && listingUrl) {
         try {
-          const { captacion: c } = await extractListing(source_url)
+          const { captacion: c } = await extractListing(listingUrl)
           const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code)
+          // Enlace permanente ficha ↔ captación (0083): es lo que permite que
+          // la tarjeta de la grilla se marque "captada" y que la fila de
+          // /chile/captacion sepa volver a este inmueble.
+          await linkCaptacionToProperty(updated.id, id)
           captacion = { id: updated.id, sii_rol: updated.sii_rol, comuna_name: rol.comuna_name }
           // La captación recién sincronizada puede ser la más completa: refrescar.
           crm = (await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)) ?? crm
         } catch (e) {
           captacionError = captacionError ?? (e instanceof Error ? e.message : 'Error al guardar en captación')
         }
+      } else if (rol && !listingUrl) {
+        captacionError = captacionError ?? 'La ficha no tiene ningún aviso con URL de origen para captar'
       }
     }
 

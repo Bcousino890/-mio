@@ -15,6 +15,7 @@ type Target = {
   force_refetch: boolean
   last_run_at: string | null; last_success_at: string | null
   last_listing_count: number | null; portal_reported_count: number | null
+  notes: string | null
   live_portal_total: number | null; live_probed_at: string | null
   cadencia: string
 }
@@ -242,7 +243,14 @@ export default function AnunciosHealthClient() {
                           <td className="px-3 py-2.5">
                             <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${cad.cls}`}>{cad.icon} {cad.t}</span>
                           </td>
-                          <td className="px-3 py-2.5 text-slate-400">{ago(tg.last_run_at)}</td>
+                          <td className="px-3 py-2.5 text-slate-400">
+                            {ago(tg.last_run_at)}
+                            {tg.notes && (
+                              <div className="text-[10px] text-amber-400/90 mt-0.5 max-w-[22rem] truncate" title={tg.notes}>
+                                {tg.notes}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 text-right text-slate-200 font-medium">{tg.last_listing_count ?? '—'}</td>
                           <td className="px-3 py-2.5 text-right">
                             <span className={isLive ? 'text-slate-200 font-medium' : 'text-slate-500'} title={isLive ? `Consultado hace ${ago(tg.live_probed_at)}` : 'Sonda en vivo falló; mostrando el último valor guardado'}>

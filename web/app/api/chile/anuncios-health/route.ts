@@ -155,6 +155,7 @@ export async function GET(request: Request) {
           t.enabled, t.interval_hours, t.force_refetch,
           t.last_run_at, t.last_success_at,
           t.last_listing_count, t.portal_reported_count,
+          t.notes,
           CASE
             WHEN t.last_run_at IS NULL THEN 'nunca'
             WHEN t.last_run_at < now() - make_interval(hours => t.interval_hours * 2) THEN 'atrasado'
@@ -220,7 +221,11 @@ export async function GET(request: Request) {
         `SELECT COALESCE(
                   CASE WHEN output->>'ok' = 'true' THEN 'ok:' || COALESCE(output->>'changeType', 'sin cambios')
                        WHEN output ? 'ok' THEN 'falló: ' || COALESCE(output->>'reason', '?')
-                       ELSE 'excepción: ' || left(COALESCE(output->>'message', output::text), 60) END,
+                       -- 60 caracteres cortaban el mensaje justo ANTES del dato
+                       -- que sirve: "violates check constraint" sin decir cuál.
+                       -- El agrupado sigue funcionando porque los mensajes de
+                       -- Postgres son estables para el mismo fallo.
+                       ELSE 'excepción: ' || left(COALESCE(output->>'message', output::text), 200) END,
                   'sin salida') AS outcome,
                 count(*)::int AS n
          FROM pgboss.job
@@ -288,6 +293,9 @@ export async function GET(request: Request) {
         last_run_at: t.last_run_at,
         last_success_at: t.last_success_at,
         last_listing_count: t.last_listing_count == null ? null : num(t.last_listing_count),
+        // Por qué acabó así el último barrido (bloqueo, comuna vacía, cobertura
+        // insuficiente…). Sin esto, "0 anuncios vistos" no dice nada.
+        notes: t.notes ?? null,
         // Histórico (guardado la última vez que corrió un barrido) + EN VIVO
         // (consultado ahora mismo). El frontend usa live_portal_total cuando
         // está disponible; portal_reported_count queda de referencia/fallback.
@@ -309,6 +317,13 @@ export async function GET(request: Request) {
       // Colas de trabajo: `created` pendiente creciendo = el cuello de botella
       // está en la descarga de fichas, no en el barrido.
       queues,
+      // Qué proxy hay configurado (solo el hecho, nunca las credenciales). Sin
+      // proxy, un 403 del portal a la IP de la VPS no tiene salida: los barridos
+      // vuelven a 0 y las fotos se quedan en las 5 del blob.
+      proxy: {
+        evomi: Boolean(process.env.EVOMI_PROXY_USER && process.env.EVOMI_PROXY_HOST),
+        smartproxy_cl: Boolean(process.env.SMARTPROXY_CL_USER && process.env.SMARTPROXY_CL_HOST),
+      },
       // Qué devolvieron las fichas procesadas en la última hora: "completado" no
       // implica "guardado".
       detail_outcomes: detailOutcomes,

@@ -178,6 +178,7 @@ export async function GET(request: NextRequest) {
         c.name as comuna_name,
         c.sii_comuna_code,
         COALESCE(l.photos, '[]'::jsonb) as photos,
+        l.photos_total_count,
         COALESCE(l.features, '[]'::jsonb) as features,
         l.has_video,
         l.video_modal_url,

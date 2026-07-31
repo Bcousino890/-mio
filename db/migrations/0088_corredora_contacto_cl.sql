@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0083 · Ficha de empresa de la corredora: contacto + personas
+-- 0088 · Ficha de empresa de la corredora: contacto + personas
 --        (plan Anuncios CL · H4/H21 — enriquecimiento desde la web propia)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- POR QUÉ COLUMNAS NUEVAS Y NO `corredoras_cl.phones`:

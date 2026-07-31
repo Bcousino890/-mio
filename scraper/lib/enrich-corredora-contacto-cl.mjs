@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // enrich-corredora-contacto-cl.mjs — llena la ficha de empresa de una corredora
 // (teléfono, WhatsApp, email, dirección, redes, equipo) desde su web propia.
-// Plan Anuncios CL · H4/H21. Migración 0083.
+// Plan Anuncios CL · H4/H21. Migración 0088.
 //
 // Es al contacto lo que crawl-corredora-web-cl.mjs es al inventario: mismo
 // dominio, misma cortesía (H22), distinto objetivo. Aquí NO se recorren fichas

@@ -17,7 +17,7 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
-  Phone, Layers, Landmark, MessageCircle, BadgeCheck,
+  Phone, Layers, Landmark, MessageCircle, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
@@ -79,6 +79,9 @@ export type Property = {
   // ¿Ya está el inmueble en el CRM de captación (por su rol), con dueño y
   // teléfonos para llamar? Lo trae el GET cuando rol_matriz está resuelto.
   crm?: CrmInfo | null
+  // Enlace guardado a la captación creada desde esta ficha (0083). Es lo que
+  // deja la propiedad marcada como "captada" en la grilla.
+  captacion_id?: string | null
 }
 
 // Teléfono de contacto del dueño (DealerNet). Misma forma que captaciones_cl.phones.
@@ -264,13 +267,31 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   const [resolved, setResolved] = useState<{ parcel: ResolvedParcel | null; crm: CrmInfo | null } | null>(null)
   const [resolving, setResolving] = useState(false)
 
+  // Vuelve a pedir la ficha al servidor y la propaga a la grilla. Es el paso
+  // que faltaba: antes cada acción (marcar Smart, guardar el pin, captar)
+  // actualizaba SOLO el estado interno del modal, así que al cerrarlo la
+  // tarjeta seguía igual y al reabrirla se pintaba con los datos viejos de la
+  // lista — se veía exactamente como "no se guardó".
+  const refreshProperty = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/chile/property-cl?id=${encodeURIComponent(p.id)}`).then(x => x.json())
+      if (r.success && r.data) {
+        onRefetched(r.data as Property)
+        return r.data as Property
+      }
+    } catch { /* el guardado ya ocurrió; el refresco es cosmético */ }
+    return null
+  }, [p.id, onRefetched])
+
   // Marca "ya subida al CRM externo (Smart)": estado manual del equipo para no
   // duplicar el alta comercial. fecha = ya está; null = falta.
   const [smartAt, setSmartAt] = useState<string | null>(p.smart_crm_at ?? null)
   const [savingSmart, setSavingSmart] = useState(false)
+  const [smartError, setSmartError] = useState<string | null>(null)
   const toggleSmart = useCallback(async () => {
     const next = !smartAt
     setSavingSmart(true)
+    setSmartError(null)
     try {
       const res = await fetch('/api/chile/property-cl', {
         method: 'PATCH',
@@ -278,11 +299,29 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
         body: JSON.stringify({ id: p.id, smart_crm: next }),
       })
       const data = await res.json()
-      if (data.success) setSmartAt(data.data?.smart_crm_at ?? (next ? new Date().toISOString() : null))
+      if (data.success) {
+        const saved = data.data?.smart_crm_at ?? (next ? new Date().toISOString() : null)
+        setSmartAt(saved)
+        // Propagar a la grilla para que la etiqueta aparezca allí de inmediato.
+        onRefetched({ ...p, smart_crm_at: saved })
+      } else {
+        // Un fallo silencioso aquí era indistinguible de "no se guarda".
+        setSmartError(data.error ?? 'No se pudo guardar la marca de Smart')
+      }
+    } catch {
+      setSmartError('Error de red al guardar la marca de Smart')
     } finally {
       setSavingSmart(false)
     }
-  }, [smartAt, p.id])
+  }, [smartAt, p, onRefetched])
+
+  // Estado de captación del inmueble, resuelto una sola vez para toda la ficha:
+  // lo que se acaba de resolver bajo el pin manda; si no, lo ya guardado.
+  const liveCrm = resolved ? resolved.crm : (p.crm ?? null)
+  const captada = Boolean(liveCrm) || Boolean(p.captacion_id)
+  const captacionHref = liveCrm?.captacion_id
+    ? `/chile/captacion?id=${liveCrm.captacion_id}`
+    : p.captacion_id ? `/chile/captacion?id=${p.captacion_id}` : null
 
   // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
   // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
@@ -330,10 +369,70 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     setManualPinDirty(true)
   }, [])
 
+  // ── Etapas 3 y 4 del pipeline: teléfonos (DealerNet) y dueño (TGR) ─────────
+  // Guardar la ubicación dejaba la captación en 'matched' (rol resuelto) y ahí
+  // se detenía: había que ir a /chile/captacion y pulsar "Continuar" dos veces
+  // para ver dueño y teléfonos. Como desde la ficha lo que se quiere es LLAMAR,
+  // aquí se encadenan solas y el resultado vuelve a la misma ficha.
+  //
+  // DealerNet va PRIMERO: busca por rol vía Buscador Múltiple sin necesitar el
+  // nombre de TGR (lookupContactsDealernet ya no lo exige), así que llega a
+  // los teléfonos directo. TGR va después y es opcional — solo suma la
+  // confirmación documental del dueño; si falla o tarda (levanta Chromium,
+  // ~30-60s) no bloquea los teléfonos que ya se guardaron arriba.
+  const [captarStage, setCaptarStage] = useState<null | 'tgr' | 'dealernet'>(null)
+  const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const runCaptacionPipeline = useCallback(async (captacionId: string) => {
+    setCaptarMsg(null)
+    const notes: string[] = []
+
+    setCaptarStage('dealernet')
+    const dn = await fetch(`/api/chile/captar/${captacionId}/dealernet`, { method: 'POST' })
+      .then(r => r.json()).catch(() => null)
+    if (dn && dn.success === false) notes.push(`Teléfonos (DealerNet): ${dn.error ?? 'sin resultado'}`)
+
+    // Los teléfonos, si llegaron, ya quedaron guardados: reflejarlos de una en
+    // vez de esperar a TGR (que es lento y no afecta este resultado).
+    let fresh = await refreshProperty()
+    let crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    let phones = crm?.phones?.length ?? 0
+    setCaptarMsg(
+      phones > 0
+        ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
+        : { ok: false, text: notes.join(' · ') || 'Sin teléfonos todavía — reintenta desde la captación' },
+    )
+
+    // TGR después, en segundo plano: documenta al dueño con la fuente oficial
+    // cuando DealerNet no trajo nombre o quedó ambiguo. Best-effort — un fallo
+    // aquí no debe tapar el resultado de arriba.
+    try {
+      setCaptarStage('tgr')
+      const tgr = await fetch(`/api/chile/captar/${captacionId}/tgr`, { method: 'POST' })
+        .then(r => r.json()).catch(() => null)
+      if (tgr && tgr.success === false) notes.push(`Dueño (TGR, opcional): ${tgr.error ?? 'no se pudo obtener'}`)
+    } finally {
+      setCaptarStage(null)
+    }
+
+    fresh = await refreshProperty()
+    crm = fresh?.crm ?? null
+    if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+    phones = crm?.phones?.length ?? phones
+    setCaptarMsg(
+      phones > 0
+        ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} del dueño disponibles` }
+        : { ok: false, text: notes.join(' · ') || 'Sin teléfonos todavía — reintenta desde la captación' },
+    )
+  }, [refreshProperty])
+
   const saveManualPin = useCallback(async () => {
     if (!manualPin) return
     setSavingPin(true)
     setCaptacionMsg(null)
+    setCaptarMsg(null)
+    let captacionId: string | null = null
     try {
       const res = await fetch('/api/chile/property-cl', {
         method: 'PATCH',
@@ -344,18 +443,31 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
         }),
       })
       const data = await res.json()
+      if (!data.success) {
+        setCaptacionMsg({ ok: false, text: data.error ?? 'No se pudo guardar la ubicación' })
+        return
+      }
       setManualPinDirty(false)
       // Reflejar de una la info resuelta y persistida (rol + parcela + CRM).
       if (data.rol) setResolved({ parcel: data.rol, crm: data.crm ?? null })
       if (data.captacion?.sii_rol) {
+        captacionId = data.captacion.id
         setCaptacionMsg({ ok: true, text: `✓ Rol SII ${data.captacion.sii_rol} guardado en Captación`, captacionId: data.captacion.id })
       } else if (data.captacion_error) {
         setCaptacionMsg({ ok: false, text: data.captacion_error })
       }
+      // La grilla tiene que enterarse del pin, el rol y la captación recién
+      // creada: es lo que enciende la etiqueta "captada" en la tarjeta.
+      await refreshProperty()
+    } catch {
+      setCaptacionMsg({ ok: false, text: 'Error de red al guardar la ubicación' })
     } finally {
       setSavingPin(false)
     }
-  }, [manualPin, p.id, geo?.source_url])
+    // Encadenar dueño + teléfonos fuera del `savingPin` para que el botón se
+    // libere y el progreso se muestre en su propio aviso.
+    if (captacionId) await runCaptacionPipeline(captacionId)
+  }, [manualPin, p.id, geo?.source_url, refreshProperty, runCaptacionPipeline])
 
   const removeManualPin = useCallback(async () => {
     setSavingPin(true)
@@ -367,10 +479,11 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
       })
       setManualPin(null)
       setManualPinDirty(false)
+      await refreshProperty()
     } finally {
       setSavingPin(false)
     }
-  }, [p.id])
+  }, [p.id, refreshProperty])
   // Re-scrapea el aviso de la corredora activa (la pestaña seleccionada en la
   // galería) bajo demanda, en vez de esperar el próximo barrido programado de
   // esa comuna, y refresca la propiedad completa para que fotos/precio queden
@@ -531,9 +644,20 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
-              <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border ${conf.badge}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {conf.t}
-              </span>
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                {/* Estado de captación: la misma etiqueta que lleva la tarjeta
+                    en la grilla, para que ficha y listado digan lo mismo. */}
+                {captada && (
+                  <a href={captacionHref ?? '/chile/captacion'} target="_blank" rel="noopener noreferrer"
+                    title="Ya tiene ficha en el CRM de Captación — abrir"
+                    className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25">
+                    <BadgeCheck size={12} /> Captada
+                  </a>
+                )}
+                <span className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border ${conf.badge}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${conf.dot}`} /> {conf.t}
+                </span>
+              </div>
               {/* CRM externo (Smart): marca manual "ya la subí" para no duplicar
                   el alta comercial. */}
               <button onClick={toggleSmart} disabled={savingSmart}
@@ -549,6 +673,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                     ? <><BadgeCheck size={14} /> Ya en Smart (CRM)</>
                     : <><Plus size={14} /> Agregar a Smart</>}
               </button>
+              {smartError && <span className="text-[11px] text-rose-300 max-w-[220px] text-right">{smartError}</span>}
             </div>
           </div>
 
@@ -596,8 +721,12 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                         {manualPin && (
                           <>
                             {manualPinDirty && (
+                              // Botón sólido, no un enlace de texto: era el paso
+                              // que decide si la propiedad queda captada o no, y
+                              // pasaba desapercibido entre "Parcelas" y "Quitar".
                               <button onClick={saveManualPin} disabled={savingPin}
-                                className="text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
+                                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 shadow-lg shadow-emerald-900/40 ring-2 ring-emerald-400/30">
+                                <Save size={13} className={savingPin ? 'animate-pulse' : ''} />
                                 {savingPin ? 'Guardando…' : 'Guardar ubicación'}
                               </button>
                             )}
@@ -616,6 +745,19 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       ) : (
                         <div className={`text-xs mb-2 ${captacionMsg.ok ? 'text-emerald-400' : 'text-slate-500'}`}>{captacionMsg.text}</div>
                       )
+                    )}
+                    {/* Clicar una parcela solo MUEVE el pin y previsualiza el rol
+                        en vivo: hasta guardar no hay nada en la base ni ficha en
+                        Captación. Sin este aviso, el rol resuelto en pantalla
+                        daba a entender que ya estaba hecho. */}
+                    {manualPinDirty && !savingPin && (
+                      <div className="flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-2">
+                        <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                        <span>
+                          Pin sin guardar — la propiedad <strong className="font-semibold">todavía no queda captada</strong>.
+                          Pulsa <span className="text-emerald-300 font-semibold">Guardar ubicación</span> para fijar el rol y crear su ficha en Captación (dueño y teléfonos).
+                        </span>
+                      </div>
                     )}
                     {geo && (
                       // Pin SIEMPRE exacto: a diferencia de Idealista (España), que fuzzea
@@ -692,7 +834,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       const shownRol = rp?.rol ?? p.rol_matriz ?? null
                       const shownAddress = rp?.direccion ?? p.exact_address ?? null
                       // CRM en vivo cuando ya se tocó el pin; si no, lo guardado.
-                      const shownCrm = resolved ? resolved.crm : (p.crm ?? null)
+                      const shownCrm = liveCrm
                       const noParcel = resolved != null && resolved.parcel == null
                       if (!shownRol && !resolving && !noParcel) return null
                       return (
@@ -708,6 +850,15 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   <span className="text-slate-400">Rol </span>
                                   <span className="font-mono font-semibold text-amber-300">{shownRol}</span>
                                   {rp?.comuna_name && <span className="text-slate-500"> · {rp.comuna_name}</span>}
+                                  {/* El rol de abajo se resuelve EN VIVO al mover
+                                      el pin. Mientras no se guarde es solo una
+                                      previsualización, y verlo resuelto hacía
+                                      creer que el trabajo ya estaba hecho. */}
+                                  {manualPinDirty && (
+                                    <span className="ml-2 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 align-middle">
+                                      sin guardar
+                                    </span>
+                                  )}
                                 </div>
                                 {shownAddress && <div className="text-sm text-slate-200">{shownAddress}</div>}
                                 {(rp?.superficie_terreno_m2 || rp?.avaluo_fiscal_total) && (
@@ -750,12 +901,34 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — {shownCrm.owner_name ? 'contacto pendiente (DealerNet)' : 'dueño pendiente (TGR)'}.</div>
+                                  <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
+                                )}
+                                {/* Reintentar las etapas lentas sin salir de la
+                                    ficha: es donde se quiere el teléfono. */}
+                                {(!shownCrm.phones || shownCrm.phones.length === 0) && (
+                                  <button onClick={() => runCaptacionPipeline(shownCrm.captacion_id)} disabled={captarStage != null}
+                                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
+                                    <RefreshCw size={13} className={captarStage ? 'animate-spin' : ''} />
+                                    {captarStage === 'tgr' ? 'Buscando dueño (TGR)…'
+                                      : captarStage === 'dealernet' ? 'Buscando teléfonos (DealerNet)…'
+                                      : 'Buscar dueño y teléfonos'}
+                                  </button>
+                                )}
+                                {captarMsg && (
+                                  <div className={`text-xs mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
                                 )}
                               </div>
                             ) : !resolving ? (
                               <div className="mt-2 text-xs text-slate-500 bg-slate-900/40 border border-slate-700/60 rounded-xl px-4 py-2.5">
-                                Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (crea la ficha con dueño vía TGR y teléfonos vía DealerNet).
+                                {captarStage
+                                  ? <span className="text-emerald-400 inline-flex items-center gap-1.5">
+                                      <RefreshCw size={12} className="animate-spin" />
+                                      {captarStage === 'tgr' ? 'Buscando al dueño en TGR… (puede tardar ~1 min)' : 'Buscando teléfonos en DealerNet…'}
+                                    </span>
+                                  : <>Aún no está en el CRM. <span className="text-slate-400">Guarda la ubicación</span> para captarla (teléfonos vía DealerNet por rol, dueño documental vía TGR como respaldo opcional).</>}
+                                {captarMsg && !captarStage && (
+                                  <div className={`mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
+                                )}
                               </div>
                             ) : null
                           )}

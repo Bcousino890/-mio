@@ -52,7 +52,7 @@ export async function GET(
          (SELECT web_propia_url FROM grupo WHERE web_propia_url IS NOT NULL LIMIT 1) AS web_propia_url,
          (SELECT crm_platform FROM grupo ORDER BY (crm_platform <> 'unknown') DESC LIMIT 1) AS crm_platform,
          (SELECT array_agg(DISTINCT t) FROM grupo g CROSS JOIN LATERAL unnest(COALESCE(g.phones,'{}')) t) AS phones,
-         -- Ficha de empresa (0083): contacto scrapeado de la web propia. Va
+         -- Ficha de empresa (0088): contacto scrapeado de la web propia. Va
          -- aparte de la columna phones (que sale de los anuncios) porque son dos
          -- procedencias distintas; la UI las muestra juntas pero el dato de
          -- dónde salió cada número se conserva.
@@ -133,7 +133,7 @@ export async function GET(
       [groupIds]
     )
 
-    // Equipo publicado por la corredora en su web (0083). Primero las
+    // Equipo publicado por la corredora en su web (0088). Primero las
     // jefaturas: en una ficha comercial lo primero que se busca es con quién
     // hay que hablar. `last_seen_at` deja ver quién sigue y quién ya no.
     const personasResult = await pool.query(

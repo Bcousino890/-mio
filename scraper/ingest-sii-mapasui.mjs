@@ -12,7 +12,7 @@
 //   python run.py predios  --config config.json
 // (ver scraper/sii-scraper/README.md — incluye el aviso de procedencia/ToS)
 // ─────────────────────────────────────────────────────────────────────────────
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { ingestMapasuiPrediosFile } from './lib/sii-mapasui-cl.mjs'
@@ -44,6 +44,22 @@ async function main() {
   let total = 0
   let fallos = 0
   for (const filePath of files) {
+    // Modo --dir (cron recurrente): si el archivo no cambió desde la última
+    // ingesta exitosa, saltarlo. Sin esto, un cron cada 30 min re-lee y
+    // re-hace UPSERT fila por fila del .jsonl completo de una comuna que ya
+    // terminó de scrapear hace tiempo, sin ningún dato nuevo que justifique
+    // los minutos que tarda (ver .sii-mapasui-complete). Modo --file (uso
+    // manual) siempre ingesta, sin este atajo.
+    const marker = `${filePath}.mtime`
+    if (values.dir) {
+      const { mtimeMs } = await stat(filePath)
+      const prevMtime = await readFile(marker, 'utf8').catch(() => null)
+      if (prevMtime && Number(prevMtime) === mtimeMs) {
+        console.log(`\n○ ${filePath} sin cambios desde la última ingesta — se omite.`)
+        continue
+      }
+    }
+
     console.log(`\n→ Ingestando ${filePath}...`)
     const result = await ingestMapasuiPrediosFile({ filePath })
     if (!result.ok) {
@@ -53,6 +69,10 @@ async function main() {
     }
     total += result.count
     console.log(`  ✓ ${result.count} predios`)
+    if (values.dir) {
+      const { mtimeMs } = await stat(filePath)
+      await writeFile(marker, String(mtimeMs))
+    }
   }
 
   console.log(`\nTotal ingestado: ${total} predios en sii_mapasui_predios_cl`)

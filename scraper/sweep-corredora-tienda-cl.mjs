@@ -8,7 +8,7 @@
  * activado (hoy, Las Condes). Una corredora grande publica en toda la RM —
  * verificado en vivo, Property Partners declara 1.966 casas en su tienda
  * oficial. `portal_store_slug` se descubre solo durante el scraping normal de
- * fichas (ver migración 0084); este runner es el que aprovecha ese dato.
+ * fichas (ver migración 0089); este runner es el que aprovecha ese dato.
  *
  * La lógica vive en lib/discovery-corredora-tienda-cl.mjs; esto es la corrida
  * manual/cron. Sin `--id`, toma las corredoras con tienda conocida cuyo último

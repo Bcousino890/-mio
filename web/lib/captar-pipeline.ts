@@ -1093,8 +1093,66 @@ export async function setRolFromPin(captacionId: string, rol: string, siiComunaC
   return rows[0] as CaptacionRow
 }
 
+/**
+ * Deja el enlace ficha ↔ captación guardado en las DOS direcciones (0083).
+ *
+ * Sin esto, el único puente entre /chile/propiedades y /chile/captacion era la
+ * coincidencia de rol + comuna calculada al vuelo: la tarjeta de la grilla no
+ * podía marcar "ya captada" y la fila de captación no sabía volver al inmueble.
+ * Es best-effort — si la columna no existe todavía (base sin migrar), el pin y
+ * la captación igual quedan guardados.
+ */
+export async function linkCaptacionToProperty(captacionId: string, propertyId: string): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE property_cl SET captacion_id = $2, updated_at = now() WHERE id = $1`,
+      [propertyId, captacionId],
+    )
+    await pool.query(
+      `UPDATE captaciones_cl SET property_cl_id = $2, updated_at = now() WHERE id = $1`,
+      [captacionId, propertyId],
+    )
+  } catch {
+    // La captación ya quedó creada y con su rol: el enlace es un extra.
+  }
+}
+
+/**
+ * Enlaza la captación con la ficha de Propiedades a través de SU anuncio: el
+ * aviso captado (listings_cl) ya pertenece a un property_cl por el dedup, así
+ * que el inmueble es el mismo sin adivinar nada por rol.
+ *
+ * Cubre el camino que NO pasa por la ficha (pegar la URL en /chile/captar-url):
+ * sin esto, esas captaciones nunca marcaban la propiedad como captada en
+ * /chile/propiedades. No pisa un enlace existente.
+ */
+async function linkCaptacionByListing(c: CaptacionRow): Promise<void> {
+  if (!c.listing_cl_id) return
+  try {
+    const { rows } = await pool.query(
+      `UPDATE property_cl p
+          SET captacion_id = $1, updated_at = now()
+         FROM listings_cl l
+        WHERE l.id = $2 AND p.id = l.property_cl_id AND p.captacion_id IS NULL
+      RETURNING p.id`,
+      [c.id, c.listing_cl_id],
+    )
+    const propertyId = rows[0]?.id
+    if (propertyId) {
+      await pool.query(
+        `UPDATE captaciones_cl SET property_cl_id = $2, updated_at = now()
+          WHERE id = $1 AND property_cl_id IS NULL`,
+        [c.id, propertyId],
+      )
+    }
+  } catch {
+    // Base sin migrar (0083): la captación sigue siendo válida sin el enlace.
+  }
+}
+
 /** Propaga el match al anuncio en listings_cl (dirección exacta + rol). */
 async function syncListingIdentity(c: CaptacionRow): Promise<void> {
+  await linkCaptacionByListing(c)
   if (!c.listing_cl_id || !c.sii_rol) return
   try {
     await pool.query(
@@ -1255,11 +1313,16 @@ function candidatoFullName(cand: DealernetCandidato): string {
   return [cand.nombres, cand.apellidos, cand.razonSocial].filter(Boolean).join(' ')
 }
 
+// Umbral de confianza cuando NO hay nombre TGR contra qué comparar: se usa la
+// propia señal de DealerNet (probabilidad "Alta" + similitud, 0-100 → 0-1) en
+// vez de nameSimilarity. Mismo corte que ya pinta verde en el panel manual de
+// /chile/duenos (DuenoLookup.tsx) para "Alta".
+const DEALERNET_OWN_CONFIDENCE_THRESHOLD = 0.8
+
 export async function lookupContactsDealernet(captacionId: string): Promise<DealernetStageResult> {
   const c = await getCaptacion(captacionId)
   if (!c) throw new Error('Captación no encontrada')
   if (!c.sii_rol || !c.sii_comuna_code) throw new Error('La captación aún no tiene rol confirmado')
-  if (!c.owner_name) throw new Error('Primero hay que obtener el nombre del dueño vía TGR')
 
   const comunaRes = await pool.query(
     `SELECT name FROM chile_comunas WHERE sii_comuna_code = $1 LIMIT 1`,
@@ -1267,12 +1330,16 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
   )
   const comunaNombre: string | null = comunaRes.rows[0]?.name ?? c.comuna_label
 
-  // Buscador Múltiple: por rol → por nombre → por dirección, hasta encontrar
-  // candidatos cuyo nombre calce con el dueño TGR.
+  // Buscador Múltiple: por rol (SIEMPRE, no depende de TGR) → por nombre (si
+  // ya hay dueño confirmado vía TGR) → por dirección SII (tampoco depende de
+  // TGR: sii_direccion se fija al resolver el rol, en la Etapa 2). TGR es
+  // lento (levanta Chromium, ~30-60s) y puede fallar — el rol solo casi
+  // siempre alcanza para identificar al titular sin esperarlo.
   const attempts: Array<{ tipo: 'rol' | 'nombre' | 'direccion'; args: string }> = []
   if (comunaNombre) attempts.push({ tipo: 'rol', args: `${c.sii_rol}, ${comunaNombre}` })
-  attempts.push({ tipo: 'nombre', args: c.owner_name })
+  if (c.owner_name) attempts.push({ tipo: 'nombre', args: c.owner_name })
   if (c.sii_direccion && comunaNombre) attempts.push({ tipo: 'direccion', args: `${c.sii_direccion}, ${comunaNombre}` })
+  if (attempts.length === 0) throw new Error('Sin rol, nombre ni dirección para buscar en DealerNet')
 
   let allCandidates: DealernetCandidato[] = []
   let lastError: string | null = null
@@ -1291,10 +1358,19 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
       await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: attempt.tipo, args: attempt.args, retcode: res.retcode, success: true, fromCache: !!cached, candidatosN: res.candidatos.length, source: 'captacion' })
       const withRut = res.candidatos.filter((x) => x.rut != null)
       allCandidates = allCandidates.concat(withRut)
+      // Con nombre TGR: comparar texto contra el dueño confirmado. Sin
+      // nombre: apoyarse en la confianza que la propia DealerNet le pone al
+      // candidato (probabilidad/similitud del Buscador Múltiple).
       const scored = withRut
-        .map((cand) => ({ cand, sim: nameSimilarity(c.owner_name, candidatoFullName(cand)) }))
+        .map((cand) => ({
+          cand,
+          sim: c.owner_name
+            ? nameSimilarity(c.owner_name, candidatoFullName(cand))
+            : (cand.probabilidad === 'Alta' ? (cand.similitud != null ? cand.similitud / 100 : 0.9) : 0),
+        }))
         .sort((a, b) => b.sim - a.sim)
-      if (scored[0] && scored[0].sim >= OWNER_NAME_MATCH_THRESHOLD) {
+      const threshold = c.owner_name ? OWNER_NAME_MATCH_THRESHOLD : DEALERNET_OWN_CONFIDENCE_THRESHOLD
+      if (scored[0] && scored[0].sim >= threshold) {
         const second = scored[1]
         // Si dos RUT distintos matchean igual de bien, es ambiguo
         if (!second || second.sim < scored[0].sim || second.cand.rut === scored[0].cand.rut) {
@@ -1308,6 +1384,9 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
   }
 
   if (!chosen) {
+    // Ambiguo o sin match: los candidatos igual quedan guardados
+    // (owner_rut_candidates) para elegir a mano desde /chile/captacion — nada
+    // de lo consultado se descarta aunque no se pudiera auto-confirmar.
     const status = allCandidates.length > 0 ? 'ambiguous' : 'not_found'
     const { rows } = await pool.query(
       `UPDATE captaciones_cl SET
@@ -1322,7 +1401,7 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
     return { captacion: rows[0], rut_candidates: allCandidates.slice(0, 15) }
   }
 
-  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates)
+  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates, candidatoFullName(chosen) || null)
 }
 
 /** Consulta final por RUT (productos de contactabilidad) y persistencia. */
@@ -1331,6 +1410,11 @@ export async function finishDealernetByRut(
   rutNum: number,
   rutDv: string,
   allCandidates: DealernetCandidato[] = [],
+  // Nombre del titular tal como lo trajo el Buscador Múltiple, usado como
+  // respaldo cuando TGR nunca corrió (o falló): sin esto, saltarse TGR dejaba
+  // owner_name en null aunque ya hubiera RUT y teléfonos guardados — la fila
+  // se veía "sin dueño" en /chile/captacion pese a estar contactable.
+  candidateNameHint: string | null = null,
 ): Promise<DealernetStageResult> {
   // Este mismo RUT puede ya estar guardado (ficha del rol en /chile/catastro,
   // /chile/dealer, u otra captación) — reusar evita pagar la consulta de nuevo.
@@ -1338,10 +1422,14 @@ export async function finishDealernetByRut(
 
   let phones: { phone_e164: string; clasificacion: string | null; categoria: string; ind_whatsapp: boolean | null; product_code: string; calidad: number | null }[]
   let emails: { email: string; categoria: string; product_code: string }[]
+  // Nombre del titular según la propia consulta DealerNet — respaldo de
+  // owner_name cuando TGR no corrió.
+  let titularName: string | null = null
 
   if (cached) {
     phones = cached.phones as any
     emails = cached.emails as any
+    titularName = (cached.contact as any).nombre_titular ?? null
     await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: cached.contact.retcode, success: true, fromCache: true, candidatosN: cached.phones.length, source: 'captacion' })
     if (c.sii_rol && c.sii_comuna_code && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
       await pool.query(
@@ -1403,6 +1491,7 @@ export async function finishDealernetByRut(
 
     phones = lookup.phones
     emails = lookup.emails
+    titularName = lookup.nombreTitular
   }
 
   const phonesJson = phones.map((p) => ({
@@ -1424,11 +1513,17 @@ export async function finishDealernetByRut(
        emails = $5,
        dealernet_error = NULL,
        dealernet_consulted_at = now(),
+       -- Si TGR nunca corrió (o falló), el nombre que trae la propia
+       -- DealerNet es mejor que dejar la fila "sin dueño" con RUT y
+       -- teléfonos ya confirmados. COALESCE: nunca pisa un nombre TGR ya
+       -- guardado (esa fuente documental sigue siendo la de mayor confianza).
+       owner_name = COALESCE(owner_name, $7),
        stage = CASE WHEN $6::int > 0 THEN 'contact_found' ELSE stage END,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [c.id, `${rutNum}-${rutDv}`, JSON.stringify(allCandidates.slice(0, 15)),
-     JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length],
+     JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length,
+     titularName ?? candidateNameHint],
   )
   return { captacion: rows[0] as CaptacionRow }
 }

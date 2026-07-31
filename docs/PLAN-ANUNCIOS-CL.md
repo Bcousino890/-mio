@@ -352,7 +352,7 @@ corredora YA declara su inventario completo en una URL propia del portal
 — verificado con HTML real de CyM Propiedades y Remax Diamante, mismo blob
 Nordic que ya entienden `parseListPage`/`parseListMeta`).
 
-`advertiser_store_slug` (0084) se descubre SOLO, sin registro manual (a
+`advertiser_store_slug` (0089) se descubre SOLO, sin registro manual (a
 diferencia de `web_propia_url`): sale del enlace "Ir a la tienda oficial de
 &lt;nombre&gt;" presente en cualquier ficha ya scrapeada de esa corredora, igual
 que ya pasa con `advertiser_logo` (0075). `runCorredoraConsolidationCl`
