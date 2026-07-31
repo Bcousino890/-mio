@@ -5,11 +5,13 @@ import ProxyConfigPanel from '@/components/admin/ProxyConfigPanel'
 import EvomiProxyConfigPanel from '@/components/admin/EvomiProxyConfigPanel'
 import RefreshViewsPanel from '@/components/admin/RefreshViewsPanel'
 import OpenRouterConfigPanel from '@/components/admin/OpenRouterConfigPanel'
+import SmartbcConfigPanel from '@/components/admin/SmartbcConfigPanel'
 
 export default function SettingsPage() {
   return (
-    <PageShell title="Configuración" subtitle="Importar datos · proxies · IA · vistas de mercado">
+    <PageShell title="Configuración" subtitle="Integraciones · importar datos · proxies · IA · vistas de mercado">
       <div className="space-y-4">
+        <SmartbcConfigPanel />
         <OpenRouterConfigPanel />
         <IngestPanel />
         <EvomiProxyConfigPanel />

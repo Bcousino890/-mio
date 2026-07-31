@@ -12,6 +12,8 @@ import {
 
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+// Misma lógica de parentesco que usa el envío al CRM: una sola definición.
+import { duenoDeTelefono } from '@/lib/smartbc/relaciones.mjs'
 import { DuenosRolPicker } from '@/components/chile/DuenosRolPicker'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
@@ -481,12 +483,18 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   // la cuñada del cónyuge. Aquí sí se distingue —está el parentesco y la
   // categoría delante—, así que la elección se hace aquí y se guarda: la
   // sincronización automática la respeta y no vuelve a meter los 12.
-  const nombreSugerido = useCallback((relacion: string | null | undefined): string => {
-    if (!relacion) return captacion.owner_name ?? ''
-    const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
-    const hit = (captacion.relacionados ?? []).find((r) => fold(r.relacion ?? '') === fold(relacion))
-    return hit?.nombre ?? ''
-  }, [captacion.owner_name, captacion.relacionados])
+  // De qui\u00e9n es este tel\u00e9fono. DealerNet entrega las dos mitades por separado:
+  // en el n\u00famero solo pone el parentesco y los nombres viven en la lista de
+  // relacionados. Adem\u00e1s un mismo n\u00famero puede ser de varias personas
+  // ("Conyuge, Hija, Suegra"); la primera es la m\u00e1s directa, as\u00ed que es la que
+  // manda. Sin parentesco, el n\u00famero es del titular.
+  const duenoDelTelefono = useCallback(
+    (relacion: string | null | undefined) => duenoDeTelefono(relacion, {
+      ownerName: captacion.owner_name,
+      relacionados: captacion.relacionados ?? [],
+    }),
+    [captacion.owner_name, captacion.relacionados],
+  )
 
   const [seleccion, setSeleccion] = useState<Record<string, { name: string }>>(() => {
     const guardada = captacion.smartbc_contactos
@@ -504,9 +512,9 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         const { [numero]: _quitado, ...resto } = prev
         return resto
       }
-      return { ...prev, [numero]: { name: nombreSugerido(relacion) } }
+      return { ...prev, [numero]: { name: duenoDelTelefono(relacion).name } }
     })
-  }, [nombreSugerido])
+  }, [duenoDelTelefono])
 
   const enviarASmart = useCallback(async () => {
     setEnviando(true)
@@ -517,7 +525,9 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         .map((p) => ({
           phone: p.numero,
           name: seleccion[p.numero].name || null,
-          relationship: p.relacion ?? null,
+          // La relación concreta de esa persona, no la cadena entera: al CRM
+          // viaja "Conyuge", no "Conyuge, Hija, Suegra".
+          relationship: duenoDelTelefono(p.relacion).relationship,
           has_whatsapp: p.whatsapp ?? null,
           label: p.tipo ?? p.categoria ?? null,
           // Sin parentesco, el número es del titular: así los clasifica DealerNet.
@@ -550,7 +560,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
     } finally {
       setEnviando(false)
     }
-  }, [phones, seleccion, captacion.id, captacion.owner_rut])
+  }, [phones, seleccion, captacion.id, captacion.owner_rut, duenoDelTelefono])
 
   const nSeleccionados = Object.keys(seleccion).length
 

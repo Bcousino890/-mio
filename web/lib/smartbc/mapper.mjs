@@ -23,6 +23,10 @@
 
 import { createHash } from 'node:crypto'
 import { PASSTHROUGH } from './catalogo.mjs'
+// Los parentescos viven aparte porque también los usa la ficha de Captación en
+// el navegador, y este módulo importa node:crypto (ver relaciones.mjs).
+import { splitRelaciones } from './relaciones.mjs'
+export { splitRelaciones }
 
 /**
  * "Confirmada" NO significa lo mismo en los dos sistemas y confundirlo corrompe
@@ -232,7 +236,11 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
   const seen = new Set()
   for (const rel of relacionados) {
     if (contacts.length >= LIMITS.contacts) break
-    const suyos = relPhones.filter((p) => norm(p.relacion) === norm(rel?.relacion))
+    // Un tel\u00e9fono puede pertenecer a varias personas a la vez ("Conyuge, Hija,
+    // Suegra"): cuenta como suyo si su relaci\u00f3n aparece en esa lista, no solo
+    // si la cadena entera coincide.
+    const suyos = relPhones.filter((p) =>
+      splitRelaciones(p.relacion).some((r) => norm(r) === norm(rel?.relacion)))
     if (!suyos.length) continue
     const rut = rel?.rut != null ? `${rel.rut}${rel.dv ? `-${rel.dv}` : ''}` : null
     const key = rut ?? norm(rel?.nombre)
@@ -263,11 +271,12 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
 /**
  * Contactos a partir de la selección manual del equipo.
  *
- * Cada entrada elegida trae su teléfono Y el nombre con el que debe viajar: el
- * certificado TGR devuelve el nombre legal del titular, que no siempre es con el
- * que la persona se presenta, y DealerNet solo da el parentesco del relacionado
- * ("Cuñada (Por Conyuge)") sin decir cuál de los 23 nombres es. Esa
- * correspondencia la resuelve quien mira la ficha, y viaja tal cual.
+ * Cada entrada elegida trae su teléfono Y el nombre con el que debe viajar.
+ * Hace falta porque DealerNet entrega las dos mitades por separado: en el
+ * teléfono solo pone el parentesco ("Conyuge, Hija, Suegra") y los nombres van
+ * en la lista de relacionados, sin decir cuál de ellos usa ese número. Quien
+ * mira la ficha tiene las dos cosas delante y cierra la correspondencia; es el
+ * nombre que acaba viendo quien llama desde el CRM.
  *
  * Se agrupan por persona: varios teléfonos de un mismo contacto van como
  * `extra_phones` suyos, no como contactos repetidos.
@@ -621,10 +630,10 @@ export function buildCaptacionPayload(bundle, {
       normalizer,
     }).map(pruneNulls),
 
-    // `attempts` NO se envía: el origen no registra intentos de contacto con el
-    // propietario — nadie llama desde -mio. Lo más parecido (dealernet_query_log)
-    // es un log de consultas a un servicio de datos, no una llamada al dueño;
-    // mandarlo fabricaría un historial de contacto que no ocurrió.
+    // `attempts` NO se envía, y no es una carencia: los intentos de contacto se
+    // registran en SmartBC y solo allí, porque es desde allí desde donde se
+    // llama al propietario. -mio identifica al dueño y sus teléfonos; la
+    // conversación con él pertenece al CRM.
 
     stage: stage ?? null,
     // `assigned_to_email` no se envía: SmartBC reparte automáticamente y a quién

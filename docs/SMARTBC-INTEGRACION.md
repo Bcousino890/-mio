@@ -235,7 +235,7 @@ literalmente "la misma propiedad publicada por otras corredoras". Deduplicados p
 
 | Campo de SmartBC | Motivo |
 |---|---|
-| **`attempts[]`** | El origen **no registra intentos de contacto con el propietario**: nadie llama desde `-mio`, esa es precisamente la conversación que ocurre en SmartBC. Lo más parecido que tenemos es `dealernet_query_log`, que es un log de consultas a un servicio de datos, no una llamada al dueño. Mapearlo sería fabricar un historial de contacto que no existió. **Esto incumple el criterio de aceptación nº 2 ("con todas sus secciones… e intentos") y no tiene arreglo desde el origen.** |
+| **`attempts[]`** | Por diseño, no por carencia: **los intentos viven en SmartBC y solo allí**, porque es desde allí desde donde se llama al propietario. `-mio` identifica al dueño y consigue sus teléfonos; la conversación con él pertenece al CRM. (Lo más parecido que hay aquí, `dealernet_query_log`, es un registro de consultas a un servicio de datos, no una llamada.) El criterio de aceptación nº 2 pide "todas sus secciones… e intentos", pero esa sección no la alimenta este sistema. |
 | `owner.confirmed`, `stage: confirmed` | §3: es la decisión comercial del equipo |
 | `published_ago` | §4.1: no tenemos la fecha de publicación real |
 | `subzone`, `revision_notes`, `next_action_*` | sin equivalente en el origen |
@@ -370,7 +370,7 @@ se corrió una **prueba de contrato con escrituras reales** contra el CRM
 | Criterio de aceptación | Estado |
 |---|---|
 | 1. `ping` responde 200 | ✅ |
-| 2. Alta con todas sus secciones | ✅ `201 created`, `warnings: []`, 1 contacto · 2 fotos · 1 aviso con su snapshot de precio (salvo `attempts`, que no se envía — §5) |
+| 2. Alta con todas sus secciones | ✅ `201 created`, `warnings: []`, 1 contacto · 2 fotos · 1 aviso con su snapshot de precio (`attempts` no aplica: se alimenta en SmartBC — §5) |
 | 3. Reenviar sin cambios → `unchanged` | ⚠️ **SmartBC no devuelve `unchanged`**: responde `updated` con `changed_fields: []`. No escribe nada, así que el efecto es el correcto, pero el `action` no distingue. El sincronizador cuenta por `changed_fields`, no por `action`, para que el resumen no infle las actualizaciones |
 | 4. Cambio de precio → `changed_fields: ["price"]` | ✅ el diff calculado fue `{external_id, price}` y la API confirmó el cambio — con el escudo de `source_site` de §9 |
 | 5. Misma `Idempotency-Key` no duplica | ✅ la 2ª llamada devolvió `X-Idempotent-Replay: true` y **el mismo `request_id`** |

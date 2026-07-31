@@ -29,6 +29,7 @@ import {
   pickPrice,
   publicationNumber,
   sortPhones,
+  splitRelaciones,
 } from './mapper.mjs'
 
 // Campos admitidos por el schema `Captacion` del OpenAPI de SmartBC. El schema
@@ -266,6 +267,38 @@ test('con decenas de relacionados no se supera el tope de 20 contactos', () => {
     captacionId: CAP_ID, ownerName: 'X', ownerRut: null, phones, emails: [], relacionados,
   })
   assert.equal(contacts.length, 20)
+})
+
+// ─── Parentescos múltiples ───────────────────────────────────────────────────
+
+test('un teléfono compartido lista todas sus relaciones, en orden', () => {
+  // Caso real de una ficha de Las Condes: un número que usan tres personas.
+  assert.deepEqual(splitRelaciones('Conyuge, Hija, Suegra'), ['Conyuge', 'Hija', 'Suegra'])
+  assert.deepEqual(splitRelaciones('Cuñada (Por Conyuge)'), ['Cuñada (Por Conyuge)'])
+  assert.deepEqual(splitRelaciones('Relación directa con Padre, Madre'), ['Padre', 'Madre'])
+  assert.deepEqual(splitRelaciones(null), [])
+})
+
+test('un relacionado reclama el teléfono aunque lo comparta con otros', () => {
+  // Antes se comparaba la cadena entera: "Conyuge, Hija, Suegra" nunca casaba
+  // con "Conyuge" y el cónyuge se quedaba sin contacto pese a tener número.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56912345678', categoria: 'probable', calidad: 9 },
+      { numero: '+56995423111', categoria: 'probable', calidad: 8, relacion: 'Conyuge, Hija, Suegra' },
+    ],
+    emails: [],
+    relacionados: [
+      { rut: '9876543', dv: '2', nombre: 'Juan Soto', relacion: 'Conyuge' },
+      { rut: '5555555', dv: '5', nombre: 'Ana Soto', relacion: 'Hija' },
+    ],
+  })
+  const nombres = contacts.map((c) => c.contact_name)
+  assert.ok(nombres.includes('Juan Soto'), 'el cónyuge entra con su nombre')
+  assert.ok(nombres.includes('Ana Soto'), 'y la hija también, del mismo número')
 })
 
 // ─── Selección manual de contactos ───────────────────────────────────────────
