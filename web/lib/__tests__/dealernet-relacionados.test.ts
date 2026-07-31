@@ -8,7 +8,7 @@
 // inmuebles que el informe trae en sus propios bloques.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseDealernetResponse } from '../dealernet'
+import { parseDealernetResponse, esPropietarioActual, esPropietarioHistorico } from '../dealernet'
 
 function envelope(productCode: string, colectXml: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -154,4 +154,26 @@ test('3421 sin contenedor propio sigue leyéndose entero', () => {
   const r = parseDealernetResponse(envelope('3421', suelto), ['3421'])
 
   assert.deepEqual(r.relacionados.map(x => x.relacion), ['Padre', 'Hermana'])
+})
+
+// ─── Propietario actual vs. histórico (Buscador Múltiple por rol) ────────────
+// El pipeline solo consulta al ACTUAL: un histórico ya no es el dueño y
+// cada consulta de contactabilidad se paga.
+test('reconoce la marca de propietario del candidato', () => {
+  const cand = (propietario: string | null) => ({
+    rut: 7011574, dv: '3', clasif: 'P', nombres: null, apellidos: null,
+    razonSocial: null, propietario, similitud: null, probabilidad: 'Alta',
+  })
+
+  assert.equal(esPropietarioHistorico(cand('Histórico')), true)
+  assert.equal(esPropietarioHistorico(cand('historico')), true)
+  assert.equal(esPropietarioHistorico(cand(' HISTÓRICO ')), true)
+  assert.equal(esPropietarioHistorico(cand('Actual')), false)
+  // Sin marca (búsqueda por nombre/dirección) no es histórico: no hay dato,
+  // y ahí manda el calce por nombre.
+  assert.equal(esPropietarioHistorico(cand(null)), false)
+
+  assert.equal(esPropietarioActual(cand('Actual')), true)
+  assert.equal(esPropietarioActual(cand('Histórico')), false)
+  assert.equal(esPropietarioActual(cand(null)), false)
 })

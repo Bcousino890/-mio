@@ -12,6 +12,7 @@ import {
 
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+import { DuenosRolPicker } from '@/components/chile/DuenosRolPicker'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
 
@@ -236,6 +237,8 @@ interface Props {
 export default function CaptacionDetail({ captacion, onChange, autoAdvance = false, hideStepper = false }: Props) {
   const [tgrRunning, setTgrRunning] = useState(false)
   const [dnRunning, setDnRunning] = useState(false)
+  // RUT que se está consultando desde la lista de dueños del rol.
+  const [pidiendoRut, setPidiendoRut] = useState<string | null>(null)
   const [selectedRol, setSelectedRol] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const { copiedKey: copiedPhoneKey, copy: copyPhone } = useCopy()
@@ -382,6 +385,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
 
   const handleSelectRut = async (rut: string) => {
     setDnRunning(true)
+    setPidiendoRut(rut)
     try {
       const res = await fetch(`/api/chile/captar/${captacion.id}/dealernet`, {
         method: 'POST',
@@ -392,6 +396,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
       if (data.captacion) onChange(data.captacion)
     } finally {
       setDnRunning(false)
+      setPidiendoRut(null)
     }
   }
 
@@ -597,30 +602,25 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         </div>
       )}
 
-      {/* ── RUT ambiguo: elegir manualmente ── */}
-      {captacion.dealernet_status === 'ambiguous' && rutCandidates.length > 0 && (
-        <div className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-4">
-          <p className="text-xs font-semibold text-amber-300 mb-3 flex items-center gap-1.5">
-            <AlertCircle size={13} /> Varios RUT candidatos en DealerNet — elige el que corresponde a “{captacion.owner_name}”
-          </p>
-          <div className="space-y-1.5">
-            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-            {rutCandidates.slice(0, 8).map((cand: any, i: number) => {
-              const rutStr = cand.rut ? `${cand.rut}-${cand.dv ?? ''}` : null
-              const name = [cand.nombres, cand.apellidos, cand.razonSocial].filter(Boolean).join(' ')
-              return (
-                <button
-                  key={`${rutStr}-${i}`}
-                  onClick={() => rutStr && handleSelectRut(rutStr)}
-                  disabled={dnRunning}
-                  className="w-full flex items-center justify-between p-2.5 rounded-lg border border-[var(--c-border-card)] bg-[var(--c-card)] hover:border-amber-700/50 text-left transition-colors"
-                >
-                  <span className="text-xs text-slate-200">{name || '—'}</span>
-                  <span className="text-xs font-mono text-amber-300">{rutStr}</span>
-                </button>
-              )
-            })}
-          </div>
+      {/* ── Dueños del rol: elegir a quién consultar ──
+          Se muestra siempre que haya candidatos, no solo cuando quedó
+          ambiguo: aunque el actual ya esté resuelto, el equipo puede querer
+          los teléfonos de un histórico o de la persona detrás de la sociedad
+          dueña. Cada consulta se paga, así que ninguna sale sin un clic. */}
+      {rutCandidates.length > 0 && (
+        <div className={`rounded-xl border p-4 ${captacion.dealernet_status === 'ambiguous'
+          ? 'border-amber-900/50 bg-amber-950/10' : 'border-[var(--c-border-card)] bg-[var(--c-card)]'}`}>
+          {captacion.dealernet_status === 'ambiguous' && (
+            <p className="text-xs font-semibold text-amber-300 mb-3 flex items-center gap-1.5">
+              <AlertCircle size={13} /> {captacion.review_reason ?? 'Varios RUT candidatos en DealerNet: elegir manualmente'}
+            </p>
+          )}
+          <DuenosRolPicker
+            candidatos={rutCandidates}
+            ownerRut={captacion.owner_rut}
+            busyRut={dnRunning ? (pidiendoRut ?? '') : null}
+            onPedirTelefonos={handleSelectRut}
+          />
         </div>
       )}
 

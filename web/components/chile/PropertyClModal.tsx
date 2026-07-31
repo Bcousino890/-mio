@@ -20,6 +20,7 @@ import {
   Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+import { DuenosRolPicker, type RutCandidato } from '@/components/chile/DuenosRolPicker'
 import { corredoraColor } from '@/lib/corredora-pin-colors'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
@@ -100,6 +101,8 @@ export type CrmInfo = {
   phones: CrmPhone[] | null
   emails: unknown
   relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
+  /** Dueños del rol según DealerNet (Buscador Múltiple), con su marca actual/histórico. */
+  owner_rut_candidates: RutCandidato[] | null
   stage: string
   dealernet_status: string
   needs_review: boolean
@@ -395,6 +398,36 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // ~30-60s) no bloquea los teléfonos que ya se guardaron arriba.
   const [captarStage, setCaptarStage] = useState<null | 'tgr' | 'dealernet'>(null)
   const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // RUT que se está consultando a mano desde la lista de dueños del rol.
+  const [pidiendoRut, setPidiendoRut] = useState<string | null>(null)
+
+  // Teléfonos de UN RUT concreto, elegido a mano (un propietario histórico, o
+  // la persona detrás de la sociedad dueña). No pasa por TGR: acá no se está
+  // identificando al dueño, se está pidiendo la contactabilidad de alguien que
+  // el equipo ya eligió — y cada consulta se paga.
+  const pedirTelefonosDeRut = useCallback(async (captacionId: string, rut: string) => {
+    setCaptarMsg(null)
+    setPidiendoRut(rut)
+    try {
+      const res = await fetch(`/api/chile/captar/${captacionId}/dealernet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rut }),
+      }).then(r => r.json()).catch(() => null)
+
+      const fresh = await refreshProperty()
+      const crm = fresh?.crm ?? null
+      if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
+      const phones = crm?.phones?.length ?? 0
+      setCaptarMsg(
+        phones > 0
+          ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} de ${rut}` }
+          : { ok: false, text: res?.error ?? `Sin teléfonos para ${rut} en DealerNet` },
+      )
+    } finally {
+      setPidiendoRut(null)
+    }
+  }, [refreshProperty])
 
   const runCaptacionPipeline = useCallback(async (captacionId: string) => {
     setCaptarMsg(null)
@@ -940,6 +973,19 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 ) : (
                                   <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
+                                )}
+                                {/* Dueños del rol: el actual es el que se
+                                    consulta solo; los históricos y cualquier
+                                    otro RUT, a un clic y a propósito. */}
+                                {shownCrm.owner_rut_candidates && shownCrm.owner_rut_candidates.length > 0 && (
+                                  <div className="mt-2">
+                                    <DuenosRolPicker
+                                      candidatos={shownCrm.owner_rut_candidates}
+                                      ownerRut={shownCrm.owner_rut}
+                                      busyRut={pidiendoRut}
+                                      onPedirTelefonos={(rut) => pedirTelefonosDeRut(shownCrm.captacion_id, rut)}
+                                    />
+                                  </div>
                                 )}
                                 {shownCrm.relacionados && shownCrm.relacionados.length > 0 && (
                                   <div className="mt-2">

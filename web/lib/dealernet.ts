@@ -663,6 +663,22 @@ export interface DealernetCandidato {
   probabilidad: string | null // Alta/Media/Baja
 }
 
+// El Buscador Múltiple por rol marca cada candidato como propietario "Actual"
+// o "Histórico" (campo PROPIETARIO). Un histórico es un dueño ANTERIOR del
+// predio: no es a quien hay que llamar, y cada consulta de contactabilidad se
+// paga — así que nunca se elige solo, solo a mano.
+function propietarioNorm(c: DealernetCandidato): string {
+  return (c.propietario ?? '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
+export function esPropietarioHistorico(c: DealernetCandidato): boolean {
+  return propietarioNorm(c).startsWith('histor')
+}
+
+export function esPropietarioActual(c: DealernetCandidato): boolean {
+  return propietarioNorm(c).startsWith('actual')
+}
+
 export interface DealernetBuscadorMultipleResult {
   retcode: number | null
   retmsg: string | null
