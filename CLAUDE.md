@@ -27,6 +27,7 @@ Responder siempre en español al usuario.
 - `docs/SII-ENRICHMENT-ROADMAP.md` — current enrichment plan
 - `docs/PLAN-ANUNCIOS-CL.md` — plan del módulo "Anuncios": scraping 24/7, dedup y trazabilidad de corredoras (Portal Inmobiliario, Chile)
 - `scraper/lib/sii-catastro-cl.mjs` — parser for official SII CSV files
+- `docs/SMARTBC-INTEGRACION.md` — integración con el CRM SmartBC: mapeo campo a campo y operación del sincronizador (`scraper/sync-smartbc-cl.mjs`)
 
 ## Environment variables
 
