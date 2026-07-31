@@ -529,7 +529,13 @@ export default function PropiedadesChileClient() {
     fetch(`/api/chile/property-cl?${params.toString()}`)
       .then(r => r.json())
       .then(d => {
-        if (d.success && Array.isArray(d.data)) { setItems(d.data); setTotal(d.total); setTotalPages(d.total_pages); setStats(d.stats ?? null) }
+        if (d.success && Array.isArray(d.data)) {
+          setItems(d.data); setTotal(d.total); setTotalPages(d.total_pages); setStats(d.stats ?? null)
+          // No estaba en la base: se scrapeó en vivo desde el portal (ver
+          // /api/chile/property-cl, bloque `q` sin resultados).
+          if (d.scraped) showToast('Propiedad no encontrada en la base — se trajo en vivo desde el portal')
+          else if (d.scrape_error) showToast(`No se pudo traer la propiedad del portal: ${d.scrape_error}`, false)
+        }
         else { setItems([]); setTotal(0); setTotalPages(1); setStats(null) }
       })
       .catch(() => { setItems([]); setTotal(0) })
