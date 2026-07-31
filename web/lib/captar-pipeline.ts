@@ -34,6 +34,7 @@ import {
   computeRutDv,
   dedupePhones,
   DEFAULT_DEALERNET_PRODUCTS,
+  esPropietarioHistorico,
   type DealernetCandidato,
   type DealernetPhone,
 } from '@/lib/dealernet'
@@ -1053,6 +1054,8 @@ export interface CrmCaptacion {
   owner_rut: string | null
   phones: unknown
   emails: unknown
+  relacionados: unknown
+  owner_rut_candidates: unknown
   stage: string
   dealernet_status: string
   needs_review: boolean
@@ -1066,6 +1069,7 @@ export interface CrmCaptacion {
 export async function findCrmCaptacionByRol(rol: string, siiComunaCode: string): Promise<CrmCaptacion | null> {
   const { rows } = await pool.query(
     `SELECT id AS captacion_id, owner_name, owner_rut, phones, emails, stage,
+            relacionados, owner_rut_candidates,
             dealernet_status, needs_review, source_url, updated_at
      FROM captaciones_cl
      WHERE sii_rol = $1 AND sii_comuna_code = $2
@@ -1418,10 +1422,15 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
       await logDealernetQuery({ kind: 'buscador_multiple', tipbusq: attempt.tipo, args: attempt.args, retcode: res.retcode, success: true, fromCache: !!cached, candidatosN: res.candidatos.length, source: 'captacion' })
       const withRut = res.candidatos.filter((x) => x.rut != null)
       allCandidates = allCandidates.concat(withRut)
+      // Un propietario HISTÓRICO es un dueño ANTERIOR del predio: no es a
+      // quien hay que llamar y su consulta de contactabilidad se paga igual.
+      // Se guarda como candidato (queda a un clic en la ficha) pero nunca se
+      // elige solo — solo el actual, o el que se marque a mano.
+      const elegibles = withRut.filter((x) => !esPropietarioHistorico(x))
       // Con nombre TGR: comparar texto contra el dueño confirmado. Sin
       // nombre: apoyarse en la confianza que la propia DealerNet le pone al
       // candidato (probabilidad/similitud del Buscador Múltiple).
-      const scored = withRut
+      const scored = elegibles
         .map((cand) => ({
           cand,
           sim: c.owner_name
@@ -1448,15 +1457,22 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
     // (owner_rut_candidates) para elegir a mano desde /chile/captacion — nada
     // de lo consultado se descarta aunque no se pudiera auto-confirmar.
     const status = allCandidates.length > 0 ? 'ambiguous' : 'not_found'
+    // Solo históricos = el rol no tiene dueño actual identificable en
+    // DealerNet. Se dice así en vez de "varios candidatos": el equipo tiene
+    // que decidir a quién llamar sabiendo que ya no es el dueño.
+    const soloHistoricos = allCandidates.length > 0 && allCandidates.every(esPropietarioHistorico)
+    const reason = soloHistoricos
+      ? 'DealerNet solo trae propietarios históricos del rol: elegir a mano a quién consultar'
+      : 'Varios RUT candidatos en DealerNet: elegir manualmente'
     const { rows } = await pool.query(
       `UPDATE captaciones_cl SET
          dealernet_status = $2, owner_rut_candidates = $3, dealernet_error = $4,
          dealernet_consulted_at = now(),
          needs_review = CASE WHEN $2 = 'ambiguous' THEN true ELSE needs_review END,
-         review_reason = CASE WHEN $2 = 'ambiguous' THEN 'Varios RUT candidatos en DealerNet: elegir manualmente' ELSE review_reason END,
+         review_reason = CASE WHEN $2 = 'ambiguous' THEN $5 ELSE review_reason END,
          updated_at = now()
        WHERE id = $1 RETURNING *`,
-      [captacionId, status, JSON.stringify(allCandidates.slice(0, 15)), lastError],
+      [captacionId, status, JSON.stringify(allCandidates.slice(0, 15)), lastError, reason],
     )
     return { captacion: rows[0], rut_candidates: allCandidates.slice(0, 15) }
   }

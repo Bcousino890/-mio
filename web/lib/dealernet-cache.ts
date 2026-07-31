@@ -133,6 +133,20 @@ export async function getCachedContactByRut(
     phones: phonesRes.rows,
     addresses: addressesRes.rows,
     emails: emailsRes.rows,
-    relacionados: relacionadosRes.rows,
+    // La tabla guarda rut_num/rut_dv, pero tanto la UI como el pipeline de
+    // captación leen rut/dv: devolver la fila cruda dejaba sin RUT a todos los
+    // relacionados que salían de caché (columna "—" en la ficha, y
+    // `relacionados` de la captación guardado solo con nombre y relación).
+    relacionados: relacionadosRes.rows.map(toRelacionadoJson),
+  }
+}
+
+/** Fila de `dealernet_relacionados_cl` → forma que consumen UI y pipeline. */
+export function toRelacionadoJson(row: any) {
+  return {
+    rut: row.rut_num != null ? Number(row.rut_num) : null,
+    dv: row.rut_dv ?? null,
+    nombre: row.nombre ?? null,
+    relacion: row.relacion ?? null,
   }
 }

@@ -413,20 +413,44 @@ const REL_NOMBRE_ALIASES = ['nombre', 'nombrecompleto', 'razonsocial', 'organiza
 const REL_NOMBRES_ALIASES = ['nombres', 'dspnombres']
 const REL_APELLIDOS_ALIASES = ['apellidos', 'dspapellidos', 'apellido']
 
+// Nombres de contenedor donde vive la tabla "Relacionados" del portal. Se
+// comparan normalizados igual que las keys de `normalizedEntries`.
+const REL_CONTAINER_KEYS = new Set(['relacionados', 'registrosrelacionados', 'relaciones'])
+
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/^@_/, '').replace(/[_\s]/g, '')
+}
+
+// "propietario actual" / "propietario histórico" NO son un vínculo con el
+// titular: marcan quién es (o fue) dueño de un inmueble del informe. Colarlas
+// en la tabla Relacionados es lo que llenaba la ficha del dueño con decenas de
+// desconocidos que no tienen nada que ver con él.
+function esVinculoConTitular(relacion: string): boolean {
+  const norm = relacion.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return !/^propietari[oa]s?\b/.test(norm)
+}
+
 // Filas RUT/NOMBRE/RELACIÓN de la tabla "Relacionados" del portal (Titular,
 // Sociedad, Socio, Cónyuge, Hijo, Empleador, ...). En el XML real vienen
 // incluidas en la propia respuesta de 3410 (Directorio Teléfonos), en
 // <colect><relacionados><d>clasificacion/rut/dv/nombres/apellidos/
 // organizacion/relacion</d>...</relacionados> — además del producto 3421.
-// Se recorre el payload del producto en profundidad y se toma como
-// relacionado cualquier nodo que tenga un campo de relación junto a un RUT
-// o nombre — resistente a cambios de envoltorio/anidación. Los bloques
-// <relacionados> POR TELÉFONO (solo <relacion>, sin RUT ni nombre) no
-// cumplen esa condición, así que no se duplican aquí.
+//
+// Solo se extrae DENTRO de ese contenedor. Antes se recorría el payload
+// entero tomando como relacionado cualquier nodo con un campo de relación
+// junto a un RUT o nombre: el resto de la respuesta trae más bloques con esa
+// misma forma (la titularidad de cada dirección/predio del informe, con
+// "propietario actual"/"propietario histórico"), así que la tabla mezclaba la
+// familia y las sociedades del titular con decenas de dueños de otros
+// inmuebles — el bug de la ficha con 97 "relacionados".
+//
+// Los bloques <relacionados> POR TELÉFONO también entran en el recorrido,
+// pero solo traen <relacion> (sin RUT ni nombre), así que no emiten filas.
 function extractRelacionados(wrapper: unknown, productCode: string): DealernetRelacionado[] {
   const out: DealernetRelacionado[] = []
   const seen = new Set<string>()
 
+  // Emite filas de un nodo que YA se identificó como tabla de relacionados.
   function visit(node: unknown) {
     if (node == null || typeof node !== 'object') return
     if (Array.isArray(node)) {
@@ -444,6 +468,7 @@ function extractRelacionados(wrapper: unknown, productCode: string): DealernetRe
     }
 
     if (relacion && (rutRaw || nombre)) {
+      if (!esVinculoConTitular(relacion)) return
       let rut: number | null = null
       let dv: string | null = null
       if (rutRaw) {
@@ -476,7 +501,27 @@ function extractRelacionados(wrapper: unknown, productCode: string): DealernetRe
     for (const value of Object.values(node as Record<string, unknown>)) visit(value)
   }
 
-  visit(wrapper)
+  // Busca los contenedores <relacionados> en el payload y solo esos se leen
+  // como tabla de relacionados.
+  function findContainers(node: unknown) {
+    if (node == null || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const item of node) findContainers(item)
+      return
+    }
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (REL_CONTAINER_KEYS.has(normalizeKey(key))) visit(value)
+      else findContainers(value)
+    }
+  }
+
+  findContainers(wrapper)
+
+  // 3421 (Registros de Relacionados) ES la tabla: si su payload no trae el
+  // contenedor con ese nombre, se lee entero como antes en vez de devolver
+  // vacío el único producto que se pide justamente para esto.
+  if (out.length === 0 && productCode === DEALERNET_PRODUCTS.REGISTROS_RELACIONADOS) visit(wrapper)
+
   return out
 }
 
@@ -616,6 +661,22 @@ export interface DealernetCandidato {
   propietario: string | null // Histórico/Actual
   similitud: number | null
   probabilidad: string | null // Alta/Media/Baja
+}
+
+// El Buscador Múltiple por rol marca cada candidato como propietario "Actual"
+// o "Histórico" (campo PROPIETARIO). Un histórico es un dueño ANTERIOR del
+// predio: no es a quien hay que llamar, y cada consulta de contactabilidad se
+// paga — así que nunca se elige solo, solo a mano.
+function propietarioNorm(c: DealernetCandidato): string {
+  return (c.propietario ?? '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
+export function esPropietarioHistorico(c: DealernetCandidato): boolean {
+  return propietarioNorm(c).startsWith('histor')
+}
+
+export function esPropietarioActual(c: DealernetCandidato): boolean {
+  return propietarioNorm(c).startsWith('actual')
 }
 
 export interface DealernetBuscadorMultipleResult {

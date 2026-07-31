@@ -107,6 +107,9 @@ const CRM_JSON = `
        'phones', cap.phones,
        'emails', cap.emails,
        'relacionados', cap.relacionados,
+       -- Dueños del rol según el Buscador Múltiple (actual / histórico): es lo
+       -- que deja pedir los teléfonos de un RUT concreto desde la ficha.
+       'owner_rut_candidates', cap.owner_rut_candidates,
        'stage', cap.stage,
        'dealernet_status', cap.dealernet_status,
        'needs_review', cap.needs_review,

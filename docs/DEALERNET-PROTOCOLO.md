@@ -113,6 +113,16 @@ tenemos vía SII/catastro), obtener candidatos a RUT del propietario y luego
 alimentar ese RUT a `queryDealernet` (protocolo general) para traer
 teléfonos/emails/direcciones confirmadas.
 
+⚠️ `<PROPIETARIO>` marca al candidato como **Actual** o **Histórico** (dueño
+anterior del predio). El pipeline de captación solo consulta automáticamente
+al actual: un histórico ya no es a quien hay que llamar y la consulta de
+contactabilidad se paga igual. Los históricos se guardan en
+`captaciones_cl.owner_rut_candidates` y quedan a un clic en la ficha
+(`DuenosRolPicker`), junto con un campo para pedir un RUT cualquiera — el caso
+de la sociedad dueña de la que se quiere consultar a una persona concreta.
+Si el rol SOLO trae históricos, la captación queda `ambiguous`: se elige a
+mano, nunca sola.
+
 Implementado en `web/lib/dealernet.ts` como `queryDealernetBuscadorMultiple`
 y expuesto en `web/app/api/chile/dealernet-buscar/route.ts` +
 `web/components/chile/DuenoLookup.tsx`.
@@ -156,6 +166,17 @@ Puntos clave que salieron de esto:
   el producto 3421 para verla (3421 queda como opción extra por si algún RUT
   no la trae). `extractRelacionados` corre sobre el payload de TODOS los
   productos y deduplica.
+- **Solo cuenta el contenedor `<relacionados>`**: el informe trae otros
+  bloques con la misma forma (rut + nombre + relación) que NO son vínculos
+  del titular — sobre todo la titularidad de cada dirección/predio, con
+  relación `propietario actual` / `propietario histórico`. Cuando
+  `extractRelacionados` recorría el payload entero, esas filas se colaban y
+  la ficha del dueño llegaba a mostrar 97 "relacionados" (rol 03858-00010,
+  Lo Barnechea) mezclando su familia y sus sociedades con decenas de dueños
+  de otros inmuebles. Hoy se lee solo dentro del contenedor y se descarta
+  cualquier relación que empiece por "propietario" (migración 0090 limpió lo
+  ya guardado). Tests: `web/lib/__tests__/dealernet-relacionados.test.ts`
+  (`npm run test:dealernet`).
 - **Relación por teléfono**: anidada y múltiple
   (`<relacionados><relacion>…`), se aplana a "Titular, Sociedad" —
   `extractPhoneRelacion`.
