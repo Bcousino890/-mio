@@ -14,9 +14,9 @@ import { pool } from '@/lib/db'
  * (watchdog-ingest.sh, cada 30 min) la repasa aunque el scrape ya
  * haya terminado.
  *
- * El latido sale de `sii_mapasui_ingest_state_cl` (migración 0089), NO del
+ * El latido sale de `sii_mapasui_ingest_state_cl` (migración 0090), NO del
  * updated_at de los predios. Dos razones:
- *   1. Desde 0089 la ingesta es incremental: si no hay líneas nuevas no se
+ *   1. Desde 0090 la ingesta es incremental: si no hay líneas nuevas no se
  *      reescribe ninguna fila, así que updated_at se quedaría congelado y el
  *      panel gritaría "estancado" con el pipeline perfectamente sano.
  *   2. Al revés, antes mentía en el otro sentido: el cron llevaba días
@@ -95,7 +95,7 @@ export async function GET() {
       `),
     ])
 
-    // Estado por archivo (0089). Tolerante a que la migración aún no esté
+    // Estado por archivo (0090). Tolerante a que la migración aún no esté
     // aplicada en este entorno: el panel sigue funcionando con el latido viejo.
     const archivosRes = await pool
       .query(`

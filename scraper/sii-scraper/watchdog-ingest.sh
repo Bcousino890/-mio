@@ -111,7 +111,7 @@ fi
 echo "▶ Ingestando sii-scraper/output/predios/ en sii_mapasui_predios_cl..."
 # flock -n: run-sii-mapasui.sh corre su propia ingesta incremental mientras
 # scrapea, así que esta vuelta del cron puede caer justo encima. Con el
-# checkpoint por bytes de la migración 0089 saltarse una vuelta no pierde nada
+# checkpoint por bytes de la migración 0090 saltarse una vuelta no pierde nada
 # — la siguiente recoge lo que falte — y evita dos ingestas peleando por la
 # misma tabla.
 flock -n /tmp/casafari-ingest-sii-mapasui.lock \

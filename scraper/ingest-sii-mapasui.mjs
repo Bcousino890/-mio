@@ -11,7 +11,7 @@
 // La ingesta es INCREMENTAL en dos niveles, uno barato y otro fino:
 //   1. Atajo por mtime (solo --dir): si el .jsonl no cambió desde la última
 //      corrida, ni se abre la BD. Cubre la comuna ya terminada.
-//   2. Checkpoint por bytes en `sii_mapasui_ingest_state_cl` (migración 0089):
+//   2. Checkpoint por bytes en `sii_mapasui_ingest_state_cl` (migración 0090):
 //      cuando el archivo SÍ creció, se leen solo los bytes nuevos en vez del
 //      archivo entero. Esto es lo que hace barata la comuna en curso, que es
 //      justo la que el atajo por mtime nunca puede saltarse.

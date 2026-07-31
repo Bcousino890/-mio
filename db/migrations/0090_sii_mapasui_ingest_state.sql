@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0089 · Estado de la ingesta de predios mapasui (checkpoint por archivo)
+-- 0090 · Estado de la ingesta de predios mapasui (checkpoint por archivo)
 -- ─────────────────────────────────────────────────────────────────────────────
 -- El cron de respaldo (ingest-sii-mapasui-now.yml, cada 30 min) y la ingesta
 -- incremental de run-sii-mapasui.sh re-leían ENTERO cada

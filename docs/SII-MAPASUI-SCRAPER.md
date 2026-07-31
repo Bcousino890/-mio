@@ -70,7 +70,7 @@ El objetivo operativo es **scrapear sin pausas y sin caerse**. Tres piezas:
    La ingesta que ese watchdog dispara es **incremental en dos niveles**: si el
    `.jsonl` no cambió desde la última corrida ni se abre la BD (marcador
    `.mtime`), y si sí creció se leen solo los bytes nuevos desde el checkpoint
-   de `sii_mapasui_ingest_state_cl` (migración 0089) en lotes de 500 filas. Esto
+   de `sii_mapasui_ingest_state_cl` (migración 0090) en lotes de 500 filas. Esto
    último es lo que hace barata la comuna **en curso**, que es justo la que el
    atajo por mtime nunca puede saltarse: releerla entera fila a fila es lo que
    reventaba el túnel SSH del workflow con «Broken pipe» a los 5 minutos.

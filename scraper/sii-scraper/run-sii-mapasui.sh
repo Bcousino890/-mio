@@ -216,7 +216,7 @@ fi
 # (watchdog-ingest.sh, en el cron del VPS): sin él, dos ingestas podían
 # solaparse sobre la misma tabla. Acá
 # es -n (si el cron ya está ingestando, esta vuelta se salta: la siguiente
-# recoge igual lo que falte gracias al checkpoint de la migración 0089).
+# recoge igual lo que falte gracias al checkpoint de la migración 0090).
 SII_INGEST_INTERVAL_SEC="${SII_INGEST_INTERVAL_SEC:-600}"
 INGEST_LOCK="/tmp/casafari-ingest-sii-mapasui.lock"
 (
