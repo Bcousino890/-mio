@@ -214,18 +214,27 @@ function parseDetailFields($) {
   })
 
   // Maquetado de "meta" (keyproperties.com): no hay pares etiqueta/valor sino
-  // una tira de <span> donde el ICONO dice qué es el número.
+  // una tira de <span> donde el ICONO dice qué es el número y el texto qué
+  // superficie es.
   //   <span><i class='fa fa-object-group'></i>Cons. 183 M²</span>
+  //   <span><i class='fa fa-object-group'></i>Útil 34 M²</span>
   //   <span><i class='fa fa-bed'></i> 3</span>
-  //   <span><i class='fa fa-bath'></i> 3 Baño/s</span>
+  // La superficie construida se escribe "Cons." en unas fichas y "Útil" en
+  // otras del mismo dominio. "Terraza" NO es superficie construida y va a
+  // características, no a los metros del inmueble.
   $('.property_meta span').each((_, el) => {
     const $s = $(el)
     const cls = $s.find('i').attr('class') || ''
     const text = clean($s.text())
     if (/fa-bed/.test(cls)) put('dormitorios', text)
     else if (/fa-bath/.test(cls)) put('baños', text)
-    else if (/^cons/i.test(text)) put('m2 constr.', text.replace(/^cons\.?\s*/i, ''))
-    else if (/^terreno/i.test(text)) put('m2 terreno', text.replace(/^terreno\s*/i, ''))
+    else if (/^(?:cons|constr\w*|[uú]til|edificad\w*|interior)\.?\s/i.test(text)) {
+      put('m2 constr.', text.replace(/^\S+\s*/, ''))
+    } else if (/^(?:terreno|total)\s/i.test(text)) {
+      put('m2 terreno', text.replace(/^\S+\s*/, ''))
+    } else if (/^terraza\s/i.test(text)) {
+      put('terraza', text.replace(/^\S+\s*/, ''))
+    }
   })
 
   // Precio y operación de esa misma plantilla, que los saca del bloque de
@@ -239,7 +248,23 @@ function parseDetailFields($) {
   const $estado = $('.estadoAV').first()
   const precioEAV = clean($estado.find('.precioEAV').first().text())
   const estadoEAV = clean($estado.find('.spanEAV').first().text())
-  if (precioEAV && estadoEAV) put(estadoEAV, precioEAV)
+  if (precioEAV) {
+    // Ficha publicada en las DOS operaciones a la vez: el estado dice "Venta y
+    // Arriendo" y el precio mete los dos en un campo, "V: UF 2.600 | A: $
+    // 500.000". Sin separarlos, la etiqueta quedaba como "venta y arriendo" —
+    // que no casa con ninguna de las que se buscan— y la ficha se guardaba sin
+    // precio ninguno.
+    const dual = precioEAV.match(/\bv\s*:\s*(.+?)\s*\|\s*a\s*:\s*(.+)$/i)
+    if (dual) {
+      put('venta', dual[1])
+      put('arriendo', dual[2])
+    } else if (estadoEAV) {
+      // "Venta y Arriendo" sin precios separados → se indexa como venta, que es
+      // la operación con la que se capta (mismo criterio que parseOperation).
+      const t = estadoEAV.toLowerCase()
+      put(/venta/.test(t) ? 'venta' : /arriend/.test(t) ? 'arriendo' : estadoEAV, precioEAV)
+    }
+  }
   // El badge del código de esa misma plantilla, que no tiene bloque "Detalles".
   const codBadge = clean($('.cont__dirWeb .spanEAV').first().text())
   if (/cod/i.test(codBadge)) put('código', codBadge.replace(/^\s*cod\.?\s*:?\s*/i, ''))
@@ -247,11 +272,31 @@ function parseDetailFields($) {
   return fields
 }
 
-/** Primer valor no vacío entre varias etiquetas equivalentes. */
+/**
+ * Primer valor no vacío entre varias etiquetas equivalentes, EN ORDEN. Se usa
+ * donde el orden importa (el precio de venta manda sobre el de arriendo).
+ */
 function pick(fields, ...labels) {
   for (const l of labels) {
     const v = fields.get(l)
     if (v) return v
+  }
+  return ''
+}
+
+/**
+ * Primer valor cuya ETIQUETA case un patrón.
+ *
+ * Enumerar etiquetas exactas no aguanta: Convecta las escribe distinto en cada
+ * instalación y a veces dentro del mismo dominio. Solo para la superficie
+ * construida se han visto "M2 Constr.", "Sup. útil" y "Sup. construida", y la
+ * del terreno como "M2 Terreno", "Sup. total" y "Sup. terreno". Con una lista
+ * cerrada, cada variante nueva sale como null en silencio — una casa de 625 m²
+ * guardada sin metros. Con el patrón, las variantes caen solas.
+ */
+function pickMatch(fields, pattern) {
+  for (const [label, value] of fields) {
+    if (pattern.test(label) && value) return value
   }
   return ''
 }
@@ -372,8 +417,7 @@ export function parseDetail(html, { url = '', domain = '', seller_reference = nu
   // Nivel 1.5 compara "12.828" contra "12828" y no casa nunca.
   const refFromUrl =
     String(url).match(/[?&]i=(\d{2,9})/)?.[1] ?? String(url).match(/\/(\d{2,9})(?:[?#]|$)/)?.[1] ?? null
-  const ref =
-    clean(pick(fields, 'código', 'codigo', 'cod.', 'cod')).replace(/\D/g, '') || seller_reference || refFromUrl
+  const ref = clean(pickMatch(fields, /^c[oó]d/)).replace(/\D/g, '') || seller_reference || refFromUrl
   if (!ref) return null
 
   // El precio vive bajo "Precio" (plantilla de lista), bajo la fila de su
@@ -397,12 +441,14 @@ export function parseDetail(html, { url = '', domain = '', seller_reference = nu
   // misma celda (tabla: "UF 9,50 $ 388.025").
   const priceClp = esPorM2 ? null : (parseClp(pick(fields, 'precio#2')) ?? parseClp(precioRaw))
 
-  const bedrooms = parseSmallInt(pick(fields, 'dormitorios', 'dormitorio'))
-  const bathrooms = parseSmallInt(pick(fields, 'baños', 'banos', 'baño', 'bano'))
-  const builtM2 = parseM2(
-    pick(fields, 'm2 constr.', 'm2 constr', 'm2 construidos', 'sup. útil', 'sup. util', 'sup útil')
-  )
-  const landM2 = parseM2(pick(fields, 'm2 terreno', 'sup. total', 'sup total'))
+  const bedrooms = parseSmallInt(pickMatch(fields, /^dormitorio/))
+  const bathrooms = parseSmallInt(pickMatch(fields, /^ba[ñn]o/))
+  // El patrón de terreno se comprueba ANTES que el de construida en su propia
+  // llamada, pero además el de construida excluye "terreno" y "total"
+  // explícitamente: "Sup. terreno" empieza por "sup." igual que "Sup. útil", y
+  // sin excluirlo la superficie del terreno se guardaría como la construida.
+  const builtM2 = parseM2(pickMatch(fields, /^(?:m2\s*constr|sup\.?\s*(?:[uú]til|construida|interior|edificada))/))
+  const landM2 = parseM2(pickMatch(fields, /^(?:m2\s*terreno|sup\.?\s*(?:total|terreno))/))
 
   // Fotos a resolución completa: el <a data-fancybox> apunta al original y el
   // <img> del carrusel a la versión escalada. Se prefiere el enlace, y solo se
@@ -417,20 +463,27 @@ export function parseDetail(html, { url = '', domain = '', seller_reference = nu
   photoUrls.push($('meta[property="og:image"]').attr('content'))
   const photos = cleanPhotos(photoUrls.filter(Boolean))
 
+  // Las características van en un <ul> que según la plantilla lleva clase
+  // (.list-features, .caracteristicas-add) o no lleva ninguna y solo se
+  // distingue por el <article class='property-features'> que lo envuelve.
   const features = []
-  $('.detail-features .list-features li, ul.list-features li, ul.caracteristicas-add li').each((_, el) => {
-    const f = clean($(el).text())
-    if (f) features.push(f)
-  })
-  for (const [etiqueta, ...labels] of [
-    ['Gastos comunes', 'gastos comunes', 'g. comunes'],
-    ['Contribuciones', 'contribuciones'],
-    ['Estacionamientos', 'estac. cubiertos', 'estacionamientos'],
+  $('.detail-features .list-features li, ul.list-features li, ul.caracteristicas-add li, .property-features ul li')
+    .each((_, el) => {
+      const f = clean($(el).text())
+      if (f && !features.includes(f)) features.push(f)
+    })
+  for (const [etiqueta, patron] of [
+    ['Gastos comunes', /^g(?:astos)?\.?\s*comunes/],
+    ['Contribuciones', /^contribuciones/],
+    ['Estacionamientos', /^estac/],
   ]) {
-    const v = pick(fields, ...labels)
+    const v = pickMatch(fields, patron)
     if (v) features.push(`${etiqueta}: ${v}`)
   }
   if (landM2) features.push(`Terreno: ${landM2} m²`)
+  // "Terraza 6 M2" en la plantilla meta, "M2 Terraza: 31 M2" en la de lista.
+  const terrazaM2 = parseM2(pickMatch(fields, /^(?:m2\s*)?terraza/))
+  if (terrazaM2) features.push(`Terraza: ${terrazaM2} m²`)
   if (esPorM2) {
     features.push(`Precio unitario: ${precioRaw}`)
     const unitario = parseUnitPrice(precioRaw)

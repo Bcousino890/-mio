@@ -235,6 +235,71 @@ test('Convecta.parseDetail (plantilla de tabla) extrae la ficha completa', () =>
   assert.equal(l.photos.length, 2)
 })
 
+// magnoliaproperty.cl/8006 — MISMA plantilla de tabla que la 8812, pero con
+// otras etiquetas de superficie ("Sup. construida"/"Sup. terreno" en vez de
+// "Sup. útil"/"Sup. total") y las características en un <ul> SIN clase, dentro
+// de un <article class='property-features'>. Con listas cerradas de etiquetas y
+// selectores por clase, esta casa de 625 m² se guardaba sin metros y sin
+// ninguna de sus nueve características.
+const CONVECTA_FICHA_TABLA_VARIANTE = `<!doctype html><html><head>
+  <meta property="og:title" content="Venta - Casa -  UF 78.000" />
+  </head><body>
+  <h2 class='property-title'> Casa en Vitacura </h2>
+  <address class='property-address'>Santa María de Manquehue</address>
+  <a href='#' class='gallery-item'><img src='https://demoazimg.prop360.cl/magnolia/img/propiedades/8006_a.jpg?sv=1'></a>
+  <article class='property-article property-detail'><div class='article-body'>
+  <table class='table detail-table'>
+    <tr><td class='detail-title'>Código</td><td>8.006</td><td class='detail-title'>Tipo</td><td>Casa</td></tr>
+    <tr><td class='detail-title'> Venta</td><td>  UF 78.000<small> $ 3.185.893.620</small></td><td class='detail-title'> Arriendo</td><td>  - </td></tr>
+    <tr><td class='detail-title'>  Dormitorio</td><td> 7</td><td class='detail-title'>  Baño</td><td> 6</td></tr>
+    <tr><td class='detail-title'> Sup. construida</td><td> 625 m<sup>2</sup></td><td class='detail-title'> Sup. terreno</td><td> 2.959 m<sup>2</sup></td></tr>
+    <tr><td class='detail-title'> G. comunes</td><td> -</td><td class='detail-title'> Contribuciones</td><td> -</td></tr>
+  </table></div></article>
+  <article class='property-article property-features'><div class='article-body'><ul>
+    <li> Piscina</li><li> Family Room</li><li> Bodega</li>
+  </ul></div></article>
+  <a onclick="javaScript:verMapaPropiedad('m','https://www.google.com/maps/embed/v1/place?key=A&amp;q=-33.372988158051996,-70.56847447309846');"></a>
+  </body></html>`
+
+test('Convecta: las etiquetas de superficie varían entre fichas del MISMO dominio', () => {
+  const l = convecta.parseDetail(CONVECTA_FICHA_TABLA_VARIANTE, {
+    url: 'https://www.magnoliaproperty.cl/8006?orde=2',
+    domain: 'magnoliaproperty.cl',
+  })
+  assert.ok(l)
+  assert.equal(l.seller_reference, '8006')
+  assert.equal(l.price_uf, 78000)
+  assert.equal(l.price, 3185893620)
+  assert.equal(l.bedrooms, 7)
+  assert.equal(l.bathrooms, 6)
+  // "Sup. construida" — la 8812 del mismo dominio lo llama "Sup. útil".
+  assert.equal(l.square_meters, 625)
+  // "Sup. terreno" — la 8812 lo llama "Sup. total".
+  assert.ok(l.features.includes('Terreno: 2959 m²'))
+  assert.equal(l.comuna, 'Vitacura')
+})
+
+test('Convecta: "Sup. terreno" no se confunde con la superficie construida', () => {
+  // Las dos etiquetas empiezan por "Sup.": sin excluir terreno/total del patrón
+  // de construida, esta casa saldría con 2.959 m² edificados.
+  const l = convecta.parseDetail(CONVECTA_FICHA_TABLA_VARIANTE, {
+    url: 'https://www.magnoliaproperty.cl/8006',
+    domain: 'magnoliaproperty.cl',
+  })
+  assert.equal(l.square_meters, 625)
+  assert.notEqual(l.square_meters, 2959)
+})
+
+test('Convecta: características en un <ul> sin clase también se recogen', () => {
+  const l = convecta.parseDetail(CONVECTA_FICHA_TABLA_VARIANTE, {
+    url: 'https://www.magnoliaproperty.cl/8006',
+    domain: 'magnoliaproperty.cl',
+  })
+  assert.ok(l.features.includes('Piscina'))
+  assert.ok(l.features.includes('Family Room'))
+  assert.ok(l.features.includes('Bodega'))
+})
+
 test('Convecta.parseDetail: "-" y "m2" no se leen como dato', () => {
   const l = convecta.parseDetail(CONVECTA_FICHA_TABLA, {
     url: 'https://www.magnoliaproperty.cl/fichaPropiedad.aspx?i=8812',
@@ -295,6 +360,53 @@ test('Convecta: la operación NO se lee del badge del código', () => {
     domain: 'keyproperties.com',
   })
   assert.equal(l.price, 280000000)
+})
+
+// keyproperties.com/14284 — la misma plantilla "meta", pero publicada en VENTA
+// Y ARRIENDO a la vez: el estado dice "Venta y Arriendo" y los dos precios van
+// en un solo campo. Además la superficie construida aquí se llama "Útil" (no
+// "Cons.") y hay una "Terraza" que NO son metros del inmueble.
+const CONVECTA_FICHA_DUAL = `<!doctype html><html><head>
+  <meta property="og:title" content="Departamento en venta y arriendo en Temuco" />
+  </head><body>
+  <div class='cont__dirWeb'><span class='spanEAV'>COD: 14.284</span></div>
+  <div class='estadoAV'>
+    <span class='spanEAV'>Venta  y Arriendo </span>
+    <span class='precioEAV'>V: UF 2.600 | A: $ 500.000</span>
+  </div>
+  <div class='info__ficha'><p class='p-font-15 bottom20'>Cómodo e iluminado departamento.</p>
+    <div class='property_meta'>
+      <span><i class='fa fa-object-group'></i>Útil 34 M<sup>2</sup></span>
+      <span><i class='fa fa-object-group'></i>Terraza 6 M<sup>2</sup></span>
+      <span><i class='fa fa-bed'></i> 1</span>
+      <span><i class='fa fa-bath'></i> 1 Baño/s</span>
+    </div></div>
+  </body></html>`
+
+test('Convecta: ficha en venta Y arriendo — se separan los dos precios', () => {
+  const l = convecta.parseDetail(CONVECTA_FICHA_DUAL, {
+    url: 'https://keyproperties.com/fichaPropiedad.aspx?i=14284',
+    domain: 'keyproperties.com',
+  })
+  assert.ok(l)
+  assert.equal(l.seller_reference, '14284')
+  // Manda venta, que es la operación con la que se capta.
+  assert.equal(l.operation, 'sale')
+  // Sin separar "V: … | A: …" la etiqueta quedaba como "venta y arriendo", no
+  // casaba con ninguna de las buscadas y la ficha se guardaba SIN precio.
+  assert.equal(l.price_uf, 2600)
+  assert.equal(l.currency, 'UF')
+})
+
+test('Convecta: "Útil" es superficie construida y "Terraza" no lo es', () => {
+  const l = convecta.parseDetail(CONVECTA_FICHA_DUAL, {
+    url: 'https://keyproperties.com/fichaPropiedad.aspx?i=14284',
+    domain: 'keyproperties.com',
+  })
+  assert.equal(l.square_meters, 34)
+  // Los 6 m² de terraza no pueden sumarse ni sustituir a los del inmueble.
+  assert.notEqual(l.square_meters, 6)
+  assert.ok(l.features.includes('Terraza: 6 m²'))
 })
 
 test('Convecta: un precio POR M2 no se guarda como precio total', () => {

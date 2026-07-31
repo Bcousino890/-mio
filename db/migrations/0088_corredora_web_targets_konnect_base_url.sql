@@ -86,7 +86,13 @@ UPDATE corredora_web_targets_cl
        updated_at = now()
  WHERE lower(domain) = 'cympropiedades.cl';
 
+-- bpropiedades.cl responde 200 y su plataforma sigue siendo reconocible, pero su
+-- buscador devuelve CERO fichas en venta, arriendo y agencias — hasta el
+-- carrusel de destacadas viene con "property.asp?idPro=" vacío. No hay nada que
+-- barrer ahí ahora mismo; se deja registrada y anotada para no volver a
+-- investigar el "fallo" del adaptador la próxima vez que alguien lo mire.
 UPDATE corredora_web_targets_cl
-   SET base_url = 'https://www.bpropiedades.cl',
+   SET base_url = COALESCE(base_url, 'https://www.bpropiedades.cl'),
+       notes = 'Ofinet. Verificado julio 2026: el sitio responde pero NO publica inventario (0 fichas en venta/arriendo/agencias).',
        updated_at = now()
- WHERE lower(domain) = 'bpropiedades.cl' AND base_url IS NULL;
+ WHERE lower(domain) = 'bpropiedades.cl';

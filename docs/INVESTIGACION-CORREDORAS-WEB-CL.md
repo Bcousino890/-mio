@@ -153,6 +153,30 @@ los tres es `/fichaPropiedad.aspx?i=<código>`, así que es la canónica.
 En la de keyproperties el número no lleva etiqueta: lo identifica el **icono**
 (`fa-bed` dormitorios, `fa-bath` baños, `fa-object-group` superficie).
 
+**2.5 bis · Las etiquetas varían dentro del MISMO dominio.** No basta con una
+plantilla por dominio: magnoliaproperty.cl escribe la superficie construida como
+`Sup. útil` en unas fichas y `Sup. construida` en otras; keyproperties.com como
+`Cons.` o como `Útil`. Lo mismo el terreno (`M2 Terreno` / `Sup. total` /
+`Sup. terreno`). Con listas cerradas de etiquetas, cada variante sale `null` en
+silencio — una casa de 625 m² guardada sin metros. Se emparejan por patrón.
+
+Ojo con dos que **no** son la superficie del inmueble y estaban a un carácter de
+colarse: `Sup. terreno` empieza igual que `Sup. útil`, y `Terraza 6 M²` /
+`M2 Terraza: 31 M2` es un espacio exterior. Ambas se excluyen explícitamente y
+la terraza se guarda aparte, en características.
+
+**2.5 ter · Fichas publicadas en venta Y arriendo a la vez.** El estado dice
+`Venta y Arriendo` y los dos precios van en un solo campo:
+
+```
+<span class='spanEAV'>Venta  y Arriendo </span>
+<span class='precioEAV'>V: UF 2.600 | A: $ 500.000</span>
+```
+
+Hay que separarlos; si no, la etiqueta queda como "venta y arriendo", no casa
+con ninguna de las que se buscan y la ficha se guarda **sin precio**. Manda el de
+venta, que es la operación con la que se capta.
+
 **2.6 · Lo que da la ficha** (elbarrio/12828, verificado):
 
 precio en UF **y en pesos** (UF 28.300 / $1.155.907.557), código, m² construidos
@@ -324,6 +348,38 @@ Los tests también estaban construidos sobre fixturas inventadas y pasaban en
 verde mientras los parsers devolvían todo lo anterior. Los de ahora usan
 recortes literales del markup real de cada sitio.
 
-Cobertura: **51 tests** en los tres módulos, más una prueba de humo contra los
-cinco sitios en vivo (5/5 fichas parseadas en cada uno, con código, precio,
-comuna, fotos y coordenadas donde el sitio las publica).
+Cobertura: **180 tests** en la suite del scraper, más una auditoría contra los
+sitios en vivo — **96 fichas reales** (24 por dominio, muestreadas de páginas
+repartidas por todo el listado: 1, 3, 6, 11 y 17).
+
+Resultado de la auditoría: **96/96 parseadas**, sin un solo hueco de código,
+precio, comuna, fotos, tipo ni operación. Los únicos campos vacíos son 6 fichas
+sin superficie **porque el sitio no la publica** (verificado una a una: la tabla
+dice literalmente `Sup. útil: - m`, o directamente no trae el campo).
+
+Muestrear poco esconde fallos: con 6 fichas todo parecía correcto. Las 96
+destaparon tres defectos reales —etiquetas de superficie no cubiertas, fichas
+duales sin precio y `Terraza` confundible con la superficie construida— que ya
+están corregidos y con test de regresión.
+
+---
+
+## 8. Pendiente / limitaciones conocidas
+
+- **`bpropiedades.cl` no publica inventario.** Es una de las semillas de la
+  migración 0069 y responde 200 con la plataforma Ofinet reconocible, pero su
+  buscador devuelve **cero fichas** en venta, arriendo y agencias, y hasta su
+  carrusel de destacadas viene con `property.asp?idPro=` vacío. No es un fallo
+  del parser: no hay nada que barrer. Queda registrada y desactivada.
+- **Ofinet no da coordenadas.** Sus fichas resuelven el mapa por dirección, así
+  que el cruce con catastro para cympropiedades.cl necesita geocodificar.
+- **El pipeline no se ha ejercitado contra una base real.** Los parsers y el
+  crawler están verificados contra los sitios en vivo, y el upsert contra un
+  cliente Postgres en memoria; falta una corrida con `DATABASE_URL` de verdad
+  antes de activar ningún target.
+- **`maxDetails` está en 400 por corrida.** La primera pasada de los sitios
+  grandes (magnolia 1.116, cym 759) necesitará varias corridas o subirlo
+  puntualmente.
+- **El total declarado se suma entre operaciones**, y una ficha publicada en
+  venta y arriendo cuenta en las dos. Sirve para detectar que el barrido se
+  quedó corto, no como cifra exacta del inventario.
