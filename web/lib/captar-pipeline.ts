@@ -786,7 +786,8 @@ export async function matchRol(captacionId: string): Promise<MatchStageResult> {
   )
 
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
-  return { captacion: rows[0] as CaptacionRow, decision, candidates: scored }
+  const captacion = await reuseSiblingCaptacionData(rows[0] as CaptacionRow)
+  return { captacion, decision, candidates: scored }
 }
 
 /**
@@ -877,7 +878,8 @@ export async function verifyVisual(captacionId: string, selectedPhotoUrls?: stri
     ],
   )
   if (best) await syncListingIdentity(rows[0] as CaptacionRow)
-  return { captacion: rows[0] as CaptacionRow, decision, candidates: rescored, visual_usage: usage }
+  const captacion = await reuseSiblingCaptacionData(rows[0] as CaptacionRow)
+  return { captacion, decision, candidates: rescored, visual_usage: usage }
 }
 
 /**
@@ -963,7 +965,7 @@ export async function selectRolManual(
     [captacionId, siiRol, direccion, score, signals ? JSON.stringify(signals) : null, comuna, method],
   )
   await syncListingIdentity(rows[0] as CaptacionRow)
-  return rows[0] as CaptacionRow
+  return reuseSiblingCaptacionData(rows[0] as CaptacionRow)
 }
 
 // ─── Rol SII a partir de un punto (pin corregido a mano en la ficha) ────────
@@ -1092,7 +1094,7 @@ export async function setRolFromPin(captacionId: string, rol: string, siiComunaC
   )
   if (!rows[0]) throw new Error('Captación no encontrada')
   await syncListingIdentity(rows[0] as CaptacionRow)
-  return rows[0] as CaptacionRow
+  return reuseSiblingCaptacionData(rows[0] as CaptacionRow)
 }
 
 /**
@@ -1173,6 +1175,50 @@ async function syncListingIdentity(c: CaptacionRow): Promise<void> {
     // 'exact'/'high' pueden no estar en el CHECK de location_confidence en
     // esquemas antiguos — el pipeline no debe morir por eso.
   }
+}
+
+/**
+ * Si esta captación acaba de confirmar un rol SII que OTRA captación ya
+ * resolvió (mismo predio, publicado por otra corredora o capturado desde otra
+ * URL — el dedup de anuncios no evita que cada aviso genere su propia
+ * captación), copia dueño + teléfonos de esa hermana en vez de dejar que TGR y
+ * DealerNet se vuelvan a consultar desde cero para el mismo RUT: son consultas
+ * pagas y el certificado/los teléfonos ya están.
+ *
+ * No hace daño llamarla siempre que se fija un rol: si esta captación ya tiene
+ * dueño, o no hay ninguna hermana con datos, no toca nada.
+ */
+async function reuseSiblingCaptacionData(c: CaptacionRow): Promise<CaptacionRow> {
+  if (c.owner_name || !c.sii_rol || !c.sii_comuna_code) return c
+  const { rows: siblings } = await pool.query(
+    `SELECT * FROM captaciones_cl
+      WHERE sii_rol = $1 AND sii_comuna_code = $2 AND id != $3 AND owner_name IS NOT NULL
+      ORDER BY (phones IS NOT NULL AND jsonb_array_length(phones) > 0) DESC, updated_at DESC
+      LIMIT 1`,
+    [c.sii_rol, c.sii_comuna_code, c.id],
+  )
+  const sibling = siblings[0] as CaptacionRow | undefined
+  if (!sibling) return c
+
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET
+       owner_name = $2, owner_rut = $3, owner_rut_candidates = $4,
+       phones = $5, emails = $6,
+       tgr_status = $7, tgr_direccion = $8, tgr_consulted_at = $9, tgr_error = NULL,
+       dealernet_status = $10, dealernet_consulted_at = $11, dealernet_error = NULL,
+       match_verified = $12,
+       stage = CASE WHEN $10 = 'ok' THEN 'contact_found' ELSE stage END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [
+      c.id, sibling.owner_name, sibling.owner_rut, JSON.stringify(sibling.owner_rut_candidates ?? null),
+      JSON.stringify(sibling.phones ?? null), JSON.stringify(sibling.emails ?? null),
+      sibling.tgr_status, sibling.tgr_direccion, sibling.tgr_consulted_at,
+      sibling.dealernet_status, sibling.dealernet_consulted_at,
+      sibling.match_verified,
+    ],
+  )
+  return (rows[0] as CaptacionRow) ?? c
 }
 
 // ─── Etapa 3: dueño vía TGR ──────────────────────────────────────────────────
