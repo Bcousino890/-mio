@@ -42,7 +42,7 @@
 import PgBoss from 'pg-boss'
 import pg from 'pg'
 import { fetchHtmlResilient } from './lib/fetch.mjs'
-import { parseDetailPage } from './lib/parse-portalinmobiliario.mjs'
+import { parseDetailPage, CURRENT_PARSER_VERSION } from './lib/parse-portalinmobiliario.mjs'
 import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
 import { createHetznerS3Client } from './lib/hetzner-s3.mjs'
@@ -199,9 +199,9 @@ export async function handleDedupClusterJob(dbClient, deps = {}) {
     // refrescan lo ya guardado: si no, el catálogo no crece hasta drenar horas
     // de cola vieja.
     priorizar: await prioritizeJobs(dbClient),
-    // Re-baja por tandas las fichas con datos viejos (5 fotos del blob, nombre
-    // de corredora genérico) para que el parser actual las complete.
-    refrescar: await reenqueueStale(dbClient),
+    // Re-baja por tandas las fichas incompletas o leídas con un parser viejo
+    // (ver la cabecera de reenqueueStaleListingsCl para el orden de prioridad).
+    refrescar: await reenqueueStale(dbClient, { currentParserVersion: CURRENT_PARSER_VERSION }),
   }
   console.log(`[dedup-cluster] ${JSON.stringify(res)}`)
   return res
