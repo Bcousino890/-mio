@@ -490,6 +490,7 @@ export interface CaptacionRow {
   owner_rut_candidates: unknown
   phones: unknown
   emails: unknown
+  relacionados: unknown
   dealernet_consulted_at: string | null
   dealernet_error: string | null
   stage: string
@@ -1082,15 +1083,26 @@ export async function findCrmCaptacionByRol(rol: string, siiComunaCode: string):
  * arrastrado a mano y cruzado contra el polígono catastral es evidencia más
  * directa que cualquier candidato de esa lista).
  */
-export async function setRolFromPin(captacionId: string, rol: string, siiComunaCode: string | null): Promise<CaptacionRow> {
+export async function setRolFromPin(
+  captacionId: string,
+  rol: string,
+  siiComunaCode: string | null,
+  // Dirección exacta que ya trajo resolveRolAtPoint (SII de la parcela bajo el
+  // pin) — sin esto la captación quedaba con sii_rol confirmado pero
+  // sii_direccion vacío para siempre, porque este es el ÚNICO camino de
+  // confirmación de rol que no la fijaba (matchRol/verifyVisual/selectRolManual
+  // sí la guardan).
+  direccion: string | null = null,
+): Promise<CaptacionRow> {
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
        sii_rol = $2,
+       sii_direccion = COALESCE($4, sii_direccion),
        sii_comuna_code = COALESCE($3, sii_comuna_code),
        match_confidence = 'manual', match_method = 'manual_pin', match_score = 1,
        stage = 'matched', needs_review = false, review_reason = NULL, updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [captacionId, rol, siiComunaCode],
+    [captacionId, rol, siiComunaCode, direccion],
   )
   if (!rows[0]) throw new Error('Captación no encontrada')
   await syncListingIdentity(rows[0] as CaptacionRow)
@@ -1203,7 +1215,7 @@ async function reuseSiblingCaptacionData(c: CaptacionRow): Promise<CaptacionRow>
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
        owner_name = $2, owner_rut = $3, owner_rut_candidates = $4,
-       phones = $5, emails = $6,
+       phones = $5, emails = $6, relacionados = $13,
        tgr_status = $7, tgr_direccion = $8, tgr_consulted_at = $9, tgr_error = NULL,
        dealernet_status = $10, dealernet_consulted_at = $11, dealernet_error = NULL,
        match_verified = $12,
@@ -1215,7 +1227,7 @@ async function reuseSiblingCaptacionData(c: CaptacionRow): Promise<CaptacionRow>
       JSON.stringify(sibling.phones ?? null), JSON.stringify(sibling.emails ?? null),
       sibling.tgr_status, sibling.tgr_direccion, sibling.tgr_consulted_at,
       sibling.dealernet_status, sibling.dealernet_consulted_at,
-      sibling.match_verified,
+      sibling.match_verified, JSON.stringify(sibling.relacionados ?? null),
     ],
   )
   return (rows[0] as CaptacionRow) ?? c
@@ -1470,6 +1482,7 @@ export async function finishDealernetByRut(
 
   let phones: DealernetPhone[]
   let emails: { email: string; categoria: string; product_code: string }[]
+  let relacionados: { rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }[]
   // Nombre del titular según la propia consulta DealerNet — respaldo de
   // owner_name cuando TGR no corrió.
   let titularName: string | null = null
@@ -1477,6 +1490,7 @@ export async function finishDealernetByRut(
   if (cached) {
     phones = cached.phones
     emails = cached.emails as any
+    relacionados = cached.relacionados
     titularName = (cached.contact as any).nombre_titular ?? null
     await logDealernetQuery({ kind: 'contactos_rut', rutNum, rutDv, productCodes: DEFAULT_DEALERNET_PRODUCTS, retcode: cached.contact.retcode, success: true, fromCache: true, candidatosN: cached.phones.length, source: 'captacion' })
     if (c.sii_rol && c.sii_comuna_code && (!cached.contact.sii_rol || !cached.contact.sii_comuna_code)) {
@@ -1533,12 +1547,26 @@ export async function finishDealernetByRut(
            phone.ind_whatsapp, phone.idimagen, phone.relacion, phone.ranking, phone.calidad, phone.product_code],
         )
       }
+      // Personas/empresas relacionadas con el titular (Cónyuge, Suegra,
+      // Empleador...) — es lo que le da nombre a la "Relación directa con X"
+      // de cada teléfono, que por sí sola solo trae el tipo de relación.
+      for (const rel of lookup.relacionados) {
+        await pool.query(
+          `INSERT INTO dealernet_relacionados_cl
+             (contact_id, rut_num, rut_dv, nombre, relacion, product_code)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (contact_id, COALESCE(rut_num, 0), COALESCE(nombre, ''), COALESCE(relacion, '')) DO UPDATE SET
+             rut_dv = COALESCE(EXCLUDED.rut_dv, dealernet_relacionados_cl.rut_dv)`,
+          [contactId, rel.rut, rel.dv, rel.nombre, rel.relacion, rel.product_code],
+        )
+      }
     } catch {
       // cache compartido es secundario — los teléfonos quedan igual en captaciones_cl
     }
 
     phones = lookup.phones
     emails = lookup.emails
+    relacionados = lookup.relacionados
     titularName = lookup.nombreTitular
   }
 
@@ -1557,6 +1585,7 @@ export async function finishDealernetByRut(
     ranking: p.ranking,
   }))
   const emailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
+  const relacionadosJson = relacionados.map((r) => ({ rut: r.rut, dv: r.dv, nombre: r.nombre, relacion: r.relacion }))
 
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
@@ -1565,6 +1594,7 @@ export async function finishDealernetByRut(
        owner_rut_candidates = $3,
        phones = $4,
        emails = $5,
+       relacionados = $8,
        dealernet_error = NULL,
        dealernet_consulted_at = now(),
        -- Si TGR nunca corrió (o falló), el nombre que trae la propia
@@ -1577,7 +1607,7 @@ export async function finishDealernetByRut(
      WHERE id = $1 RETURNING *`,
     [c.id, `${rutNum}-${rutDv}`, JSON.stringify(allCandidates.slice(0, 15)),
      JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length,
-     titularName ?? candidateNameHint],
+     titularName ?? candidateNameHint, JSON.stringify(relacionadosJson)],
   )
   return { captacion: rows[0] as CaptacionRow }
 }

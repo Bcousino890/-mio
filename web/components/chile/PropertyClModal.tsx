@@ -19,7 +19,7 @@ import {
   Building2, Trophy, Images, Video, Plus, RefreshCw, Maximize2, Minimize2, Unlink,
   Layers, Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
-import { PhoneRow, useCopy } from '@/components/chile/DealerFicha'
+import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
 
@@ -98,6 +98,7 @@ export type CrmInfo = {
   owner_rut: string | null
   phones: CrmPhone[] | null
   emails: unknown
+  relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
   stage: string
   dealernet_status: string
   needs_review: boolean
@@ -916,6 +917,11 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 ) : (
                                   <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
+                                )}
+                                {shownCrm.relacionados && shownCrm.relacionados.length > 0 && (
+                                  <div className="mt-2">
+                                    <RelacionadosTable relacionados={shownCrm.relacionados} />
+                                  </div>
                                 )}
                                 {/* Reintentar las etapas lentas sin salir de la
                                     ficha: es donde se quiere el teléfono. */}

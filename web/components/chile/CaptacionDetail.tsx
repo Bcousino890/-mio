@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
-import { PhoneRow, useCopy } from '@/components/chile/DealerFicha'
+import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
 
@@ -82,6 +82,7 @@ export interface Captacion {
     categoria?: string; idimagen?: string | null; relacion?: string | null; ranking?: number | null
   }> | null
   emails: Array<{ email: string }> | null
+  relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
   dealernet_error: string | null
   stage: string
   needs_review: boolean
@@ -587,6 +588,11 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
           )}
           {captacion.dealernet_status === 'ok' && phones.length === 0 && (
             <p className="text-xs text-slate-500">DealerNet no devolvió teléfonos para este RUT.</p>
+          )}
+          {(captacion.relacionados?.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <RelacionadosTable relacionados={captacion.relacionados!} />
+            </div>
           )}
         </div>
       )}

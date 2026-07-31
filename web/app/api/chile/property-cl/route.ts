@@ -106,6 +106,7 @@ const CRM_JSON = `
        'owner_rut', cap.owner_rut,
        'phones', cap.phones,
        'emails', cap.emails,
+       'relacionados', cap.relacionados,
        'stage', cap.stage,
        'dealernet_status', cap.dealernet_status,
        'needs_review', cap.needs_review,
@@ -549,7 +550,7 @@ export async function PATCH(request: NextRequest) {
       if (rol && listingUrl) {
         try {
           const { captacion: c } = await extractListing(listingUrl)
-          const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code)
+          const updated = await setRolFromPin(c.id, rol.rol, rol.sii_comuna_code, rol.direccion)
           // Enlace permanente ficha ↔ captación (0083): es lo que permite que
           // la tarjeta de la grilla se marque "captada" y que la fila de
           // /chile/captacion sepa volver a este inmueble.
