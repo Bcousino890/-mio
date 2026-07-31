@@ -144,9 +144,15 @@ export function toAppListing(row, { zoneSlug, today = new Date().toISOString().s
  * trae esos campos explícitos se respetan, si no se derivan de `currency`.
  * Devuelve null si no hay suficiente información (anuncio en UF sin tasa).
  */
-export function resolvePriceClp(row, ufRate) {
+export function resolvePriceUsd(row) {
+  if (row.price_usd != null) return row.price_usd
+  return row.currency === 'USD' ? row.price ?? null : null
+}
+
+export function resolvePriceClp(row, ufRate, usdRate = null) {
   if (row.price_clp != null) return Math.round(row.price_clp)
   if (row.price_uf != null && ufRate != null) return Math.round(row.price_uf * ufRate)
+  if (row.price_usd != null && usdRate != null) return Math.round(row.price_usd * usdRate)
   if (row.price != null) {
     if (row.currency === 'UF') return ufRate != null ? Math.round(row.price * ufRate) : null
     // Solo un importe que YA está en pesos puede copiarse tal cual. Antes se
@@ -154,6 +160,8 @@ export function resolvePriceClp(row, ufRate) {
     // anuncio publicado en dólares habría quedado guardado como si esos fueran
     // pesos: una casa de USD 450.000 aparecería a $450.000 y envenenaría el
     // precio/m², los filtros y el "precio de mercado" del cluster.
+    // USD: convertible desde que hay tasa cableada (usd-rate-cl.mjs).
+    if (row.currency === 'USD') return usdRate != null ? Math.round(row.price * usdRate) : null
     if (row.currency != null && row.currency !== 'CLP') return null
     return Math.round(row.price)
   }

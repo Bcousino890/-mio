@@ -179,6 +179,7 @@ export async function GET(request: NextRequest) {
         c.sii_comuna_code,
         COALESCE(l.photos, '[]'::jsonb) as photos,
         l.photos_total_count,
+        l.price_usd,
         COALESCE(l.features, '[]'::jsonb) as features,
         l.has_video,
         l.video_modal_url,

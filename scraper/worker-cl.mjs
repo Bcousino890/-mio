@@ -55,6 +55,7 @@ import { discoverTarget, selectDueTargets } from './lib/discovery-portalinmobili
 import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
 import { getUfRateCl } from './lib/uf-rate-cl.mjs'
+import { getUsdRateCl } from './lib/usd-rate-cl.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -79,6 +80,7 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
     upsert = upsertListingCl,
     enqueueMediaSync = async () => {},
     getUfRate = getUfRateCl,
+    getUsdRate = getUsdRateCl,
   } = deps
 
   const { externalId, sourceUrl } = jobData
@@ -109,9 +111,16 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
   // toda la base (visible en la ficha como "—"), aunque price_uf sí se guardaba.
   // getUfRateCl() cachea en memoria por día y dedupe peticiones en vuelo — llamarla
   // una vez por ficha no dispara un fetch nuevo por anuncio.
-  const uf = await getUfRate()
-  const upsertOptions = uf.ok ? { ufRate: uf.rate, ufRateDate: uf.date } : {}
+  // El dólar se pide igual y por el mismo motivo: unos pocos anuncios se
+  // publican en USD y sin tasa se guardaban sin precio. Ambas cachean por día,
+  // así que pedirlas una vez por ficha no dispara un fetch por anuncio.
+  const [uf, usd] = await Promise.all([getUfRate(), getUsdRate()])
+  const upsertOptions = {
+    ...(uf.ok ? { ufRate: uf.rate, ufRateDate: uf.date } : {}),
+    ...(usd.ok ? { usdRate: usd.rate, usdRateDate: usd.date } : {}),
+  }
   if (!uf.ok) console.warn(`[detail] ${externalId}: sin tasa UF (${uf.reason}) — price CLP quedará null si el anuncio está en UF`)
+  if (!usd.ok) console.warn(`[detail] ${externalId}: sin tasa USD (${usd.reason}) — price CLP quedará null si el anuncio está en dólares`)
 
   const { listingId, changeType } = await upsert(dbClient, parsed, upsertOptions)
   console.log(`[detail] ${externalId} → listing ${listingId} (${changeType ?? 'sin cambios'})`)

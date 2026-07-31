@@ -19,7 +19,7 @@
 // corrida, no una vez por listing.
 // ─────────────────────────────────────────────────────────────────────────────
 import { normalizeComuna } from './chile-comunas.mjs'
-import { resolvePriceClp, resolvePriceUf } from './to-listing.mjs'
+import { resolvePriceClp, resolvePriceUf, resolvePriceUsd } from './to-listing.mjs'
 import { recordSnapshotCl } from './snapshot-cl.mjs'
 
 /**
@@ -39,7 +39,7 @@ import { recordSnapshotCl } from './snapshot-cl.mjs'
  * pesos. El resto de la ficha —fotos, corredora, m², dirección— se guarda
  * entero, que es lo que se estaba perdiendo.
  */
-const MONEDAS_SOPORTADAS = new Set(['CLP', 'UF'])
+const MONEDAS_SOPORTADAS = new Set(['CLP', 'UF', 'USD'])
 
 function normalizarMoneda(currency) {
   return MONEDAS_SOPORTADAS.has(currency) ? currency : 'CLP'
@@ -100,12 +100,16 @@ async function resolveComunaId(client, comunaRaw) {
  * reales, ahogado en ruido.
  */
 function precioCambio(existing, next) {
-  const enUf = (existing.currency ?? next.currency) === 'UF'
-  if (enUf) {
-    // Si el anuncio está en UF, manda el UF publicado. Sin dato previo de UF
-    // (filas viejas) no se puede afirmar que cambió: no se marca.
-    if (existing.price_uf == null || next.price_uf == null) return false
-    return Number(existing.price_uf) !== Number(next.price_uf)
+  const moneda = existing.currency ?? next.currency
+  // El importe PUBLICADO manda, sea cual sea la moneda. Vale igual para el
+  // dólar que para la UF: `price` (CLP) también se deriva de la tasa del día,
+  // así que compararlo marcaría rebajas falsas cada vez que se mueve el cambio.
+  const publicado = moneda === 'UF' ? 'price_uf' : moneda === 'USD' ? 'price_usd' : null
+  if (publicado) {
+    // Sin dato previo del importe publicado (filas viejas) no se puede afirmar
+    // que cambió: no se marca.
+    if (existing[publicado] == null || next[publicado] == null) return false
+    return Number(existing[publicado]) !== Number(next[publicado])
   }
   if (existing.price == null || next.price == null) return false
   return Number(existing.price) !== Number(next.price)
@@ -141,13 +145,13 @@ function detectChangeType(existing, next) {
  *
  * @param {import('pg').Client} client
  * @param {object} parsed - salida de parseDetailPage() (parse-portalinmobiliario.mjs)
- * @param {{ ufRate?: number, ufRateDate?: string, scrapedAt?: Date }} [options]
+ * @param {{ ufRate?: number, ufRateDate?: string, usdRate?: number, usdRateDate?: string, scrapedAt?: Date }} [options]
  */
 export async function upsertListingCl(client, parsed, options = {}) {
-  const { ufRate = null, ufRateDate = null, scrapedAt = new Date() } = options
+  const { ufRate = null, ufRateDate = null, usdRate = null, usdRateDate = null, scrapedAt = new Date() } = options
 
   const { rows: existingRows } = await client.query(
-    `SELECT id, price, price_uf, currency, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
+    `SELECT id, price, price_uf, price_usd, currency, advertiser_name, photos, description, square_meters, bedrooms, bathrooms, status, is_active, has_video
      FROM listings_cl WHERE portal = $1 AND external_id = $2`,
     [parsed.portal ?? 'portalinmobiliario', parsed.external_id]
   )
@@ -157,8 +161,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
   // Ojo al orden: el precio se resuelve con la moneda TAL CUAL la publicó el
   // anuncio, para que una moneda no soportada dé null en vez de colarse como
   // pesos. La normalización a un valor que el CHECK acepte va después.
-  const priceClp = resolvePriceClp(parsed, ufRate)
+  const priceClp = resolvePriceClp(parsed, ufRate, usdRate)
   const priceUf = resolvePriceUf(parsed)
+  const priceUsd = resolvePriceUsd(parsed)
   const currency = normalizarMoneda(parsed.currency)
   // Una respuesta parcial del modal de galería no puede borrar fotos buenas.
   const photos = fotosAGuardar(existing, parsed)
@@ -173,6 +178,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const next = {
     price: priceClp,
     price_uf: priceUf,
+    price_usd: priceUsd,
     currency,
     advertiser_name: parsed.advertiser_name ?? null,
     photos,
@@ -189,14 +195,14 @@ export async function upsertListingCl(client, parsed, options = {}) {
   const { rows: upserted } = await client.query(
     `INSERT INTO listings_cl (
        portal, source_type, external_id, source_url, operation, advertiser_type, advertiser_name, phone,
-       price, price_uf, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
+       price, price_uf, price_usd, usd_rate, usd_rate_date, uf_rate, uf_rate_date, currency, bedrooms, bathrooms, square_meters, property_type,
        comuna_id, comuna_raw, localidad, address, latitude, longitude, description, photos, photos_total_count,
        property_code, advertiser_id, seller_reference, features, has_video, video_modal_url, advertiser_logo,
        portal_first_seen_at,
        status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-       $18,$19,$20,$21,$22,$23,$24,$25,$35,
+       $18,$19,$20,$21,$22,$23,$24,$25,$35,$36,$37,$38,
        $26,$27,$28,$30,$31,$32,$33,$34,
        'active', true, $29, $29, now()
      )
@@ -204,7 +210,8 @@ export async function upsertListingCl(client, parsed, options = {}) {
        source_type = EXCLUDED.source_type, source_url = EXCLUDED.source_url,
        operation = EXCLUDED.operation, advertiser_type = EXCLUDED.advertiser_type,
        advertiser_name = EXCLUDED.advertiser_name, phone = EXCLUDED.phone,
-       price = EXCLUDED.price, price_uf = EXCLUDED.price_uf, uf_rate = EXCLUDED.uf_rate,
+       price = EXCLUDED.price, price_uf = EXCLUDED.price_uf, price_usd = EXCLUDED.price_usd,
+       usd_rate = EXCLUDED.usd_rate, usd_rate_date = EXCLUDED.usd_rate_date, uf_rate = EXCLUDED.uf_rate,
        uf_rate_date = EXCLUDED.uf_rate_date, currency = EXCLUDED.currency,
        bedrooms = EXCLUDED.bedrooms, bathrooms = EXCLUDED.bathrooms, square_meters = EXCLUDED.square_meters,
        property_type = EXCLUDED.property_type, comuna_id = EXCLUDED.comuna_id, comuna_raw = EXCLUDED.comuna_raw,
@@ -240,6 +247,7 @@ export async function upsertListingCl(client, parsed, options = {}) {
       parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
       portalFirstSeenAt,
       parsed.photos_total_count ?? null,
+      priceUsd, usdRate, usdRateDate,
     ]
   )
   const listingId = upserted[0].id
