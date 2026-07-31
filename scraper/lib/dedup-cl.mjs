@@ -188,12 +188,26 @@ export async function refreshPropertyClAggregates(client, propertyClId) {
   );
   if (rows.length === 0) return;
   const c = consolidateFields(rows);
+  // El refresco NO puede pisar el trabajo del equipo ni el dato del catastro con
+  // lo que traiga (o deje de traer) un anuncio:
+  //   · location_confidence — un pin colocado a mano ES la confirmación de
+  //     ubicación. Recalcularlo desde los anuncios devolvía la ficha a "sin
+  //     confirmar" en el siguiente barrido: se captaba y al rato la etiqueta
+  //     "Rol SII" había desaparecido sola.
+  //   · exact_address — sale del catastro SII al resolver el rol, no del aviso;
+  //     un anuncio sin dirección la borraba.
+  //   · comuna/coordenadas — que una re-lectura no las parsee no significa que
+  //     el inmueble se haya quedado sin comuna.
   await client.query(
     `UPDATE property_cl SET
        operation = $2, property_type = $3, canonical_price = $4, canonical_price_uf = $5,
        uf_rate = $6, uf_rate_date = $7, square_meters = $8, bedrooms = $9, bathrooms = $10,
-       comuna_id = $11, localidad = $12, latitude = $13, longitude = $14,
-       location_confidence = $15, exact_address = $16, listing_count = $17,
+       comuna_id = COALESCE($11::uuid, comuna_id), localidad = COALESCE($12::text, localidad),
+       latitude = COALESCE($13::numeric, latitude), longitude = COALESCE($14::numeric, longitude),
+       location_confidence = CASE WHEN manual_pin_set_at IS NOT NULL THEN 'confirmed' ELSE $15::text END,
+       exact_address = CASE WHEN rol_matriz IS NOT NULL THEN COALESCE(exact_address, $16::text)
+                            ELSE COALESCE($16::text, exact_address) END,
+       listing_count = $17,
        corredora_count = $18, portals = $19, source_types = $20, advertiser_kinds = $21,
        is_active = $22, first_seen_at = $23, last_seen_at = $24, portal_first_seen_at = $25, updated_at = now()
      WHERE id = $1`,

@@ -165,12 +165,26 @@ export async function refreshPropertyClAggregates(pool: Pool, propertyClId: stri
   )
   if (rows.length === 0) return
   const c = consolidateFields(rows as ConsolidationRow[])
+  // El refresco NO puede pisar el trabajo del equipo ni el dato del catastro con
+  // lo que traiga (o deje de traer) un anuncio:
+  //   · location_confidence — un pin colocado a mano ES la confirmación de
+  //     ubicación. Recalcularlo desde los anuncios devolvía la ficha a "sin
+  //     confirmar" en el siguiente barrido: se captaba y al rato la etiqueta
+  //     "Rol SII" había desaparecido sola.
+  //   · exact_address — sale del catastro SII al resolver el rol, no del aviso;
+  //     un anuncio sin dirección la borraba.
+  //   · comuna/coordenadas — que una re-lectura no las parsee no significa que
+  //     el inmueble se haya quedado sin comuna.
   await pool.query(
     `UPDATE property_cl SET
        operation = $2, property_type = $3, canonical_price = $4, canonical_price_uf = $5,
        uf_rate = $6, uf_rate_date = $7, square_meters = $8, bedrooms = $9, bathrooms = $10,
-       comuna_id = $11, localidad = $12, latitude = $13, longitude = $14,
-       location_confidence = $15, exact_address = $16, listing_count = $17,
+       comuna_id = COALESCE($11::uuid, comuna_id), localidad = COALESCE($12::text, localidad),
+       latitude = COALESCE($13::numeric, latitude), longitude = COALESCE($14::numeric, longitude),
+       location_confidence = CASE WHEN manual_pin_set_at IS NOT NULL THEN 'confirmed' ELSE $15::text END,
+       exact_address = CASE WHEN rol_matriz IS NOT NULL THEN COALESCE(exact_address, $16::text)
+                            ELSE COALESCE($16::text, exact_address) END,
+       listing_count = $17,
        corredora_count = $18, portals = $19, source_types = $20, advertiser_kinds = $21,
        is_active = $22, first_seen_at = $23, last_seen_at = $24, portal_first_seen_at = $25, updated_at = now()
      WHERE id = $1`,
@@ -201,7 +215,15 @@ export async function linkSingleListingToPropertyCl(pool: Pool, listingId: strin
   )
   const self = selfRows[0]
   if (!self) throw new Error(`listings_cl ${listingId} no encontrado`)
-  if (self.property_cl_id) return self.property_cl_id as string
+  // Ya tenía ficha: no hay nada que enlazar, pero el aviso ACABA de cambiar
+  // (esta función se llama justo después del upsert del scraping puntual), así
+  // que sus agregados hay que rehacerlos. Sin esto, buscar una propiedad por
+  // código la re-scrapeaba entera y la ficha seguía mostrando el precio, la
+  // comuna y los m² viejos — o vacíos: "se traen los datos y no aparecen".
+  if (self.property_cl_id) {
+    await refreshPropertyClAggregates(pool, self.property_cl_id as string)
+    return self.property_cl_id as string
+  }
 
   const sellerRef = typeof self.seller_reference === 'string' ? self.seller_reference.trim() : ''
   let family: ConsolidationRow[] = [self]

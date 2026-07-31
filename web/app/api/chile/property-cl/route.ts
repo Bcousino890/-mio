@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import {
   extractListing, setRolFromPin, resolveRolAtPoint, findCrmCaptacionByRol,
-  linkCaptacionToProperty,
+  linkCaptacionToProperty, lookupSiiDireccion,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
 import { scrapeAndUpsertListingCl, extractMlcId, type ScrapeResult } from '@/lib/scrape-listing-cl'
@@ -136,6 +136,22 @@ const COVER_PHOTO = `
    LIMIT 1) AS cover_photo
 `
 
+// Coordenadas y precio/m² SIEMPRE como números de JavaScript.
+//
+// Las columnas son `numeric` y el driver de Postgres devuelve `numeric` como
+// STRING (no pierde precisión, pero deja de ser un número). La ficha las trata
+// como números —`manualPin.latitude.toFixed(5)`— así que al abrir CUALQUIER
+// propiedad con pin guardado (o sea, cualquiera ya captada) el render reventaba
+// con «toFixed is not a function» y Next se comía la app entera con su pantalla
+// negra de "Application error". El cast va en el SQL, que es donde nace el dato
+// y donde se arregla para todos los consumidores de una vez.
+const NUMERIC_COORDS = `
+  p.latitude::float8 AS latitude,
+  p.longitude::float8 AS longitude,
+  p.manual_latitude::float8 AS manual_latitude,
+  p.manual_longitude::float8 AS manual_longitude
+`
+
 // Relee una ficha por id con la misma forma que una fila de la lista (usado
 // tras un scraping puntual on-demand, ver bloque `q` en GET más abajo — el
 // buscador necesita el mismo shape que ya consume la grilla, no el objeto de
@@ -146,12 +162,13 @@ async function fetchPropertyClRowById(id: string) {
        p.id, p.id AS row_key, p.ref_code, p.operation, p.property_type,
        p.canonical_price, p.canonical_price_uf, p.uf_rate, p.uf_rate_date,
        p.square_meters,
-       CASE WHEN p.square_meters > 0 THEN ROUND(p.canonical_price::numeric / p.square_meters) ELSE 0 END AS price_sqm,
+       (CASE WHEN p.square_meters > 0 THEN ROUND(p.canonical_price::numeric / p.square_meters) ELSE 0 END)::int AS price_sqm,
        p.bedrooms, p.bathrooms, p.comuna_id, c.name AS comuna_name, c.sii_comuna_code,
-       p.localidad, p.latitude, p.longitude, p.exact_address, p.location_confidence, p.rol_matriz,
+       p.localidad, p.exact_address, p.location_confidence, p.rol_matriz,
+       ${NUMERIC_COORDS},
        p.listing_count, p.corredora_count, p.portals, p.source_types, p.advertiser_kinds,
        p.is_active, p.first_seen_at, p.last_seen_at, p.portal_first_seen_at,
-       p.manual_latitude, p.manual_longitude, p.manual_pin_set_at, p.smart_crm_at, p.captacion_id, p.manual_merge_at,
+       p.manual_pin_set_at, p.smart_crm_at, p.captacion_id, p.manual_merge_at,
        EXTRACT(DAY FROM (now() - COALESCE(p.portal_first_seen_at, p.first_seen_at)))::int AS days_on_market,
        ${COVER_PHOTO},
        ${CRM_JSON},
@@ -161,6 +178,27 @@ async function fetchPropertyClRowById(id: string) {
     [id]
   )
   return rows[0] ?? null
+}
+
+// Si la ficha ya tiene rol confirmado pero se quedó sin dirección exacta, se
+// busca en el catastro SII y se guarda. El rol es lo caro de conseguir; teniendo
+// rol, la dirección es una consulta indexada y no hay razón para enseñar un "—"
+// que no se arregla solo (roles fijados antes de que la búsqueda normalizara el
+// formato del rol, o comunas cuyo catastro se cargó después de captar).
+async function withExactAddress(row: Record<string, unknown>) {
+  if (row.exact_address || !row.rol_matriz || !row.sii_comuna_code) return row
+  try {
+    const direccion = await lookupSiiDireccion(row.sii_comuna_code as string, row.rol_matriz as string)
+    if (!direccion) return row
+    await pool.query(
+      `UPDATE property_cl SET exact_address = $2, updated_at = now()
+       WHERE id = $1 AND exact_address IS NULL`,
+      [row.id, direccion],
+    )
+    return { ...row, exact_address: direccion }
+  } catch {
+    return row
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -318,15 +356,13 @@ export async function GET(request: NextRequest) {
         p.uf_rate,
         p.uf_rate_date,
         ${F.sqm} AS square_meters,
-        CASE WHEN ${F.sqm} > 0 THEN ROUND(${F.price}::numeric / ${F.sqm}) ELSE 0 END AS price_sqm,
+        (CASE WHEN ${F.sqm} > 0 THEN ROUND(${F.price}::numeric / ${F.sqm}) ELSE 0 END)::int AS price_sqm,
         ${F.bedrooms} AS bedrooms,
         ${listUngrouped ? 'l.bathrooms' : 'p.bathrooms'} AS bathrooms,
         p.comuna_id,
         c.name AS comuna_name,
         c.sii_comuna_code,
         p.localidad,
-        p.latitude,
-        p.longitude,
         p.exact_address,
         p.location_confidence,
         p.rol_matriz,
@@ -339,8 +375,7 @@ export async function GET(request: NextRequest) {
         p.first_seen_at,
         p.last_seen_at,
         p.portal_first_seen_at,
-        p.manual_latitude,
-        p.manual_longitude,
+        ${NUMERIC_COORDS},
         p.manual_pin_set_at,
         -- Marca manual "ya subida al CRM externo (Smart)" — para no duplicar el
         -- alta comercial; se enciende/apaga desde la ficha (0082).
@@ -400,7 +435,7 @@ export async function GET(request: NextRequest) {
       if (result.rows.length === 0) {
         return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
       }
-      return NextResponse.json({ success: true, data: result.rows[0] })
+      return NextResponse.json({ success: true, data: await withExactAddress(result.rows[0]) })
     }
 
     return NextResponse.json({
@@ -498,7 +533,9 @@ export async function PATCH(request: NextRequest) {
          location_confidence = CASE WHEN $4 THEN location_confidence ELSE 'confirmed' END,
          updated_at = now()
        WHERE id = $1
-       RETURNING id, manual_latitude, manual_longitude, manual_pin_set_at, location_confidence`,
+       RETURNING id, manual_latitude::float8 AS manual_latitude,
+                 manual_longitude::float8 AS manual_longitude,
+                 manual_pin_set_at, location_confidence`,
       [id, clearing ? null : latitude, clearing ? null : longitude, clearing]
     )
     if (rows.length === 0) {

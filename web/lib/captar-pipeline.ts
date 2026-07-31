@@ -922,28 +922,22 @@ export async function selectRolManual(
   if (!chosen) {
     if (!comuna) throw new Error('La captación no tiene comuna SII para resolver el rol')
     method = 'manual_rol'
-    // Misma preferencia de fila que /api/chile/sii-rol-detail: un rol puede
-    // tener duplicados de ingesta y queremos el que trae datos.
-    const { rows: siiRows } = await pool.query(
-      `SELECT rol, direccion FROM sii_roles_cl
-       WHERE sii_comuna_code = $1 AND rol = $2
-       ORDER BY superficie_construida_m2 DESC NULLS LAST,
-                (nombre_propietario IS NOT NULL) DESC,
-                (lat IS NOT NULL) DESC,
-                avaluo_fiscal_total DESC NULLS LAST
-       LIMIT 1`,
-      [comuna, rol],
-    )
-    if (siiRows[0]) {
-      siiRol = siiRows[0].rol
-      direccion = siiRows[0].direccion ?? null
+    const sii = await lookupSiiRol(comuna, rol)
+    if (sii) {
+      siiRol = sii.rol
+      direccion = sii.direccion ?? null
     } else {
       // Sin fila en el catastro SII: se acepta igual si la parcela existe en
       // el catastro gráfico (es lo que el usuario acaba de ver en el mapa).
+      // Se compara contra el rol NORMALIZADO de la parcela: esa tabla guarda el
+      // rol con ceros a la izquierda ("03810-00021") y `rol` ya viene sin ellos,
+      // así que el match literal fallaba siempre y un rol perfectamente válido
+      // se rechazaba con "no existe en el catastro".
       const { rows: parcelRows } = await pool.query(
         `SELECT p.rol FROM cadastre_parcels_cl p
          JOIN chile_comunas cc ON cc.id = p.comuna_id
-         WHERE cc.sii_comuna_code = $1 AND p.rol = $2
+         WHERE cc.sii_comuna_code = $1
+           AND (p.rol = $2 OR regexp_replace(p.rol, '(^|-)0+(\\d)', '\\1\\2', 'g') = $2)
          LIMIT 1`,
         [comuna, rol],
       )
@@ -1023,29 +1017,86 @@ export async function resolveRolAtPoint(lat: number, lng: number): Promise<Resol
   const parcel = rows[0]
   if (!parcel) return null
 
-  // Datos SII del rol (dirección exacta, avalúo). Un mismo rol puede tener >1
-  // fila en sii_roles_cl (reprocesos con distinto padding de ceros): se toma la
-  // más completa, mismo criterio que /api/chile/sii-rol-detail.
-  const { rows: siiRows } = await pool.query(
-    `SELECT direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal
-     FROM sii_roles_cl
-     WHERE sii_comuna_code = $1 AND rol = $2
-     ORDER BY (direccion IS NOT NULL) DESC, avaluo_fiscal_total DESC NULLS LAST
-     LIMIT 1`,
-    [parcel.sii_comuna_code, parcel.rol],
-  )
-  const sii = siiRows[0] ?? {}
+  const sii = await lookupSiiRol(parcel.sii_comuna_code, parcel.rol)
   return {
     rol: parcel.rol,
     comuna_name: parcel.comuna_name,
     sii_comuna_code: parcel.sii_comuna_code,
     parcel_id: parcel.parcel_id,
     geojson: parcel.geojson,
-    direccion: sii.direccion ?? null,
-    avaluo_fiscal_total: sii.avaluo_fiscal_total != null ? Number(sii.avaluo_fiscal_total) : null,
-    superficie_terreno_m2: sii.superficie_terreno_m2 != null ? Number(sii.superficie_terreno_m2) : null,
-    codigo_destino_principal: sii.codigo_destino_principal ?? null,
+    direccion: sii?.direccion ?? null,
+    avaluo_fiscal_total: sii?.avaluo_fiscal_total != null ? Number(sii.avaluo_fiscal_total) : null,
+    superficie_terreno_m2: sii?.superficie_terreno_m2 != null ? Number(sii.superficie_terreno_m2) : null,
+    codigo_destino_principal: sii?.codigo_destino_principal ?? null,
   }
+}
+
+export interface SiiRolDatos {
+  rol: string
+  direccion: string | null
+  avaluo_fiscal_total: string | number | null
+  superficie_terreno_m2: string | number | null
+  codigo_destino_principal: string | null
+}
+
+/**
+ * Ficha SII de un rol: la dirección exacta del catastro, su avalúo y su
+ * superficie de terreno.
+ *
+ * EL ROL SE NORMALIZA ANTES DE BUSCAR. `cadastre_parcels_cl.rol` (el catastro
+ * gráfico, de donde sale el rol al clicar/soltar el pin) guarda el rol CON ceros
+ * a la izquierda —"03810-00021"— mientras que `sii_roles_cl.rol` lo guarda sin
+ * ellos —"3810-21"—. Buscar con el rol crudo no encontraba NUNCA la fila: el rol
+ * quedaba confirmado en la ficha y en la captación pero con la dirección vacía
+ * para siempre, que es justo lo que se veía como "tengo el rol, ¿y la dirección?".
+ * Se intenta también con el rol tal cual por si alguna comuna se ingirió con el
+ * padding puesto.
+ *
+ * Un mismo rol puede tener >1 fila (reingestas con distinto padding): se prefiere
+ * la que trae datos, mismo criterio que /api/chile/sii-rol-detail.
+ */
+export async function lookupSiiRol(siiComunaCode: string | null, rolRaw: string | null): Promise<SiiRolDatos | null> {
+  if (!siiComunaCode || !rolRaw) return null
+  const rol = normalizeClRol(rolRaw)
+  const variantes = rol === rolRaw.trim() ? [rol] : [rol, rolRaw.trim()]
+  const { rows } = await pool.query(
+    `SELECT rol, direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal
+     FROM sii_roles_cl
+     WHERE sii_comuna_code = $1 AND rol = ANY($2::text[])
+     ORDER BY (direccion IS NOT NULL) DESC,
+              superficie_construida_m2 DESC NULLS LAST,
+              (nombre_propietario IS NOT NULL) DESC,
+              avaluo_fiscal_total DESC NULLS LAST
+     LIMIT 1`,
+    [siiComunaCode, variantes],
+  )
+  return (rows[0] as SiiRolDatos) ?? null
+}
+
+/** Solo la dirección exacta del catastro SII para un rol (null si no está). */
+export async function lookupSiiDireccion(siiComunaCode: string | null, rol: string | null): Promise<string | null> {
+  return (await lookupSiiRol(siiComunaCode, rol))?.direccion ?? null
+}
+
+/**
+ * Rellena `sii_direccion` de una captación que ya tiene rol confirmado pero se
+ * quedó sin dirección (roles fijados por pin antes de que la búsqueda
+ * normalizara el rol, o comunas cuyo catastro SII se cargó después de captar).
+ *
+ * Se ejecuta al abrir la ficha: si el rol está, la dirección se busca en el
+ * sistema y se guarda, en vez de dejar un "—" que no se arregla solo. Es una
+ * consulta indexada y solo corre cuando falta el dato.
+ */
+export async function backfillSiiDireccion(c: CaptacionRow): Promise<CaptacionRow> {
+  if (c.sii_direccion || !c.sii_rol || !c.sii_comuna_code) return c
+  const direccion = await lookupSiiDireccion(c.sii_comuna_code, c.sii_rol)
+  if (!direccion) return c
+  const { rows } = await pool.query(
+    `UPDATE captaciones_cl SET sii_direccion = $2, updated_at = now()
+     WHERE id = $1 AND sii_direccion IS NULL RETURNING *`,
+    [c.id, direccion],
+  )
+  return (rows[0] as CaptacionRow) ?? { ...c, sii_direccion: direccion }
 }
 
 export interface CrmCaptacion {
@@ -1065,17 +1116,27 @@ export interface CrmCaptacion {
 
 /** Busca si el inmueble (por rol SII) ya está en el CRM de captación
  * (captaciones_cl) con dueño/teléfonos — para mostrar en la ficha "ya subido,
- * llamar" sin volver a pegar la URL. Prefiere la captación más completa. */
+ * llamar" sin volver a pegar la URL. Prefiere la captación más completa.
+ *
+ * Compara el rol EN LOS DOS FORMATOS. `captaciones_cl.sii_rol` guarda hoy el rol
+ * tal como lo dio el camino que lo confirmó: sin ceros a la izquierda cuando
+ * vino del match contra sii_roles_cl ("3810-21") y con ellos cuando vino del pin
+ * sobre el catastro gráfico ("03810-00021"). Comparando literal, una ficha no
+ * reconocía su propia captación si la había creado el otro camino: decía "aún no
+ * está en el CRM" y volvía a captar el mismo inmueble por duplicado. */
 export async function findCrmCaptacionByRol(rol: string, siiComunaCode: string): Promise<CrmCaptacion | null> {
+  const variantes = [...new Set([rol.trim(), normalizeClRol(rol)])]
   const { rows } = await pool.query(
     `SELECT id AS captacion_id, owner_name, owner_rut, phones, emails, stage,
             relacionados, owner_rut_candidates,
             dealernet_status, needs_review, source_url, updated_at
      FROM captaciones_cl
-     WHERE sii_rol = $1 AND sii_comuna_code = $2
+     WHERE sii_comuna_code = $2
+       AND (sii_rol = ANY($1::text[])
+            OR regexp_replace(sii_rol, '(^|-)0+(\\d)', '\\1\\2', 'g') = ANY($1::text[]))
      ORDER BY (owner_name IS NOT NULL) DESC, (phones IS NOT NULL) DESC, updated_at DESC
      LIMIT 1`,
-    [rol, siiComunaCode],
+    [variantes, siiComunaCode],
   )
   return (rows[0] as CrmCaptacion) ?? null
 }
@@ -1098,6 +1159,9 @@ export async function setRolFromPin(
   // sí la guardan).
   direccion: string | null = null,
 ): Promise<CaptacionRow> {
+  // Si quien llama no la trae, se busca aquí: teniendo rol y comuna, la
+  // dirección exacta está en el catastro SII y no hay razón para dejarla vacía.
+  const direccionFinal = direccion ?? (await lookupSiiDireccion(siiComunaCode, rol))
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
        sii_rol = $2,
@@ -1106,7 +1170,7 @@ export async function setRolFromPin(
        match_confidence = 'manual', match_method = 'manual_pin', match_score = 1,
        stage = 'matched', needs_review = false, review_reason = NULL, updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [captacionId, rol, siiComunaCode, direccion],
+    [captacionId, rol, siiComunaCode, direccionFinal],
   )
   if (!rows[0]) throw new Error('Captación no encontrada')
   await syncListingIdentity(rows[0] as CaptacionRow)
