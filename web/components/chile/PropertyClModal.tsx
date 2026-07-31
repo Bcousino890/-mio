@@ -299,28 +299,64 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   const [smartAt, setSmartAt] = useState<string | null>(p.smart_crm_at ?? null)
   const [savingSmart, setSavingSmart] = useState(false)
   const [smartError, setSmartError] = useState<string | null>(null)
+  const [smartUrl, setSmartUrl] = useState<string | null>(null)
+  /**
+   * Envía la ficha al CRM SmartBC de verdad.
+   *
+   * Antes esto solo escribía una fecha (`smart_crm_at`): el equipo declaraba
+   * "ya la subí a mano" y nadie se enteraba de los cambios posteriores. Ahora
+   * hace el alta por la API — ficha, ubicación, dueño, avisos de corredoras y
+   * fotos— y la marca queda como consecuencia del envío, no en su lugar.
+   *
+   * Desmarcar sigue siendo solo local: dar de baja la ficha en el CRM es una
+   * decisión comercial de su equipo, no un efecto de desmarcar una casilla aquí.
+   */
   const toggleSmart = useCallback(async () => {
-    const next = !smartAt
     setSavingSmart(true)
     setSmartError(null)
+
+    if (smartAt) {
+      try {
+        const res = await fetch('/api/chile/property-cl', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: p.id, smart_crm: false }),
+        })
+        const data = await res.json()
+        if (data.success) {
+          setSmartAt(null)
+          setSmartUrl(null)
+          onRefetched({ ...p, smart_crm_at: null })
+        } else {
+          setSmartError(data.error ?? 'No se pudo desmarcar')
+        }
+      } catch {
+        setSmartError('Error de red al desmarcar')
+      } finally {
+        setSavingSmart(false)
+      }
+      return
+    }
+
     try {
-      const res = await fetch('/api/chile/property-cl', {
-        method: 'PATCH',
+      const res = await fetch('/api/chile/smartbc', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: p.id, smart_crm: next }),
+        body: JSON.stringify({ id: p.id }),
       })
       const data = await res.json()
       if (data.success) {
-        const saved = data.data?.smart_crm_at ?? (next ? new Date().toISOString() : null)
+        const saved = new Date().toISOString()
         setSmartAt(saved)
-        // Propagar a la grilla para que la etiqueta aparezca allí de inmediato.
+        setSmartUrl(data.data?.admin_url ?? null)
         onRefetched({ ...p, smart_crm_at: saved })
       } else {
-        // Un fallo silencioso aquí era indistinguible de "no se guarda".
-        setSmartError(data.error ?? 'No se pudo guardar la marca de Smart')
+        // El motivo exacto importa: sin captación todavía no hay dueño que
+        // enviar, y eso se arregla captando, no reintentando.
+        setSmartError(data.error ?? 'No se pudo enviar al CRM')
       }
     } catch {
-      setSmartError('Error de red al guardar la marca de Smart')
+      setSmartError('Error de red al enviar al CRM')
     } finally {
       setSavingSmart(false)
     }
@@ -707,18 +743,22 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
               {/* CRM externo (Smart): marca manual "ya la subí" para no duplicar
                   el alta comercial. */}
               <button onClick={toggleSmart} disabled={savingSmart}
-                title={smartAt ? 'Ya marcada como subida al CRM externo (Smart). Clic para desmarcar.' : 'Marcar como ya subida al CRM externo (Smart)'}
+                title={smartAt ? 'Ya enviada al CRM (Smart). Clic para desmarcar aquí — no la da de baja en el CRM.' : 'Enviar la ficha al CRM (Smart): datos, ubicación, dueño, corredoras y fotos'}
                 className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${
                   smartAt
                     ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-500'
                     : 'bg-slate-700/60 text-slate-200 border-slate-600 hover:border-emerald-500/60 hover:text-emerald-300'
                 }`}>
                 {savingSmart
-                  ? 'Guardando…'
+                  ? 'Enviando…'
                   : smartAt
                     ? <><BadgeCheck size={14} /> Ya en Smart (CRM)</>
                     : <><Plus size={14} /> Agregar a Smart</>}
               </button>
+              {smartUrl && (
+                <a href={smartUrl} target="_blank" rel="noopener noreferrer"
+                  className="text-[11px] text-emerald-400 underline hover:text-emerald-300">ver ficha en el CRM</a>
+              )}
               {smartError && <span className="text-[11px] text-rose-300 max-w-[220px] text-right">{smartError}</span>}
             </div>
           </div>

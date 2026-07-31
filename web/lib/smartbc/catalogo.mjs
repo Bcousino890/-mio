@@ -58,6 +58,14 @@ export function regionVariants(name) {
  * Las zonas se piden por comuna (su endpoint las filtra con `?comuna=`), así
  * que solo se descargan las de las comunas que nos interesan: pedir las 346
  * serían 346 peticiones y el límite es 120/min.
+ *
+ * Los tipos van en JSDoc porque este módulo lo consumen dos mundos: el CLI del
+ * scraper (Node a pelo) y las rutas de la app (TypeScript). Sin ellos, TS
+ * infiere `never[]` del valor por defecto y rechaza cualquier lista real.
+ *
+ * @param {{ catalogo: Function }} smartbc
+ * @param {{ comunasDeInteres?: string[] }} [opts]
+ * @returns {Promise<{ regiones: unknown[], comunas: unknown[], zonasPorComuna: Map<string, unknown[]> }>}
  */
 export async function fetchCatalogo(smartbc, { comunasDeInteres = [] } = {}) {
   const [regiones, comunas] = await Promise.all([
@@ -83,6 +91,8 @@ function nombreDe(entry) {
 /**
  * Índice de búsqueda sobre el catálogo. Devuelve funciones que traducen un
  * nombre nuestro al valor exacto de SmartBC, o `null` si no existe allí.
+ *
+ * @param {{ regiones?: unknown[], comunas?: unknown[], zonasPorComuna?: Map<string, unknown[]> }} catalogo
  */
 export function buildNormalizer(catalogo) {
   const regionPorClave = new Map()

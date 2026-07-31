@@ -29,7 +29,7 @@ import {
   pickPrice,
   publicationNumber,
   sortPhones,
-} from './smartbc-mapper.mjs'
+} from './mapper.mjs'
 
 // Campos admitidos por el schema `Captacion` del OpenAPI de SmartBC. El schema
 // es additionalProperties:false, así que cualquier clave fuera de esta lista es
@@ -266,6 +266,103 @@ test('con decenas de relacionados no se supera el tope de 20 contactos', () => {
     captacionId: CAP_ID, ownerName: 'X', ownerRut: null, phones, emails: [], relacionados,
   })
   assert.equal(contacts.length, 20)
+})
+
+// ─── Selección manual de contactos ───────────────────────────────────────────
+
+test('con selección manual viajan SOLO los teléfonos elegidos', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: CAPTACION.relacionados,
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+  })
+  assert.equal(contacts.length, 1, 'los otros 2 teléfonos no viajan')
+  assert.equal(contacts[0].phone, '+56912345678')
+  assert.equal(contacts[0].contact_type, 'owner')
+  assert.equal(contacts[0].rut, '12345678-9')
+})
+
+test('el nombre elegido a mano gana al que devuelve TGR', () => {
+  // TGR da el nombre legal; el equipo pone el que la persona usa de verdad.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'MARIA DEL CARMEN PEREZ SOTO',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: [],
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+  })
+  assert.equal(contacts[0].contact_name, 'María Pérez')
+})
+
+test('varios teléfonos de la misma persona se agrupan, no se repite el contacto', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: [],
+    seleccion: [
+      { phone: '+56912345678', name: 'María Pérez', is_owner: true, has_whatsapp: true },
+      { phone: '+56987654321', name: 'María Pérez', is_owner: true, label: 'Oficina' },
+    ],
+  })
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].phone, '+56912345678')
+  assert.deepEqual(contacts[0].extra_phones.map((p) => p.phone), ['+56987654321'])
+})
+
+test('un relacionado elegido viaja con su nombre y su parentesco', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: CAPTACION.relacionados,
+    seleccion: [
+      { phone: '+56912345678', name: 'María Pérez', is_owner: true },
+      { phone: '+56911112222', name: 'Juan Soto', relationship: 'Cónyuge', rut: '9876543-2' },
+    ],
+  })
+  assert.equal(contacts.length, 2)
+  assert.equal(contacts[1].contact_name, 'Juan Soto')
+  assert.equal(contacts[1].contact_type, 'spouse', 'deducido del parentesco')
+  assert.equal(contacts[1].relationship, 'Cónyuge')
+  assert.equal(contacts[1].rut, '9876543-2')
+})
+
+test('sin selección se mantiene el comportamiento automático de siempre', () => {
+  const auto = buildContacts({
+    captacionId: CAP_ID, ownerName: 'María Pérez', ownerRut: '12345678-9',
+    phones: CAPTACION.phones, emails: [], relacionados: CAPTACION.relacionados,
+  })
+  const conNull = buildContacts({
+    captacionId: CAP_ID, ownerName: 'María Pérez', ownerRut: '12345678-9',
+    phones: CAPTACION.phones, emails: [], relacionados: CAPTACION.relacionados,
+    seleccion: null,
+  })
+  assert.deepEqual(conNull, auto)
+  assert.equal(auto.length, 2, 'titular + cónyuge, como antes')
+})
+
+test('la selección guardada en la captación llega al payload', () => {
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    captacion: {
+      ...CAPTACION,
+      smartbc_contactos: [{ phone: '+56987654321', name: 'Solo este', is_owner: true }],
+    },
+  })
+  assert.equal(payload.contacts.length, 1)
+  assert.equal(payload.contacts[0].phone, '+56987654321')
+  assert.equal(payload.owner.phone, '+56987654321', 'owner.phone sale del contacto elegido')
 })
 
 // ─── Fotos ───────────────────────────────────────────────────────────────────

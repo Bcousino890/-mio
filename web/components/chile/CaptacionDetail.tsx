@@ -84,6 +84,10 @@ export interface Captacion {
   }> | null
   emails: Array<{ email: string }> | null
   relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
+  // Selección manual de qué contactos viajan al CRM (migración 0092). NULL =
+  // nadie ha elegido todavía y la sincronización automática decide sola.
+  smartbc_contactos?: Array<{ phone: string; name?: string | null }> | null
+  smartbc_contactos_at?: string | null
   dealernet_error: string | null
   stage: string
   needs_review: boolean
@@ -471,6 +475,85 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   const phones = captacion.phones ?? []
   const rutCandidates = captacion.owner_rut_candidates ?? []
 
+  // ── Selección de contactos para el CRM ─────────────────────────────────────
+  // DealerNet devuelve hasta 12 teléfonos y 23 relacionados. Volcarlos todos al
+  // CRM le entrega a quien va a llamar una lista donde no distingue al dueño de
+  // la cuñada del cónyuge. Aquí sí se distingue —está el parentesco y la
+  // categoría delante—, así que la elección se hace aquí y se guarda: la
+  // sincronización automática la respeta y no vuelve a meter los 12.
+  const nombreSugerido = useCallback((relacion: string | null | undefined): string => {
+    if (!relacion) return captacion.owner_name ?? ''
+    const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+    const hit = (captacion.relacionados ?? []).find((r) => fold(r.relacion ?? '') === fold(relacion))
+    return hit?.nombre ?? ''
+  }, [captacion.owner_name, captacion.relacionados])
+
+  const [seleccion, setSeleccion] = useState<Record<string, { name: string }>>(() => {
+    const guardada = captacion.smartbc_contactos
+    if (Array.isArray(guardada) && guardada.length) {
+      return Object.fromEntries(guardada.map((c) => [c.phone, { name: c.name ?? '' }]))
+    }
+    return {}
+  })
+  const [enviando, setEnviando] = useState(false)
+  const [envio, setEnvio] = useState<{ ok: boolean; msg: string; url?: string | null } | null>(null)
+
+  const toggleTelefono = useCallback((numero: string, relacion: string | null | undefined) => {
+    setSeleccion((prev) => {
+      if (prev[numero]) {
+        const { [numero]: _quitado, ...resto } = prev
+        return resto
+      }
+      return { ...prev, [numero]: { name: nombreSugerido(relacion) } }
+    })
+  }, [nombreSugerido])
+
+  const enviarASmart = useCallback(async () => {
+    setEnviando(true)
+    setEnvio(null)
+    try {
+      const contactos = phones
+        .filter((p) => seleccion[p.numero])
+        .map((p) => ({
+          phone: p.numero,
+          name: seleccion[p.numero].name || null,
+          relationship: p.relacion ?? null,
+          has_whatsapp: p.whatsapp ?? null,
+          label: p.tipo ?? p.categoria ?? null,
+          // Sin parentesco, el número es del titular: así los clasifica DealerNet.
+          is_owner: !p.relacion,
+          rut: !p.relacion ? captacion.owner_rut ?? null : null,
+        }))
+      const res = await fetch('/api/chile/smartbc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: captacion.id, contactos }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        const accion = data.data.action === 'created' ? 'creada en el CRM' : 'actualizada en el CRM'
+        setEnvio({
+          ok: true,
+          msg: `${accion} · ${data.data.contactos_enviados} contacto(s) enviados`,
+          url: data.data.admin_url,
+        })
+      } else {
+        // El motivo exacto importa: "arregla el dato" (validation_error) no es
+        // lo mismo que "vuelve a intentarlo" (rate_limited, 503).
+        const detalle = Array.isArray(data.details) && data.details.length
+          ? ` (${data.details.map((d: { field: string; message: string }) => `${d.field}: ${d.message}`).join(' · ')})`
+          : ''
+        setEnvio({ ok: false, msg: `${data.error}${detalle}` })
+      }
+    } catch {
+      setEnvio({ ok: false, msg: 'Error de red al enviar al CRM' })
+    } finally {
+      setEnviando(false)
+    }
+  }, [phones, seleccion, captacion.id, captacion.owner_rut])
+
+  const nSeleccionados = Object.keys(seleccion).length
+
   // Reanudar manualmente desde la lista: el rol ya está pero falta el dueño.
   const canRunTgr = Boolean(captacion.sii_rol) && !captacion.owner_name && !tgrRunning
   const canRunDealernet = Boolean(captacion.owner_name) && captacion.dealernet_status !== 'ok' && !dnRunning
@@ -586,8 +669,44 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
                     }}
                     copied={copiedPhoneKey === `phone-${i}`}
                     onCopy={() => copyPhone(`phone-${i}`, p.numero)}
+                    selected={Boolean(seleccion[p.numero])}
+                    onToggleSelect={() => toggleTelefono(p.numero, p.relacion)}
+                    name={seleccion[p.numero]?.name}
+                    onNameChange={(v) => setSeleccion((prev) => ({ ...prev, [p.numero]: { name: v } }))}
                   />
                 ))}
+              </div>
+
+              {/* Envío al CRM. El botón manda la ficha completa —con dueño,
+                  dirección real del SII, avisos de corredoras y fotos— y solo
+                  los teléfonos marcados. La selección se guarda con el envío,
+                  así que la sincronización automática posterior no vuelve a
+                  meter los que se descartaron aquí. */}
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--c-border-strong)] mt-2">
+                <button
+                  onClick={enviarASmart}
+                  disabled={enviando || nSeleccionados === 0}
+                  title={nSeleccionados === 0
+                    ? 'Marca al menos un teléfono para enviar'
+                    : `Enviar la ficha al CRM con ${nSeleccionados} teléfono(s)`}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {enviando ? 'Enviando…' : `Agregar a Smart (${nSeleccionados})`}
+                </button>
+                {captacion.smartbc_contactos_at && (
+                  <span className="text-[10px] text-slate-500">
+                    selección guardada {new Date(captacion.smartbc_contactos_at).toLocaleDateString('es-CL')}
+                  </span>
+                )}
+                {envio && (
+                  <span className={`text-[11px] ${envio.ok ? 'text-emerald-400' : 'text-rose-300'}`}>
+                    {envio.ok ? '✓ ' : '✗ '}{envio.msg}
+                    {envio.url && (
+                      <a href={envio.url} target="_blank" rel="noopener noreferrer"
+                        className="ml-1.5 underline hover:text-emerald-300">ver ficha</a>
+                    )}
+                  </span>
+                )}
               </div>
             </div>
           )}

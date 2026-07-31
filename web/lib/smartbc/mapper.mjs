@@ -22,7 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash } from 'node:crypto'
-import { PASSTHROUGH } from './smartbc-catalogo-cl.mjs'
+import { PASSTHROUGH } from './catalogo.mjs'
 
 /**
  * "Confirmada" NO significa lo mismo en los dos sistemas y confundirlo corrompe
@@ -191,7 +191,15 @@ export function sortPhones(phones) {
  * así que se cuenta en metadata y no se envía. El cruce teléfono↔persona se hace
  * por el parentesco, que es lo único que comparten ambas estructuras.
  */
-export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails, relacionados }) {
+export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails, relacionados, seleccion }) {
+  // Si alguien del equipo eligió a mano qué teléfonos van, manda esa decisión y
+  // solo esa. Es lo contrario de "completar con lo que haya": los números que
+  // DealerNet descubra después NO se cuelan solos en la ficha del CRM, esperan
+  // a que alguien los apruebe. Quien mira la ficha sabe cuál de los 12 números
+  // es el del dueño; el volcado automático, no.
+  if (Array.isArray(seleccion) && seleccion.length) {
+    return buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion })
+  }
   const sorted = sortPhones(phones.filter((p) => p?.numero))
   // Los teléfonos SIN parentesco son del titular; los que traen `relacion`
   // pertenecen a esa persona relacionada (así los clasifica DealerNet).
@@ -250,6 +258,66 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
     })
   }
   return contacts
+}
+
+/**
+ * Contactos a partir de la selección manual del equipo.
+ *
+ * Cada entrada elegida trae su teléfono Y el nombre con el que debe viajar: el
+ * certificado TGR devuelve el nombre legal del titular, que no siempre es con el
+ * que la persona se presenta, y DealerNet solo da el parentesco del relacionado
+ * ("Cuñada (Por Conyuge)") sin decir cuál de los 23 nombres es. Esa
+ * correspondencia la resuelve quien mira la ficha, y viaja tal cual.
+ *
+ * Se agrupan por persona: varios teléfonos de un mismo contacto van como
+ * `extra_phones` suyos, no como contactos repetidos.
+ */
+function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion }) {
+  const porPersona = new Map()
+  for (const sel of seleccion) {
+    if (!sel?.phone) continue
+    const esTitular = sel.is_owner === true || sel.contact_type === 'owner'
+    // Clave de agrupación: el RUT si lo hay, si no el nombre, y si tampoco,
+    // el propio teléfono (un número suelto es su propio contacto).
+    const clave = esTitular
+      ? 'owner'
+      : (sel.rut ?? sel.name ?? sel.phone).toString().toLowerCase().trim()
+    if (!porPersona.has(clave)) porPersona.set(clave, { esTitular, sel, telefonos: [] })
+    porPersona.get(clave).telefonos.push(sel)
+  }
+
+  const contacts = []
+  // El titular primero: es a quien se llama, y `owner.phone` sale de aquí.
+  const orden = [...porPersona.entries()].sort(([a], [b]) => (a === 'owner' ? -1 : b === 'owner' ? 1 : 0))
+
+  for (const [clave, grupo] of orden) {
+    if (contacts.length >= LIMITS.contacts) break
+    const [principal, ...extras] = grupo.telefonos
+    const esTitular = grupo.esTitular
+    contacts.push({
+      external_id: `${externalIdFor(captacionId)}-${esTitular ? 'owner' : `sel-${slugClave(clave)}`}`,
+      contact_type: esTitular ? 'owner' : (principal.contact_type ?? mapContactType(principal.relationship)),
+      contact_name: trunc(principal.name ?? (esTitular ? ownerName : null), 200),
+      phone: trunc(principal.phone, LIMITS.phone),
+      email: esTitular ? (emails[0]?.email ?? null) : null,
+      has_whatsapp: principal.has_whatsapp ?? null,
+      relationship: esTitular ? null : trunc(principal.relationship, LIMITS.relationship),
+      rut: trunc(principal.rut ?? (esTitular ? ownerRut : null), LIMITS.rut),
+      extra_phones: extras.length
+        ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
+            phone: trunc(p.phone, LIMITS.phone),
+            has_whatsapp: p.has_whatsapp ?? null,
+            label: trunc(p.label ?? p.relationship, 80),
+          }))
+        : null,
+    })
+  }
+  return contacts
+}
+
+function slugClave(clave) {
+  return String(clave).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'x'
 }
 
 /**
@@ -476,6 +544,7 @@ export function buildCaptacionPayload(bundle, {
     ownerName: cap.owner_name,
     ownerRut: cap.owner_rut,
     phones, emails, relacionados,
+    seleccion: asArray(cap.smartbc_contactos),
   })
   const photoItems = buildPhotos({ photos, storedPhotos, selectedPhotoUrls: selected })
 
