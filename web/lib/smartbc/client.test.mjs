@@ -11,7 +11,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { SmartbcClient, SmartbcError, parseRetryAfter, backoffMs } from './smartbc-client.mjs'
+import { SmartbcClient, SmartbcError, parseRetryAfter, backoffMs } from './client.mjs'
 
 function res(status, body, headers = {}) {
   return {

@@ -16,7 +16,7 @@ import {
   fold,
   regionVariants,
   reportarFaltantes,
-} from './smartbc-catalogo-cl.mjs'
+} from './catalogo.mjs'
 
 // Forma del catálogo tal como lo devuelve la API tras el arreglo del equipo:
 // las comunas traen `region` y `region_code`.

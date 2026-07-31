@@ -24,8 +24,8 @@
 // La clave va en la variable de entorno SMARTBC_API_KEY. Nunca en el repo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { clientFromEnv } from './lib/smartbc-client.mjs'
-import { syncOnce } from './lib/smartbc-sync-cl.mjs'
+import { clientFromEnv } from '../web/lib/smartbc/client.mjs'
+import { syncOnce } from '../web/lib/smartbc/sync.mjs'
 
 function parseArgs(argv) {
   const args = { dryRun: false, limit: 100, stage: 'assigned', includeNotes: true, ping: false }

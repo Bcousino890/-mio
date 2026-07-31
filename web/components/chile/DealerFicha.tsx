@@ -159,9 +159,49 @@ export interface PhoneRowData {
 // Reutilizada tal cual (misma foto/relación directa/badges) por la ficha de
 // Captación, que antes mostraba los números como una simple grilla de píldoras
 // sin foto ni relación con el titular.
-export function PhoneRow({ phone: p, copied, onCopy }: { phone: PhoneRowData; copied: boolean; onCopy: () => void }) {
+/**
+ * Fila de teléfono. La selección (`selected` / `onToggleSelect`) es OPCIONAL: la
+ * ficha Dealer la usa solo para leer y copiar, mientras que la de Captación la
+ * usa para elegir qué números viajan al CRM. Sin esas props la fila se comporta
+ * exactamente igual que antes.
+ *
+ * El nombre es editable cuando la fila está seleccionada porque es el dato que
+ * DealerNet no da: de un teléfono solo se sabe el parentesco ("Cuñada (Por
+ * Conyuge)"), no a cuál de los 23 relacionados corresponde. Eso lo resuelve
+ * quien mira la ficha, y es lo que acaba viendo quien llama desde el CRM.
+ */
+export function PhoneRow({
+  phone: p, copied, onCopy, selected, onToggleSelect, name, onNameChange,
+}: {
+  phone: PhoneRowData
+  copied: boolean
+  onCopy: () => void
+  selected?: boolean
+  onToggleSelect?: () => void
+  name?: string
+  onNameChange?: (v: string) => void
+}) {
+  const seleccionable = typeof onToggleSelect === 'function'
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-[var(--c-border-strong)] bg-[var(--c-hover)] px-2 py-1.5">
+    <div className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
+      seleccionable && selected
+        ? 'border-emerald-600/70 bg-emerald-950/20'
+        : 'border-[var(--c-border-strong)] bg-[var(--c-hover)]'
+    }`}>
+      {seleccionable && (
+        <button
+          onClick={onToggleSelect}
+          title={selected ? 'Quitar del envío al CRM' : 'Incluir en el envío al CRM'}
+          aria-pressed={selected}
+          className={`shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+            selected
+              ? 'bg-emerald-600 border-emerald-600 text-white'
+              : 'border-slate-600 text-transparent hover:border-emerald-500'
+          }`}
+        >
+          <Check size={12} />
+        </button>
+      )}
       <PhoneAvatar idimagen={p.idimagen} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -190,6 +230,14 @@ export function PhoneRow({ phone: p, copied, onCopy }: { phone: PhoneRowData; co
           <p className="text-[10px] text-amber-400/90 truncate">
             {/^relaci/i.test(p.relacion) ? p.relacion : `Relación directa con ${p.relacion}`}
           </p>
+        )}
+        {seleccionable && selected && onNameChange && (
+          <input
+            value={name ?? ''}
+            onChange={(e) => onNameChange(e.target.value)}
+            placeholder="Nombre con el que viaja al CRM"
+            className="mt-1 w-full bg-slate-900/60 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-100 placeholder:text-slate-600 focus:border-emerald-600 focus:outline-none"
+          />
         )}
       </div>
       <CopyButton copied={copied} onClick={onCopy} title="Copiar número" />

@@ -31,13 +31,13 @@ import {
   externalIdFor,
   isEmptyPatch,
   payloadHash,
-} from './smartbc-mapper.mjs'
+} from './mapper.mjs'
 import {
   PASSTHROUGH,
   buildNormalizer,
   fetchCatalogo,
   reportarFaltantes,
-} from './smartbc-catalogo-cl.mjs'
+} from './catalogo.mjs'
 
 export const BATCH_SIZE = 100   // tope de SmartBC por llamada a /batch
 

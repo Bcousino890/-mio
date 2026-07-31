@@ -14,9 +14,9 @@ import {
   loadListings,
   planItem,
   syncOnce,
-} from './smartbc-sync-cl.mjs'
-import { buildCaptacionPayload, externalIdFor, payloadHash } from './smartbc-mapper.mjs'
-import { PASSTHROUGH } from './smartbc-catalogo-cl.mjs'
+} from './sync.mjs'
+import { buildCaptacionPayload, externalIdFor, payloadHash } from './mapper.mjs'
+import { PASSTHROUGH } from './catalogo.mjs'
 
 const CAP_ID = '11111111-1111-1111-1111-111111111111'
 const PROP_ID = 'pppppppp-0000-0000-0000-000000000001'

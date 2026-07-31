@@ -29,7 +29,8 @@ import {
   pickPrice,
   publicationNumber,
   sortPhones,
-} from './smartbc-mapper.mjs'
+  splitRelaciones,
+} from './mapper.mjs'
 
 // Campos admitidos por el schema `Captacion` del OpenAPI de SmartBC. El schema
 // es additionalProperties:false, así que cualquier clave fuera de esta lista es
@@ -266,6 +267,135 @@ test('con decenas de relacionados no se supera el tope de 20 contactos', () => {
     captacionId: CAP_ID, ownerName: 'X', ownerRut: null, phones, emails: [], relacionados,
   })
   assert.equal(contacts.length, 20)
+})
+
+// ─── Parentescos múltiples ───────────────────────────────────────────────────
+
+test('un teléfono compartido lista todas sus relaciones, en orden', () => {
+  // Caso real de una ficha de Las Condes: un número que usan tres personas.
+  assert.deepEqual(splitRelaciones('Conyuge, Hija, Suegra'), ['Conyuge', 'Hija', 'Suegra'])
+  assert.deepEqual(splitRelaciones('Cuñada (Por Conyuge)'), ['Cuñada (Por Conyuge)'])
+  assert.deepEqual(splitRelaciones('Relación directa con Padre, Madre'), ['Padre', 'Madre'])
+  assert.deepEqual(splitRelaciones(null), [])
+})
+
+test('un relacionado reclama el teléfono aunque lo comparta con otros', () => {
+  // Antes se comparaba la cadena entera: "Conyuge, Hija, Suegra" nunca casaba
+  // con "Conyuge" y el cónyuge se quedaba sin contacto pese a tener número.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56912345678', categoria: 'probable', calidad: 9 },
+      { numero: '+56995423111', categoria: 'probable', calidad: 8, relacion: 'Conyuge, Hija, Suegra' },
+    ],
+    emails: [],
+    relacionados: [
+      { rut: '9876543', dv: '2', nombre: 'Juan Soto', relacion: 'Conyuge' },
+      { rut: '5555555', dv: '5', nombre: 'Ana Soto', relacion: 'Hija' },
+    ],
+  })
+  const nombres = contacts.map((c) => c.contact_name)
+  assert.ok(nombres.includes('Juan Soto'), 'el cónyuge entra con su nombre')
+  assert.ok(nombres.includes('Ana Soto'), 'y la hija también, del mismo número')
+})
+
+// ─── Selección manual de contactos ───────────────────────────────────────────
+
+test('con selección manual viajan SOLO los teléfonos elegidos', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: CAPTACION.relacionados,
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+  })
+  assert.equal(contacts.length, 1, 'los otros 2 teléfonos no viajan')
+  assert.equal(contacts[0].phone, '+56912345678')
+  assert.equal(contacts[0].contact_type, 'owner')
+  assert.equal(contacts[0].rut, '12345678-9')
+})
+
+test('el nombre elegido a mano gana al que devuelve TGR', () => {
+  // TGR da el nombre legal; el equipo pone el que la persona usa de verdad.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'MARIA DEL CARMEN PEREZ SOTO',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: [],
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+  })
+  assert.equal(contacts[0].contact_name, 'María Pérez')
+})
+
+test('varios teléfonos de la misma persona se agrupan, no se repite el contacto', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: [],
+    seleccion: [
+      { phone: '+56912345678', name: 'María Pérez', is_owner: true, has_whatsapp: true },
+      { phone: '+56987654321', name: 'María Pérez', is_owner: true, label: 'Oficina' },
+    ],
+  })
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].phone, '+56912345678')
+  assert.deepEqual(contacts[0].extra_phones.map((p) => p.phone), ['+56987654321'])
+})
+
+test('un relacionado elegido viaja con su nombre y su parentesco', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: CAPTACION.relacionados,
+    seleccion: [
+      { phone: '+56912345678', name: 'María Pérez', is_owner: true },
+      { phone: '+56911112222', name: 'Juan Soto', relationship: 'Cónyuge', rut: '9876543-2' },
+    ],
+  })
+  assert.equal(contacts.length, 2)
+  assert.equal(contacts[1].contact_name, 'Juan Soto')
+  assert.equal(contacts[1].contact_type, 'spouse', 'deducido del parentesco')
+  assert.equal(contacts[1].relationship, 'Cónyuge')
+  assert.equal(contacts[1].rut, '9876543-2')
+})
+
+test('sin selección se mantiene el comportamiento automático de siempre', () => {
+  const auto = buildContacts({
+    captacionId: CAP_ID, ownerName: 'María Pérez', ownerRut: '12345678-9',
+    phones: CAPTACION.phones, emails: [], relacionados: CAPTACION.relacionados,
+  })
+  const conNull = buildContacts({
+    captacionId: CAP_ID, ownerName: 'María Pérez', ownerRut: '12345678-9',
+    phones: CAPTACION.phones, emails: [], relacionados: CAPTACION.relacionados,
+    seleccion: null,
+  })
+  assert.deepEqual(conNull, auto)
+  assert.equal(auto.length, 2, 'titular + cónyuge, como antes')
+})
+
+test('la selección guardada en la captación llega al payload', () => {
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    captacion: {
+      ...CAPTACION,
+      smartbc_contactos: [{ phone: '+56987654321', name: 'Solo este', is_owner: true }],
+    },
+  })
+  assert.equal(payload.contacts.length, 1)
+  assert.equal(payload.contacts[0].phone, '+56987654321')
+  assert.equal(payload.owner.phone, '+56987654321', 'owner.phone sale del contacto elegido')
 })
 
 // ─── Fotos ───────────────────────────────────────────────────────────────────
