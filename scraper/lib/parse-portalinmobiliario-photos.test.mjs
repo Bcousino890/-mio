@@ -169,3 +169,21 @@ test('aMaximaResolucion no toca lo que no es una foto de Mercado Libre', async (
   );
   assert.equal(aMaximaResolucion(null), '');
 });
+
+test('m²: el spec destacado abrevia los miles, se usa el valor escrito completo', async () => {
+  // Verificado en el blob real de MLC-4029240828, que trae las dos formas:
+  //   "1.505 m² totales"  ← el valor de verdad
+  //   "1,5 m²"            ← el mismo dato, abreviado
+  // Al caer al destacado, toSqm("1,5") descartaba los decimales y guardaba 1 m².
+  // Así había 14 casas de 1 m² en producción.
+  const blob = { appProps: { pageProps: { initialState: {
+    track: { melidata_event: { event_data: { domain_id: 'MLC-INDIVIDUAL_HOUSES_FOR_SALE' } } },
+    components: {
+      header: { title: 'Casa' },
+      highlighted_specs_res: { attributes: [{ icon: { id: 'SCALE_UP' }, label: { text: '1,5 m²' } }] },
+    },
+  } } } };
+  const html = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r=${JSON.stringify(blob)};self.x=1</script></head><body><p>1.505 m² totales</p></body></html>`;
+  const p = await parseDetailPage(html, 'MLC-200', { fetchGallery: async () => [], fetchGalleryById: async () => [] });
+  assert.equal(p.square_meters, 1505);
+});
