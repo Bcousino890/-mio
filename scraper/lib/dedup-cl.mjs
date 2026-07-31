@@ -24,6 +24,20 @@
 // llamar tanto para el backfill único de Fase 1 (ver scraper/backfill-anuncios-cl.mjs)
 // como periódicamente desde worker-cl.mjs (jobs `dedup-cluster`/`broker-enrich`,
 // Fase 2) sobre lo que vaya entrando nuevo.
+//
+// ⚠ consolidateFields + refreshPropertyClAggregates ESTÁN DUPLICADAS en
+// web/lib/dedup-cl.ts (el scraping puntual on-demand las necesita desde Next).
+// Si tocas una, toca la otra.
+//
+// No se pueden unificar importando de ../../web/lib/: este worker se construye
+// con `context: ../scraper` y `COPY lib ./lib` (infra/docker-compose.yml +
+// scraper/Dockerfile), así que `web/` no existe en su contexto de build y el
+// import reventaría al arrancar en producción. (web/lib/smartbc/ sí se comparte
+// porque lo importa scraper/sync-smartbc-cl.mjs, un CLI que corre desde el
+// checkout del VPS, no desde este contenedor.)
+//
+// El riesgo de que las copias se separen en silencio lo cubre
+// web/lib/__tests__/dedup-cl-paridad.test.ts: compara las dos y falla si divergen.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Ranking de confianza para ELEGIR qué listing aporta las coordenadas/atributos

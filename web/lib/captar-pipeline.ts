@@ -983,7 +983,11 @@ export async function findRolAtPoint(lat: number, lng: number): Promise<RolAtPoi
      LIMIT 1`,
     [lng, lat],
   )
-  return (rows[0] as RolAtPoint) ?? null
+  const parcel = rows[0] as RolAtPoint | undefined
+  // El catastro gráfico guarda el rol con ceros a la izquierda; la base entera
+  // habla el formato de sii_roles_cl (ver migración 0093). Se normaliza aquí,
+  // en la frontera, para que ningún camino vuelva a meter el otro formato.
+  return parcel ? { ...parcel, rol: normalizeClRol(parcel.rol) } : null
 }
 
 export interface ResolvedRol {
@@ -1019,7 +1023,11 @@ export async function resolveRolAtPoint(lat: number, lng: number): Promise<Resol
 
   const sii = await lookupSiiRol(parcel.sii_comuna_code, parcel.rol)
   return {
-    rol: parcel.rol,
+    // Manda el rol del catastro SII (ya normalizado); si esa comuna todavía no
+    // está cargada, el de la parcela normalizado aquí. Un solo formato en toda
+    // la base — ver migración 0093 y por qué importa: la caché de certificados
+    // TGR, el enlace ficha↔captación y la dirección exacta se comparan literal.
+    rol: sii?.rol ?? normalizeClRol(parcel.rol),
     comuna_name: parcel.comuna_name,
     sii_comuna_code: parcel.sii_comuna_code,
     parcel_id: parcel.parcel_id,
