@@ -784,9 +784,24 @@ export async function parseDetailPage(html, external_id, deps = {}) {
     // "Superficie total" de una casa es la construida (todas las plantas), que es
     // el titular que muestra el portal ("232 m² totales"); "Superficie útil" es la
     // usable. Preferimos la tabla rayada (tipada) y caemos al spec destacado.
+    // Último recurso ANTES del spec destacado: el valor completo tal cual
+    // aparece escrito en la ficha ("1.505 m² totales").
+    //
+    // El spec destacado ABREVIA los miles. Verificado en el blob real de
+    // MLC-4029240828, que trae las dos formas a la vez:
+    //     "1.505 m² totales"   ← el valor de verdad
+    //     "1,5 m²"             ← el mismo dato, abreviado
+    // Cuando la tabla rayada no da nada y se cae al destacado, `toSqm("1,5")`
+    // descarta los decimales y guarda **1 m²**. Así había 14 casas de 1 m² en
+    // producción; MLC-2076882447 es otra ("1.584 m² totales" → "1,58 m²" → 1).
+    // Se toma la primera coincidencia: la ficha principal va antes que los
+    // carruseles de recomendados.
+    const sqmEscritoM = html.match(/([\d.]+(?:,\d+)?)\s*m²\s*(?:totales|[úu]tiles|construidos)/i)
+    const sqmEscrito = sqmEscritoM ? toSqm(sqmEscritoM[1]) : null
+
     const sqm_terreno = sqmTerreno ?? sqmHighlightedTerreno ?? null
-    const sqm_construida = sqmConstruida ?? sqmTotal ?? sqmUtil ?? sqmHighlightedBuilt ?? null
-    const square_meters = sqmTotal ?? sqmConstruida ?? sqmUtil ?? sqmHighlightedBuilt ?? null
+    const sqm_construida = sqmConstruida ?? sqmTotal ?? sqmUtil ?? sqmEscrito ?? sqmHighlightedBuilt ?? null
+    const square_meters = sqmTotal ?? sqmConstruida ?? sqmUtil ?? sqmEscrito ?? sqmHighlightedBuilt ?? null
 
     return {
       external_id,
