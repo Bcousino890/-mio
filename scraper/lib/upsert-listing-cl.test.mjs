@@ -226,3 +226,47 @@ test('CLP y UF siguen pasando intactas', async () => {
   assert.equal(uf.inserted.params[9], 12_000); // $10 price_uf
   assert.equal(uf.inserted.params[8], 480_000_000); // $9 price = 12.000 × 40.000
 });
+
+// ─── una respuesta parcial del portal no puede borrar fotos ──────────────────
+
+test('un re-scrapeo que trae MENOS fotos no pisa las que ya había', async () => {
+  // Verificado en vivo sobre MLC-4014327318: teníamos 14 fotos guardadas y tres
+  // peticiones seguidas al modal de galería devolvieron 9. No es un error: es
+  // un 200 con menos fotos. Con `photos = EXCLUDED.photos` sin condiciones, el
+  // siguiente re-scrapeo habría dejado la ficha en 9 para siempre — y con la
+  // rotación pasando por todo el catálogo, le tocaría a cualquiera.
+  const guardadas = Array.from({ length: 14 }, (_, i) => `https://http2.mlstatic.com/D_NQ_NP_00001${i}-MLC90000${i}-F.webp`);
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: guardadas, description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  const parciales = guardadas.slice(0, 9);
+  const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, photos: parciales, photos_total_count: 29 });
+
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 14); // $25 = photos
+  assert.notEqual(changeType, 'updated'); // tampoco se registra un cambio que no hubo
+});
+
+test('si el vendedor borra fotos de verdad, el set nuevo SÍ entra', async () => {
+  // El portal declara ahora 2 y el scrapeo trae 2: encoge, pero está completo.
+  // Quedarse con las 5 viejas sería conservar URLs muertas.
+  const guardadas = Array.from({ length: 5 }, (_, i) => `https://http2.mlstatic.com/D_NQ_NP_00002${i}-MLC91000${i}-F.webp`);
+  const client = makeClient({
+    existing: {
+      id: 'listing-1', price: 500_000_000, price_uf: null, currency: 'CLP',
+      advertiser_name: 'Test Corredora', photos: guardadas, description: 'desc',
+      square_meters: 100, bedrooms: 3, bathrooms: 2, status: 'active', is_active: true, has_video: false,
+    },
+  });
+  await upsertListingCl(client, { ...BASE_PARSED, photos: guardadas.slice(0, 2), photos_total_count: 2 });
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 2);
+});
+
+test('una ficha nueva guarda lo que traiga, sin nada con qué comparar', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 3 });
+  assert.equal(JSON.parse(client.inserted.params[24]).length, 3);
+});
