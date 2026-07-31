@@ -16,7 +16,7 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 | Sincronizador (consulta, lotes, diffs, log) | `scraper/lib/smartbc-sync-cl.mjs` |
 | CLI | `scraper/sync-smartbc-cl.mjs` |
 | Log de sincronización | `db/migrations/0091_smartbc_sync_cl.sql` |
-| Tests (91, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,catalogo-cl,sync-cl}.test.mjs` |
+| Tests (93, sin red ni BD) | `scraper/lib/smartbc-{client,mapper,catalogo-cl,sync-cl}.test.mjs` |
 
 ---
 
@@ -29,9 +29,9 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 | `GET /api/v1/catalogos?tipo=enums` | Las 7 listas cerradas, idénticas a la documentación |
 | `GET /api/v1/catalogos?tipo=pipelines` | Pipeline `Captaciones` (default) con 9 etapas: `draft`, `preliminary_data`, `assigned` ("Para llamar"), `contacting`, `field_visit`, `revision`, `confirmed`, `converted_to_property`, `rejected` |
 | `GET /api/v1/catalogos?tipo=usuarios` | 7 usuarios del equipo |
-| `GET /api/v1/catalogos?tipo=regiones` | ⏳ pendiente de propagación (ver abajo) |
-| `GET /api/v1/catalogos?tipo=comunas` | ⏳ ídem |
-| `GET /api/v1/catalogos?tipo=zonas` | ⏳ ídem |
+| `GET /api/v1/catalogos?tipo=regiones` | **16** ✅ |
+| `GET /api/v1/catalogos?tipo=comunas` | **346** ✅ (52 en Metropolitana) |
+| `GET /api/v1/catalogos?tipo=zonas&comuna=Las Condes` | **7** ✅ |
 
 > **Reportado y arreglado por SmartBC.** Los tres catálogos geográficos devolvían
 > `[]`: sus tablas maestras estaban vacías porque el seed original abortaba por dos
@@ -40,9 +40,10 @@ todavía contra la base de datos de producción** (esta sesión no tiene acceso 
 > un error explícito. El filtro `?region=` ahora acepta nombre o código (`RM`), sin
 > distinguir tildes ni mayúsculas, y cada comuna trae `region_code`.
 >
-> El arreglo llevaba migración, así que a las 19:08 UTC todavía devolvía `[]` — su
-> despliegue automático más 10 minutos de caché del maestro geográfico. **Antes de
-> la primera corrida real hay que comprobar que `?tipo=regiones` devuelve 16.**
+> El arreglo tardó ~35 min en propagarse (migración + despliegue + 10 min de caché):
+> a las 19:35 UTC seguía en `[]` y a las 19:37 ya devolvía las 16 regiones.
+> Verificado de punta a punta: una captación enviada con nuestra nomenclatura llega
+> a su ficha con `commune: "Las Condes"` y `region: "Metropolitana"`.
 >
 > `scraper/lib/smartbc-catalogo-cl.mjs` traduce nuestra nomenclatura a la suya
 > ("Región Metropolitana de Santiago" → "Metropolitana", "nunoa" → "Ñuñoa") sobre
@@ -322,25 +323,53 @@ SMARTBC_API_KEY=sbc_live_… node scraper/sync-smartbc-cl.mjs --limit 100
 
 ---
 
-## 9. Qué falta por verificar
+## 9. Hallazgo abierto: un `PATCH` parcial pisa `source_site`
 
-Los tests (68) cubren cliente, mapeo y orquestación sin red ni BD, y el payload
-completo se validó **en dry-run contra la API real**: `warnings: []`, 32 campos
-mapeados, 2 contactos, 2 fotos y el aviso de la corredora con su
-`broker_price` plegado desde la web propia.
+Detectado en la prueba de contrato con escrituras reales. Un `PATCH` que no
+incluya `source_site` **lo sobrescribe** con el slug de la integración:
 
-Lo que **no** se ha podido comprobar en esta sesión, porque exige escrituras
-reales en el CRM de producción del equipo (y esta sesión no tiene `DATABASE_URL`):
+```
+PATCH /api/v1/captaciones/<ext>   {"price": 460000000}
+→ 200 · changed_fields: ["price", "source_site"]
+   source_site: "portalinmobiliario"  →  "crm-chile"
+```
+
+Se diffearon las dos fichas completas antes y después de ese `PATCH` mínimo: los
+únicos campos tocados fueron `price` (esperado), los timestamps, y `source_site`.
+Está aislado a ese campo.
+
+Por qué importa: rompe la premisa de "manda solo lo que cambia". Cada corrección
+de precio borraría de qué portal salió el aviso, y como el sincronizador está
+pensado para vivir años empujando cambios de precio, la procedencia de todas las
+fichas acabaría diciendo `crm-chile`.
+
+**Mitigación en nuestro lado**: `diffPayload()` incluye `source_site` en todo
+`PATCH`, cambie o no (y `isEmptyPatch()` lo ignora al decidir si hay algo que
+enviar, para que no parezca que todo cambió siempre). Verificado en vivo: con el
+escudo, `source_site` se conserva.
+
+**Pendiente de reportar a SmartBC** — el arreglo bueno es suyo: un `PATCH` no
+debería aplicar el valor por defecto de un campo que no viene en el cuerpo.
+
+---
+
+## 10. Qué falta por verificar
+
+Los 93 tests cubren cliente, mapeo, catálogo y orquestación sin red ni BD. Además
+se corrió una **prueba de contrato con escrituras reales** contra el CRM
+(`external_id: mio-test-contrato-20260731`, archivada al terminar):
 
 | Criterio de aceptación | Estado |
 |---|---|
-| 1. `ping` responde 200 | ✅ verificado |
-| 2. Alta con todas sus secciones | ✅ verificado en dry-run (salvo `attempts`, que no se envía — §5) |
-| 3. Reenviar sin cambios → `unchanged` | ⏳ el dry-run siempre responde `created`; hace falta una escritura real |
-| 4. Cambio de precio → `changed_fields: ["price"]` | ⏳ ídem (el diff sí está cubierto por tests) |
-| 5. Misma `Idempotency-Key` no duplica | ⏳ ídem |
-| 6. Lote de 100 con uno malo | ✅ verificado en dry-run, con la corrección de §7 |
-| 7. El log refleja lo ocurrido | ⏳ requiere BD |
+| 1. `ping` responde 200 | ✅ |
+| 2. Alta con todas sus secciones | ✅ `201 created`, `warnings: []`, 1 contacto · 2 fotos · 1 aviso con su snapshot de precio (salvo `attempts`, que no se envía — §5) |
+| 3. Reenviar sin cambios → `unchanged` | ⚠️ **SmartBC no devuelve `unchanged`**: responde `updated` con `changed_fields: []`. No escribe nada, así que el efecto es el correcto, pero el `action` no distingue. El sincronizador cuenta por `changed_fields`, no por `action`, para que el resumen no infle las actualizaciones |
+| 4. Cambio de precio → `changed_fields: ["price"]` | ✅ el diff calculado fue `{external_id, price}` y la API confirmó el cambio — con el escudo de `source_site` de §9 |
+| 5. Misma `Idempotency-Key` no duplica | ✅ la 2ª llamada devolvió `X-Idempotent-Replay: true` y **el mismo `request_id`** |
+| 6. Lote de 100 con uno malo | ✅ `200` con `summary {total:3, created:2, failed:1}` |
+| 7. El log refleja lo ocurrido | ⏳ requiere `DATABASE_URL` |
 
-El primer paso en un entorno con `DATABASE_URL` es correr `--dry-run` contra
-datos reales y revisar que ninguna respuesta traiga `warnings`.
+Lo único que sigue sin comprobarse es el punto 7 y la corrida contra captaciones
+reales, porque exigen conexión a la base de datos. El primer paso en un entorno
+con `DATABASE_URL` es `--dry-run` y revisar que ninguna respuesta traiga
+`warnings`.

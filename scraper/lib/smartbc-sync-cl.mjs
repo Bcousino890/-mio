@@ -486,9 +486,14 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
         continue
       }
 
+      // SmartBC no devuelve `unchanged`: un reenvío idéntico responde `updated`
+      // con `changed_fields: []` (comprobado en vivo). Se cuenta por lo que de
+      // verdad pasó —no se escribió nada— para que el resumen de la corrida no
+      // infle las actualizaciones.
       const action = r.action ?? plan.action
+      const escrito = (r.changed_fields?.length ?? 0) > 0
       if (action === 'created') summary.created++
-      else if (action === 'updated') summary.updated++
+      else if (action === 'updated' && escrito) summary.updated++
       else summary.unchanged++
 
       if (r.warnings?.length) log(`⚠ ${externalId}: ${r.warnings.join(' · ')}`)

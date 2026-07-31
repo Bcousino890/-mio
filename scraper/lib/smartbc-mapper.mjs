@@ -629,6 +629,16 @@ export function stableStringify(value) {
 export function diffPayload(previous, next) {
   if (!previous) return { ...next }
   const patch = { external_id: next.external_id }
+
+  // `source_site` viaja SIEMPRE, cambie o no. Comprobado en vivo: un PATCH que
+  // no lo incluye lo sobrescribe con el slug de la integración —
+  // "portalinmobiliario" se convierte en "crm-chile"— y se pierde de qué portal
+  // salió el aviso. Es el único campo con ese comportamiento (se diffearon las
+  // dos fichas completas antes y después de un PATCH mínimo: solo cambiaron
+  // price, source_site y los timestamps). Reportado a SmartBC; hasta que lo
+  // arreglen, fijarlo aquí es lo que impide que cada cambio de precio corrompa
+  // la procedencia del anuncio en su CRM.
+  if (next.source_site != null) patch.source_site = next.source_site
   const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
   for (const key of keys) {
     if (key === 'external_id') continue
@@ -642,7 +652,13 @@ export function diffPayload(previous, next) {
   return patch
 }
 
-/** ¿El diff no tiene nada más que el identificador? Entonces no hay que enviar. */
+/**
+ * ¿El diff no tiene nada más que el identificador? Entonces no hay que enviar.
+ *
+ * `source_site` no cuenta: se añade siempre como escudo (ver diffPayload), no
+ * porque haya cambiado. Si contara, cada captación parecería tener cambios
+ * eternamente y el "no mandes lo que no cambió" dejaría de funcionar.
+ */
 export function isEmptyPatch(patch) {
-  return Object.keys(patch).filter((k) => k !== 'external_id').length === 0
+  return Object.keys(patch).filter((k) => k !== 'external_id' && k !== 'source_site').length === 0
 }

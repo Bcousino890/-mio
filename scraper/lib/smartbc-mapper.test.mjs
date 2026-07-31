@@ -491,14 +491,31 @@ test('el mismo bundle produce el mismo hash (detecta "no ha cambiado nada")', ()
   assert.equal(payloadHash(buildCaptacionPayload(BUNDLE)), payloadHash(buildCaptacionPayload(BUNDLE)))
 })
 
-test('cambiar el precio produce un PATCH con SOLO el precio', () => {
+test('cambiar el precio produce un PATCH con SOLO el precio (más el escudo)', () => {
   const antes = buildCaptacionPayload(BUNDLE)
   const despues = buildCaptacionPayload({
     ...BUNDLE, captacion: { ...CAPTACION, price_raw: 470000000 },
   })
   const patch = diffPayload(antes, despues)
-  assert.deepEqual(Object.keys(patch).sort(), ['external_id', 'price'])
+  assert.deepEqual(Object.keys(patch).sort(), ['external_id', 'price', 'source_site'])
   assert.equal(patch.price, 470000000)
+})
+
+test('source_site viaja en todo PATCH: si no, SmartBC lo pisa con su slug', () => {
+  // Comprobado en vivo: un PATCH sin source_site convierte "portalinmobiliario"
+  // en "crm-chile" y se pierde de qué portal salió el aviso.
+  const antes = buildCaptacionPayload(BUNDLE)
+  const despues = buildCaptacionPayload({
+    ...BUNDLE, captacion: { ...CAPTACION, price_raw: 470000000 },
+  })
+  assert.equal(diffPayload(antes, despues).source_site, 'portalinmobiliario')
+})
+
+test('el escudo de source_site no hace que una ficha sin cambios parezca cambiada', () => {
+  const p = buildCaptacionPayload(BUNDLE)
+  const patch = diffPayload(p, buildCaptacionPayload(BUNDLE))
+  assert.equal(patch.source_site, 'portalinmobiliario', 'el escudo está')
+  assert.ok(isEmptyPatch(patch), 'pero no cuenta como cambio')
 })
 
 test('sin cambios el diff queda vacío y no se envía nada', () => {

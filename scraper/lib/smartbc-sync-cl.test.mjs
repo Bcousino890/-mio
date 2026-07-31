@@ -148,7 +148,7 @@ test('reenviar sin cambios no produce petición alguna', () => {
   assert.equal(plan.item, null)
 })
 
-test('cambiar el precio produce un PATCH con solo ese campo', () => {
+test('cambiar el precio produce un PATCH con solo ese campo (más el escudo)', () => {
   const payload = buildCaptacionPayload({
     captacion: CAP,
     comuna: { name: CAP.comuna_name, region: CAP.comuna_region },
@@ -164,7 +164,8 @@ test('cambiar el precio produce un PATCH con solo ese campo', () => {
   }
   const plan = planItem(conNuevoPrecio, [LISTING], {})
   assert.equal(plan.action, 'update')
-  assert.deepEqual(Object.keys(plan.item).sort(), ['external_id', 'price'])
+  // source_site va siempre como escudo: sin él, SmartBC lo pisa con su slug.
+  assert.deepEqual(Object.keys(plan.item).sort(), ['external_id', 'price', 'source_site'])
   assert.equal(plan.item.price, 470000000)
 })
 
