@@ -9,28 +9,48 @@
 // queda registrada pero sin adaptador automático.
 //
 // Señales VERIFICADAS con HTML real (curl directo, ver plan H21):
-//   · Convecta (magnoliaproperty.cl): señal primaria y robusta =
-//     <meta name="author" content="Convecta Desarrollos Informaticos SpA">
-//     en el <head> (no depende de que el footer se renderice). Secundaria:
-//     footer "Desarrollado por Convecta" + link a convecta.cl.
+//   · Convecta (magnoliaproperty.cl, elbarrio.cl, keyproperties.com): señal
+//     primaria = <meta name="author"> con "Convecta … Desarrollos
+//     Informaticos" en el <head> (no depende de que el footer se renderice).
+//     OJO con el separador: magnoliaproperty.cl escribe "Convecta Desarrollos
+//     Informaticos SpA" y elbarrio.cl "Convecta - Desarrollos Informaticos".
+//     El patrón exigía espacios entre las dos palabras y no reconocía la
+//     variante con guion — elbarrio.cl caía al footer, y una instalación sin
+//     footer visible se habría clasificado como 'other'. Secundarias: footer
+//     "Desarrollado por Convecta", link a convecta.cl, y el CDN de imágenes
+//     prop360.cl (el producto sobre el que corre Convecta), que aparece en
+//     todas las fichas aunque el cliente haya personalizado la plantilla.
 //   · Ofinet (bpropiedades.cl, cympropiedades.cl): señal primaria = footer
-//     "Designed by Ofinet". Secundaria: listados en .asp con querystring
-//     select-status= / select-property-type=.
+//     "Designed by Ofinet". Secundaria: la ficha en property.asp?idPro= y el
+//     listado en i_listing.asp con parámetros select-*.
+//   · Konnect (ppartnersgroup.com): plataforma propia de Property Partners.
+//     Señal = su CDN/almacenamiento propio (konnect-cdn / konnectstorage) sobre
+//     una app Next.js. No es un CRM de terceros, pero se clasifica igual para
+//     que el crawler elija su adaptador.
 //
 // Sin dependencias de red: recibe el HTML ya descargado (el caller usa fetch.mjs
 // con el rate-limit suave de H22). Puro y testeable con fixtures.
 // ─────────────────────────────────────────────────────────────────────────────
 import { load } from 'cheerio'
 
-/** @typedef {'convecta'|'ofinet'|'other'} CrmPlatform */
+/** @typedef {'convecta'|'ofinet'|'konnect'|'other'} CrmPlatform */
 
-const AUTHOR_CONVECTA = /convecta\s+desarrollos\s+inform[aá]ticos/i
+// [\s-]+ y no \s+: el separador entre "Convecta" y "Desarrollos" es un espacio
+// en unas instalaciones y un guion en otras.
+const AUTHOR_CONVECTA = /convecta[\s-]+desarrollos[\s-]+inform[aá]ticos/i
 const FOOTER_CONVECTA = /desarrollado\s+por\s+convecta/i
 const LINK_CONVECTA = /convecta\.cl/i
+const CDN_CONVECTA = /prop360\.cl/i
 
 const FOOTER_OFINET = /designed\s+by\s+ofinet/i
-const OFINET_ASP = /\.asp\b[^"'<>]*select-(?:status|property-type)=/i
+// Detectar ≠ scrapear: aquí valen todas las variantes del listado que Ofinet
+// deja en el HTML, incluida i_listing-4-column.asp, que aparece comentada en la
+// plantilla y NO sirve para pedir datos (devuelve 24 bytes) pero sí identifica
+// la plataforma. La ficha property.asp?idPro= es la señal más específica.
+const OFINET_ASP = /(?:property\.asp\?idPro=|i_listing[\w-]*\.asp\b[^"'<>]*select-(?:status|property-type)=)/i
 const LINK_OFINET = /ofinet\.cl/i
+
+const KONNECT_CDN = /konnect-?cdn|konnectstorage/i
 
 /**
  * Detecta la plataforma CRM a partir del HTML de cualquier página de la web
@@ -72,19 +92,30 @@ export function detectCorredoraCrm(html) {
   // ── Ofinet ──────────────────────────────────────────────────────────────
   if (FOOTER_OFINET.test(text)) {
     signals.push('footer:designed-by-ofinet')
-    if (OFINET_ASP.test(html)) signals.push('url:asp-select-params')
+    if (OFINET_ASP.test(html)) signals.push('url:asp-ofinet')
     return { platform: 'ofinet', confidence: 'high', signals }
   }
-  // Sin footer explícito, el patrón de URL de listado es una señal secundaria.
+
+  // ── Konnect ─────────────────────────────────────────────────────────────
+  // No tiene firma de "hecho por": la marca es su propio almacenamiento.
+  if (KONNECT_CDN.test(html)) {
+    signals.push('cdn:konnect')
+    return { platform: 'konnect', confidence: 'high', signals }
+  }
+
+  // Sin firma explícita, el patrón de URL del listado/ficha es secundario.
   if (OFINET_ASP.test(html)) {
-    signals.push('url:asp-select-params')
+    signals.push('url:asp-ofinet')
     if (LINK_OFINET.test(html)) signals.push('link:ofinet.cl')
     return { platform: 'ofinet', confidence: 'low', signals }
   }
 
-  // Señal débil de Convecta como fallback (link sin footer/meta).
-  if (LINK_CONVECTA.test(html)) {
-    signals.push('link:convecta.cl')
+  // Señales débiles de Convecta como fallback (sin footer ni meta): el link al
+  // proveedor, o el CDN de imágenes prop360, que sobrevive a que el cliente
+  // haya reescrito la plantilla entera.
+  if (LINK_CONVECTA.test(html) || CDN_CONVECTA.test(html)) {
+    if (LINK_CONVECTA.test(html)) signals.push('link:convecta.cl')
+    if (CDN_CONVECTA.test(html)) signals.push('cdn:prop360.cl')
     return { platform: 'convecta', confidence: 'low', signals }
   }
 

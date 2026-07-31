@@ -45,9 +45,20 @@ const PI_HEADERS = [
   'Upgrade-Insecure-Requests: 1',
 ]
 
+// Webs propias de corredoras (Convecta, Ofinet, Konnect — plan H21). Son sitios
+// pequeños sin anti-bot: responden al UA de navegador normal. NO usan el truco
+// del UA de WhatsApp, que es específico de DataDome/Idealista y aquí solo
+// serviría para que el sitio devuelva la variante de preview.
+// Se siguen redirects porque varios normalizan www./locale con un 301.
+const CORREDORA_HEADERS = [
+  'Accept: text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+  'Accept-Language: es-CL,es;q=0.9',
+]
+
 const PROFILES = {
   idealista: { ua: WHATSAPP_UA },
   portalinmobiliario: { ua: CHROME_UA, headers: PI_HEADERS, followRedirects: true },
+  corredora: { ua: CHROME_UA, headers: CORREDORA_HEADERS, followRedirects: true },
 }
 const DEFAULT_PROFILE = 'idealista'
 
@@ -97,6 +108,10 @@ function proxyUrl(profile) {
   return null
 }
 
+// Cuerpo mínimo para dar una respuesta por buena. Un HTML de portal por debajo
+// de esto es una página de error o un bloqueo, no contenido.
+const DEFAULT_MIN_LENGTH = 500
+
 /**
  * Descarga el HTML de una URL. Devuelve { ok, html } o
  * { ok: false, status, reason }.
@@ -104,8 +119,22 @@ function proxyUrl(profile) {
  * `profile` selecciona el User-Agent (y futuros ajustes específicos de
  * portal) vía el mapa PROFILES. Por defecto usa 'idealista' (UA de WhatsApp),
  * idéntico al comportamiento histórico de esta función.
+ *
+ * `cookieJar` (ruta de fichero) hace que curl lea Y escriba cookies ahí, de
+ * modo que varias llamadas compartan una sesión. Lo necesita Ofinet: guarda el
+ * filtro de búsqueda en la sesión de ASP y sin la cookie la paginación devuelve
+ * cero fichas (ver crm-adapters/ofinet.mjs). Sin este parámetro curl sigue sin
+ * tocar cookies, como siempre.
+ *
+ * `minLength` baja el umbral de "cuerpo demasiado corto". Las respuestas JSON
+ * legítimas de los listados de corredora —una página vacía al final del
+ * barrido— caben en menos de 500 bytes, y rechazarlas convertía el final normal
+ * del recorrido en un error.
  */
-export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = {}) {
+export function fetchHtml(
+  url,
+  { useProxy = true, profile = DEFAULT_PROFILE, cookieJar = null, minLength = DEFAULT_MIN_LENGTH } = {}
+) {
   const { ua, headers = [], followRedirects = false } = PROFILES[profile] ?? PROFILES[DEFAULT_PROFILE]
   return new Promise((resolve) => {
     const args = [
@@ -119,6 +148,7 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
     // Idealista no define ninguno → se comporta EXACTAMENTE igual que antes.
     if (followRedirects) args.push('-L')
     for (const h of headers) args.push('-H', h)
+    if (cookieJar) args.push('-b', cookieJar, '-c', cookieJar)
     const px = useProxy ? proxyUrl(profile) : null
     if (px) args.push('-x', px)
     args.push(url)
@@ -133,7 +163,7 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
       if (status !== 200) {
         return resolve({ ok: false, status, reason: `HTTP ${status}` })
       }
-      if (!html || html.length < 500) {
+      if (!html || html.length < minLength) {
         return resolve({ ok: false, status, reason: 'HTML vacío/corto' })
       }
       resolve({ ok: true, html })
@@ -185,12 +215,15 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
  * @param {{ useProxy?: boolean, profile?: string, retries?: number, baseBackoffMs?: number, failureThreshold?: number, cooldownMs?: number }} [options]
  */
 export function fetchHtmlResilient(url, options = {}) {
-  const { useProxy, profile, ...resilienceOptions } = options
+  const { useProxy, profile, cookieJar, minLength, ...resilienceOptions } = options
   // Portal Inmobiliario, sin useProxy explícito: directo-primero con fallback a
   // Evomi (fetchHtmlPi). Es lo que hace que el barrido ingrese datos de forma
   // fiable en vez de depender de que el residencial devuelva la variante buena.
   if (profile === 'portalinmobiliario' && useProxy === undefined) {
     return withResilience(fetchHtmlPi, url, { ...resilienceOptions, fetchOpts: { profile } })
   }
-  return withResilience(fetchHtml, url, { ...resilienceOptions, fetchOpts: { useProxy, profile } })
+  return withResilience(fetchHtml, url, {
+    ...resilienceOptions,
+    fetchOpts: { useProxy, profile, cookieJar, minLength },
+  })
 }

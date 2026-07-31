@@ -26,6 +26,8 @@ Responder siempre en español al usuario.
 - `web/app/api/chile/` — API routes for Chile cadastral data
 - `docs/SII-ENRICHMENT-ROADMAP.md` — current enrichment plan
 - `docs/PLAN-ANUNCIOS-CL.md` — plan del módulo "Anuncios": scraping 24/7, dedup y trazabilidad de corredoras (Portal Inmobiliario, Chile)
+- `docs/INVESTIGACION-CORREDORAS-WEB-CL.md` — análisis verificado de las webs propias de corredoras (Ofinet, Convecta, Konnect): endpoints, paginación y trampas de cada plataforma
+- `scraper/lib/crm-adapters/` — un adaptador por plataforma de web de corredora, N dominios cada uno
 - `scraper/lib/sii-catastro-cl.mjs` — parser for official SII CSV files
 
 ## Environment variables

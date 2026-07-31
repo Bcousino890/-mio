@@ -50,7 +50,7 @@ test('Ofinet: footer + URL .asp select-* → suma señal de URL', () => {
     <footer>Designed by Ofinet</footer></body></html>`
   const r = detectCorredoraCrm(html)
   assert.equal(r.platform, 'ofinet')
-  assert.ok(r.signals.includes('url:asp-select-params'))
+  assert.ok(r.signals.includes('url:asp-ofinet'))
 })
 
 test('Ofinet: solo URL .asp select-* sin footer → ofinet low', () => {
@@ -60,6 +60,53 @@ test('Ofinet: solo URL .asp select-* sin footer → ofinet low', () => {
   const r = detectCorredoraCrm(html)
   assert.equal(r.platform, 'ofinet')
   assert.equal(r.confidence, 'low')
+})
+
+test('Ofinet: la ficha property.asp?idPro= también identifica la plataforma', () => {
+  // Es la señal de URL más específica de Ofinet y la que aparece en cualquier
+  // listado, aunque la plantilla haya comentado los enlaces select-*.
+  const html = `<html><body><a href="property.asp?idPro=2747">Ver ficha</a></body></html>`
+  const r = detectCorredoraCrm(html)
+  assert.equal(r.platform, 'ofinet')
+  assert.equal(r.confidence, 'low')
+})
+
+test('Convecta: el meta author con GUION también se reconoce', () => {
+  // magnoliaproperty.cl escribe "Convecta Desarrollos Informaticos SpA" y
+  // elbarrio.cl "Convecta - Desarrollos Informaticos". Exigir espacios entre
+  // las dos palabras dejaba fuera la segunda variante, que quedaba dependiendo
+  // de que el footer se renderizara.
+  const html = `<!doctype html><html><head>
+    <meta name="author" content="Convecta - Desarrollos Informaticos" />
+    </head><body>El Barrio Propiedades</body></html>`
+  const r = detectCorredoraCrm(html)
+  assert.equal(r.platform, 'convecta')
+  assert.equal(r.confidence, 'high')
+  assert.ok(r.signals.includes('meta-author:convecta'))
+})
+
+test('Convecta: el CDN prop360 delata la plataforma sin meta ni footer', () => {
+  // Un cliente puede reescribir la plantilla entera, pero las fotos las sigue
+  // sirviendo el CDN del producto sobre el que corre Convecta.
+  const html = `<html><body>
+    <img src="https://demoazimg.prop360.cl//elbarrio/img/propiedades/12828_a.jpg">
+    </body></html>`
+  const r = detectCorredoraCrm(html)
+  assert.equal(r.platform, 'convecta')
+  assert.equal(r.confidence, 'low')
+  assert.ok(r.signals.includes('cdn:prop360.cl'))
+})
+
+// ── Konnect (Property Partners) ──────────────────────────────────────────────
+
+test('Konnect: el almacenamiento propio identifica la plataforma', () => {
+  const html = `<html><head>
+    <meta property="og:image" content="https://konnect-cdn.ppartnersgroup.com/public/site/imgs/og.png"/>
+    </head><body><script src="/_next/static/chunks/main.js"></script></body></html>`
+  const r = detectCorredoraCrm(html)
+  assert.equal(r.platform, 'konnect')
+  assert.equal(r.confidence, 'high')
+  assert.ok(r.signals.includes('cdn:konnect'))
 })
 
 // ── other / robustez ─────────────────────────────────────────────────────────
