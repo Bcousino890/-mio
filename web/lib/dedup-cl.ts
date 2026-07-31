@@ -3,6 +3,19 @@
 // parse-portalinmobiliario-cl.ts: web/ y scraper/ son proyectos Node
 // separados y el build Docker de web/ no incluye scraper/lib.
 //
+// ⚠ SI TOCAS ALGO AQUÍ, TÓCALO TAMBIÉN EN scraper/lib/dedup-cl.mjs.
+//
+// Y no, no se puede unificar moviendo el módulo a web/lib/ como se hizo con
+// smartbc: el worker 24/7 se construye con `context: ../scraper` y su Dockerfile
+// hace `COPY lib ./lib` (infra/docker-compose.yml + scraper/Dockerfile), así que
+// dentro de ese contexto de build `web/` NO EXISTE y el worker se caería al
+// arrancar. (smartbc sí pudo porque lo importa un CLI que corre desde el
+// checkout del VPS, no desde ese contenedor.)
+//
+// Lo que sí está resuelto es el riesgo real —que una copia se arregle y la otra
+// no, y el bug vuelva en el siguiente barrido—: lib/__tests__/dedup-cl-paridad.test.ts
+// compara las dos y falla si divergen.
+//
 // Solo cubre lo que necesita el scraping puntual on-demand (ver
 // scrape-listing-cl.ts): enlazar/crear el property_cl de UN listing recién
 // insertado, con la MISMA regla que el barrido masivo (mismo advertiser_id Y
