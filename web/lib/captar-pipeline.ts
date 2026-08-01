@@ -15,7 +15,7 @@
 import { pool } from '@/lib/db'
 import { ProxyAgent, type Dispatcher } from 'undici'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
-import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
+import { fetchTodasLasFotos } from '@/lib/fetch-portalinmobiliario-gallery'
 import { normalizeClRol } from '@/lib/rol-format'
 import {
   scoreCandidatesV3,
@@ -524,20 +524,21 @@ export async function extractListing(url: string): Promise<ExtractResult> {
     const html = await fetchListingPage(cleanUrl)
     const detail = parsePortalListingDetail(html)
     if (detail) {
-      // Si hay URL de galería, fetch todas las fotos del modal
-      const allPhotos = detail.photos
-      const fromHtml = allPhotos.length
-      if (detail.gallery_url) {
-        const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
-        if (galleryPhotos.length === 0) galleryError = 'El modal de galería no devolvió fotos (bloqueo del portal)'
-        // Combina fotos del HTML estático con las del modal (deduplicado)
-        const seenPhotos = new Set(allPhotos)
-        for (const photo of galleryPhotos) {
-          if (!seenPhotos.has(photo)) {
-            allPhotos.push(photo)
-            seenPhotos.add(photo)
-          }
-        }
+      // Fotos completas: el blob de la ficha sirve como mucho 5, así que se
+      // piden además el modal que anuncia el blob y —si seguimos cortos— el
+      // modal por item id, con reintento por proxy. Antes solo se pedía el
+      // primero y sin reintento: cualquier bloqueo dejaba la captación con las
+      // 5 del mosaico, que es el "solo scrapea 5 fotos" reportado.
+      const fromHtml = detail.photos.length
+      const externalIdGaleria = cleanUrl.match(/MLC-?\d+/)?.[0] ?? null
+      const allPhotos = await fetchTodasLasFotos({
+        delBlob: detail.photos,
+        galleryUrl: detail.gallery_url,
+        externalId: externalIdGaleria,
+        esperadas: detail.photos_total_count ?? null,
+      })
+      if (allPhotos.length <= fromHtml && detail.photos_total_count != null && allPhotos.length < detail.photos_total_count) {
+        galleryError = `El portal declara ${detail.photos_total_count} fotos y solo se pudieron leer ${allPhotos.length} (bloqueo del modal de galería)`
       }
 
       parsed = {

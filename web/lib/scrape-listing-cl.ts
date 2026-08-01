@@ -10,7 +10,7 @@
 import { pool } from '@/lib/db'
 import { fetchListingPage, resolveComunaAsync } from '@/lib/captar-pipeline'
 import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
-import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
+import { fetchTodasLasFotos } from '@/lib/fetch-portalinmobiliario-gallery'
 import { getUfRateCl } from '@/lib/uf-rate-cl'
 import { linkSingleListingToPropertyCl } from '@/lib/dedup-cl'
 
@@ -63,18 +63,14 @@ export async function scrapeAndUpsertListingCl(query: string): Promise<ScrapeRes
   const parsed = parsePortalListingDetail(html)
   if (!parsed) return { ok: false, error: 'No se pudo interpretar el contenido del anuncio (¿la publicación ya no existe?)' }
 
-  // Fotos completas del modal de galería, igual que /api/chile/captar — el
-  // HTML estático solo trae ~5.
-  const photos = [...parsed.photos]
-  if (parsed.gallery_url) {
-    try {
-      const galleryPhotos = await fetchPortalInmobiliarioGallery(parsed.gallery_url)
-      const seen = new Set(photos)
-      for (const p of galleryPhotos) if (!seen.has(p)) { photos.push(p); seen.add(p) }
-    } catch {
-      // best-effort: la ficha se guarda igual con las fotos que sí se pudieron leer
-    }
-  }
+  // Fotos completas: el blob de la ficha sirve como mucho 5, así que hay que
+  // pedir además el modal de galería (y, si sigue corto, el modal por item id).
+  const photos = await fetchTodasLasFotos({
+    delBlob: parsed.photos,
+    galleryUrl: parsed.gallery_url,
+    externalId,
+    esperadas: parsed.photos_total_count ?? null,
+  })
 
   const comunaMatch = await resolveComunaAsync(parsed.comuna)
   let comunaId: string | null = null
