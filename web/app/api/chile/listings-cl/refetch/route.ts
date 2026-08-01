@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { fetchListingPage } from '@/lib/captar-pipeline'
-import { parsePortalListingDetail, photoIdKey } from '@/lib/parse-portalinmobiliario-cl'
-import { fetchPortalInmobiliarioGallery } from '@/lib/fetch-portalinmobiliario-gallery'
+import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
+import { fetchTodasLasFotos } from '@/lib/fetch-portalinmobiliario-gallery'
 import { getUfRateCl } from '@/lib/uf-rate-cl'
 import { refreshPropertyClAggregates } from '@/lib/dedup-cl'
 
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, source_url, property_cl_id FROM listings_cl WHERE id = $1`,
+      `SELECT id, source_url, external_id, property_cl_id FROM listings_cl WHERE id = $1`,
       [id],
     )
     const listing = rows[0]
@@ -48,18 +48,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'No se pudo interpretar el aviso (¿cambió el portal?)' }, { status: 422 })
     }
 
-    let photos = detail.photos
-    if (detail.gallery_url) {
-      const galleryPhotos = await fetchPortalInmobiliarioGallery(detail.gallery_url)
-      // Dedup por id de foto de ML, no por URL: el modal devuelve la misma
-      // imagen en otra plantilla/tamaño y por URL completa se contaba doble.
-      const seen = new Set(photos.map(photoIdKey))
-      for (const p of galleryPhotos) {
-        const k = photoIdKey(p)
-        if (!seen.has(k)) { photos.push(p); seen.add(k) }
-      }
-    }
-    photos = photos.slice(0, 40)
+    // Fotos completas. Este era el "Re-scrapear que no traía más de 5": el blob
+    // de la ficha sirve como mucho 5 y aquí solo se pedía el modal que anuncia
+    // el propio blob, sin reintento por proxy ni el modal por item id — los dos
+    // mecanismos que el worker sí tiene desde a088400.
+    const photos = (await fetchTodasLasFotos({
+      delBlob: detail.photos,
+      galleryUrl: detail.gallery_url,
+      externalId: listing.external_id,
+      esperadas: detail.photos_total_count ?? null,
+    })).slice(0, 40)
 
     let price: number | null = null
     let priceUf: number | null = null
