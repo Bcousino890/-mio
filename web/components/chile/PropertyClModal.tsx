@@ -11,7 +11,7 @@
 // lados, con sus fotos por corredora, su mapa, su pin manual y el desglose de
 // quién lo publica.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
@@ -22,6 +22,8 @@ import {
 import { toLatLng } from '@/lib/coords'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 import { DuenosRolPicker, type RutCandidato } from '@/components/chile/DuenosRolPicker'
+// Mismo selector de nombre (y misma selección guardada) que usa la ficha de Captación.
+import { duenoDeTelefono, personasDeLaFicha } from '@/lib/smartbc/relaciones.mjs'
 import { corredoraColor } from '@/lib/corredora-pin-colors'
 
 const PropertyLocationMap = dynamic(() => import('@/components/map/PropertyLocationMap'), { ssr: false })
@@ -102,6 +104,10 @@ export type CrmInfo = {
   phones: CrmPhone[] | null
   emails: unknown
   relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
+  /** Selección manual de qué contactos viajan al CRM, hecha desde la ficha de Captación (migración 0092). */
+  smartbc_contactos?: Array<{
+    phone: string; name?: string | null; rut?: string | null; relationship?: string | null
+  }> | null
   /** Dueños del rol según DealerNet (Buscador Múltiple), con su marca actual/histórico. */
   owner_rut_candidates: RutCandidato[] | null
   stage: string
@@ -392,6 +398,112 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   const crmPhones = Array.isArray(liveCrm?.phones) ? liveCrm.phones : []
   const crmCandidatos = Array.isArray(liveCrm?.owner_rut_candidates) ? liveCrm.owner_rut_candidates : []
   const crmRelacionados = Array.isArray(liveCrm?.relacionados) ? liveCrm.relacionados : []
+
+  // ── Selector de nombre por teléfono — misma función que la ficha de
+  // Captación, con la MISMA selección guardada (captaciones_cl.smartbc_
+  // contactos): elegir un nombre acá o allá es elegirlo una sola vez.
+  const personas = useMemo(() => personasDeLaFicha({
+    relacionados: crmRelacionados,
+    ownerName: liveCrm?.owner_name ?? null,
+    ownerRut: liveCrm?.owner_rut ?? null,
+  }), [crmRelacionados, liveCrm?.owner_name, liveCrm?.owner_rut])
+
+  const duenoDelTelefono = useCallback(
+    (relacion: string | null | undefined) => duenoDeTelefono(relacion, {
+      ownerName: liveCrm?.owner_name ?? null,
+      ownerRut: liveCrm?.owner_rut ?? null,
+      relacionados: personas,
+    }),
+    [liveCrm?.owner_name, liveCrm?.owner_rut, personas],
+  )
+
+  const [seleccion, setSeleccion] = useState<Record<string, {
+    name: string; rut: string | null; relationship: string | null
+  }>>({})
+  // La selección se hidrata UNA VEZ por captación, no en cada refresh: si no,
+  // un `refreshProperty()` de fondo (tras pedir teléfonos de otro RUT, p. ej.)
+  // pisaría lo que la persona acaba de tocar en el picker con lo último
+  // guardado en la base. `liveCrm` puede llegar más tarde que el primer
+  // render (se resuelve async), así que no basta un useState perezoso.
+  const seleccionHidratadaDe = useRef<string | null>(null)
+  useEffect(() => {
+    const captacionId = liveCrm?.captacion_id
+    if (!captacionId || seleccionHidratadaDe.current === captacionId) return
+    seleccionHidratadaDe.current = captacionId
+    const guardada = liveCrm?.smartbc_contactos
+    setSeleccion(
+      Array.isArray(guardada) && guardada.length
+        ? Object.fromEntries(guardada.map((c) => [c.phone, {
+            name: c.name ?? '', rut: c.rut ?? null, relationship: c.relationship ?? null,
+          }]))
+        : {},
+    )
+  }, [liveCrm?.captacion_id, liveCrm?.smartbc_contactos])
+
+  const toggleTelefonoSeleccion = useCallback((numero: string, relacion: string | null | undefined) => {
+    setSeleccion((prev) => {
+      if (prev[numero]) { const { [numero]: _quitado, ...resto } = prev; return resto }
+      const dueno = duenoDelTelefono(relacion)
+      return { ...prev, [numero]: { name: dueno.name, rut: dueno.rut, relationship: dueno.relationship } }
+    })
+  }, [duenoDelTelefono])
+
+  const cambiarNombreTelefono = useCallback((
+    numero: string,
+    relacion: string | null | undefined,
+    nombre: string,
+    opcion?: { nombre: string; relacion: string | null; rut: string | null },
+  ) => {
+    setSeleccion((prev) => ({
+      ...prev,
+      [numero]: opcion
+        ? { name: opcion.nombre, rut: opcion.rut, relationship: opcion.relacion }
+        : {
+            name: nombre,
+            rut: null,
+            relationship: prev[numero]?.relationship ?? duenoDelTelefono(relacion).relationship,
+          },
+    }))
+  }, [duenoDelTelefono])
+
+  const [guardandoSeleccion, setGuardandoSeleccion] = useState(false)
+  const [seleccionMsg, setSeleccionMsg] = useState<string | null>(null)
+  const nSeleccionados = Object.keys(seleccion).length
+
+  // Guarda la selección (sin enviar nada al CRM — el envío sigue siendo cosa
+  // de la ficha de Captación, un clic más allá con "Abrir captación"). Mismo
+  // endpoint PUT que ya usa Captación: una sola selección por captación, se
+  // elija desde donde se elija.
+  const guardarSeleccion = useCallback(async () => {
+    const captacionId = liveCrm?.captacion_id
+    if (!captacionId) return
+    setGuardandoSeleccion(true)
+    setSeleccionMsg(null)
+    try {
+      const contactos = crmPhones
+        .filter((ph) => seleccion[ph.numero])
+        .map((ph) => ({
+          phone: ph.numero,
+          name: seleccion[ph.numero].name || null,
+          relationship: seleccion[ph.numero].relationship ?? duenoDelTelefono(ph.relacion).relationship,
+          has_whatsapp: ph.whatsapp ?? null,
+          label: ph.tipo ?? ph.categoria ?? null,
+          is_owner: !ph.relacion,
+          rut: seleccion[ph.numero].rut ?? (!ph.relacion ? liveCrm?.owner_rut ?? null : null),
+        }))
+      const res = await fetch('/api/chile/smartbc', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: captacionId, contactos }),
+      })
+      const data = await res.json().catch(() => null)
+      setSeleccionMsg(data?.success ? '✓ selección guardada' : (data?.error ?? 'No se pudo guardar'))
+    } catch {
+      setSeleccionMsg('Error de red al guardar')
+    } finally {
+      setGuardandoSeleccion(false)
+    }
+  }, [liveCrm?.captacion_id, liveCrm?.owner_rut, crmPhones, seleccion, duenoDelTelefono])
 
   // Un pin por corredora del grupo: la coordenada que declara CADA anuncio. Al
   // unir avisos de varias corredoras a mano se ven todos (dedup por coordenada
@@ -1032,11 +1144,39 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                         }}
                                         copied={copiedPhoneKey === `phone-${i}`}
                                         onCopy={() => copyPhone(`phone-${i}`, ph.numero)}
+                                        selected={Boolean(seleccion[ph.numero])}
+                                        onToggleSelect={() => toggleTelefonoSeleccion(ph.numero, ph.relacion)}
+                                        name={seleccion[ph.numero]?.name}
+                                        onNameChange={(v, opcion) => cambiarNombreTelefono(ph.numero, ph.relacion, v, opcion)}
+                                        nameOptions={personas}
                                       />
                                     ))}
                                   </div>
                                 ) : (
                                   <div className="text-xs text-slate-500 mt-1">Captada, sin teléfono aún — reintenta la búsqueda en DealerNet.</div>
+                                )}
+                                {/* Guarda SOLO la selección (quién es cada número) — la
+                                    misma que usa "Agregar a Smart" en Captación, un clic
+                                    más allá. Enviar al CRM sigue siendo cosa de esa ficha. */}
+                                {crmPhones.length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                    <button
+                                      onClick={guardarSeleccion}
+                                      disabled={guardandoSeleccion || nSeleccionados === 0}
+                                      title={nSeleccionados === 0
+                                        ? 'Marca al menos un teléfono para guardar quién es'
+                                        : `Guardar quién es cada uno de los ${nSeleccionados} teléfono(s) marcados`}
+                                      className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-emerald-800/60 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                      <Save size={11} />
+                                      {guardandoSeleccion ? 'Guardando…' : `Guardar selección (${nSeleccionados})`}
+                                    </button>
+                                    {seleccionMsg && (
+                                      <span className={`text-[10px] ${seleccionMsg.startsWith('✓') ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                        {seleccionMsg}
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                                 {/* Dueños del rol: el actual es el que se
                                     consulta solo; los históricos y cualquier

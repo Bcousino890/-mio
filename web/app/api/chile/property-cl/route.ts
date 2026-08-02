@@ -107,6 +107,10 @@ const CRM_JSON = `
        'phones', cap.phones,
        'emails', cap.emails,
        'relacionados', cap.relacionados,
+       -- Selección manual de contactos (migración 0092): así la ficha de
+       -- Propiedades muestra el mismo nombre ya elegido desde Captación, en
+       -- vez de que cada ficha adivine el suyo por separado.
+       'smartbc_contactos', cap.smartbc_contactos,
        -- Dueños del rol según el Buscador Múltiple (actual / histórico): es lo
        -- que deja pedir los teléfonos de un RUT concreto desde la ficha.
        'owner_rut_candidates', cap.owner_rut_candidates,
