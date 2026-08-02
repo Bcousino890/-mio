@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFile } from 'node:child_process'
 import { withResilience } from './resilient-fetch.mjs'
+import { envVivo } from './env-vivo.mjs'
 
 const WHATSAPP_UA = 'WhatsApp/2.23.20.0'
 // UA de navegador moderno (Chrome de escritorio reciente). Usado para portales
@@ -53,7 +54,7 @@ const DEFAULT_PROFILE = 'idealista'
 
 const TIMEOUT_S = 25
 
-function proxyUrl(profile) {
+export function proxyUrl(profile) {
   // SMARTPROXY_URL: URL completa de API Smartproxy (Extracción API)
   // Ej: https://api.smartproxy.com/v2/proxy?cc=CL&city=Santiago&...
   if (process.env.SMARTPROXY_URL) {
@@ -68,10 +69,15 @@ function proxyUrl(profile) {
   // Prioridad sobre SMARTPROXY_CL_* (que queda como fallback legacy, ver
   // docs/PLAN-ANUNCIOS-CL.md §4 H10) — mismo criterio que SMARTPROXY_URL/
   // PROXY_URL arriba: si está configurado, gana.
+  //
+  // Se leen con envVivo (no process.env): la UI de Configuración reescribe el
+  // .env en caliente, y este proceso lo tenía congelado desde el arranque del
+  // contenedor — guardar credenciales nuevas no cambiaba nada hasta recrear el
+  // worker (ver env-vivo.mjs).
   if (profile === 'portalinmobiliario') {
-    const { EVOMI_PROXY_HOST, EVOMI_PROXY_PORT, EVOMI_PROXY_USER, EVOMI_PROXY_PASS } = process.env
-    if (EVOMI_PROXY_USER) {
-      return `http://${EVOMI_PROXY_USER}:${EVOMI_PROXY_PASS}@${EVOMI_PROXY_HOST}:${EVOMI_PROXY_PORT}`
+    const user = envVivo('EVOMI_PROXY_USER')
+    if (user) {
+      return `http://${user}:${envVivo('EVOMI_PROXY_PASS') ?? ''}@${envVivo('EVOMI_PROXY_HOST') ?? ''}:${envVivo('EVOMI_PROXY_PORT') ?? ''}`
     }
   }
 
@@ -79,9 +85,9 @@ function proxyUrl(profile) {
   // de la cuenta SMARTPROXY_PROXY_* de España/Idealista para no mezclarlas.
   // Fallback legacy si Evomi no está configurado (ver arriba).
   if (profile === 'portalinmobiliario') {
-    const { SMARTPROXY_CL_HOST, SMARTPROXY_CL_PORT, SMARTPROXY_CL_USER, SMARTPROXY_CL_PASS } = process.env
-    if (SMARTPROXY_CL_USER) {
-      return `http://${SMARTPROXY_CL_USER}:${SMARTPROXY_CL_PASS}@${SMARTPROXY_CL_HOST}:${SMARTPROXY_CL_PORT}`
+    const user = envVivo('SMARTPROXY_CL_USER')
+    if (user) {
+      return `http://${user}:${envVivo('SMARTPROXY_CL_PASS') ?? ''}@${envVivo('SMARTPROXY_CL_HOST') ?? ''}:${envVivo('SMARTPROXY_CL_PORT') ?? ''}`
     }
   }
 
@@ -95,6 +101,44 @@ function proxyUrl(profile) {
     return `http://${GEONODE_PROXY_USER}:${GEONODE_PROXY_PASS}@${GEONODE_PROXY_HOST}:${GEONODE_PROXY_PORT}`
   }
   return null
+}
+
+/**
+ * Traduce el fallo de `curl` a un motivo legible y, sobre todo, dice si el que
+ * falló fue el PROXY (y no el destino). Sin esta distinción, en el panel de
+ * salud todo se veía igual —`circuit_open` a secas— tanto si el portal nos
+ * estaba bloqueando como si el proxy tenía las credenciales caducadas, que son
+ * dos problemas con dos arreglos completamente distintos.
+ *
+ * Solo se marca `proxyFailed` cuando es INEQUÍVOCO que el proxy es el problema
+ * (no resuelve, no conecta, rechaza el CONNECT o pide autenticación). Un timeout
+ * o un reset se dejan como fallo genérico a propósito: pueden ser del destino, y
+ * no queremos que un portal lento dispare el camino directo (que expone la IP de
+ * la VPS).
+ *
+ * @returns {{ reason: string, proxyFailed: boolean }}
+ */
+export function motivoDeCurl(err, stderr, { usandoProxy = false } = {}) {
+  const code = Number(err?.code ?? 0)
+  const texto = String(stderr || err?.message || '').trim()
+  const t = texto.toLowerCase()
+
+  if (usandoProxy) {
+    if (t.includes('407') || t.includes('proxy authentication')) {
+      return { reason: 'el proxy rechazó las credenciales (407)', proxyFailed: true }
+    }
+    if (code === 5 || t.includes("couldn't resolve proxy") || t.includes('could not resolve proxy')) {
+      return { reason: 'no se resuelve el host del proxy', proxyFailed: true }
+    }
+    if (code === 97 || t.includes('proxy connect') || t.includes('connect tunnel failed')) {
+      return { reason: 'el proxy rechazó la conexión (CONNECT)', proxyFailed: true }
+    }
+    if (code === 7) {
+      return { reason: 'no se pudo conectar con el proxy', proxyFailed: true }
+    }
+  }
+  if (code === 28) return { reason: `timeout tras ${TIMEOUT_S}s`, proxyFailed: false }
+  return { reason: texto || `curl salió con código ${code}`, proxyFailed: false }
 }
 
 /**
@@ -125,7 +169,8 @@ export function fetchHtml(url, { useProxy = true, profile = DEFAULT_PROFILE } = 
 
     execFile('curl', args, { maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err && !stdout) {
-        return resolve({ ok: false, status: 0, reason: stderr || err.message })
+        const { reason, proxyFailed } = motivoDeCurl(err, stderr, { usandoProxy: Boolean(px) })
+        return resolve({ ok: false, status: 0, reason, proxy_failed: proxyFailed })
       }
       const m = stdout.match(/\n__HTTP_STATUS__:(\d+)\s*$/)
       const status = m ? Number(m[1]) : 0
@@ -162,6 +207,16 @@ export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
 // tocar código, por si hiciera falta diagnosticar.
 const PI_SOLO_PROXY = process.env.PI_SOLO_PROXY !== '0'
 
+// Red de seguridad para cuando el que se cae es el PROXY, no el portal. Sin
+// ella, un problema del proveedor (credenciales caducadas, cuota agotada, host
+// inalcanzable) deja el barrido 24/7 completamente parado hasta que alguien lo
+// note a mano — que es exactamente lo que pasó: un día entero sin ingresar un
+// solo anuncio. Ojo con el matiz: NO se cae a directo si el portal nos responde
+// mal (403, 429, variante ligera). Ahí la decisión de no enseñar la IP de la VPS
+// sigue intacta; el directo solo entra cuando el proxy ni siquiera llega a
+// hablar con el portal. `PI_FALLBACK_DIRECTO=0` lo desactiva.
+const PI_FALLBACK_DIRECTO = process.env.PI_FALLBACK_DIRECTO !== '0'
+
 async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
   // "Éxito" para PI NO es solo HTTP 200: la variante LIGERA que PI sirve a
   // algunas IPs (p. ej. datacenter) responde 200 pero SIN el blob Nordic, y el
@@ -169,11 +224,36 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
   // (IP de la VPS) recibe la variante ligera, se cae a Evomi (residencial CL),
   // que suele recibir la buena — en vez de aceptar un 200 inútil.
   const hasBlob = (r) => r.ok && typeof r.html === 'string' && r.html.includes('__NORDIC_RENDERING_CTX__')
+  // Un 200 sin blob es una página INSERVIBLE (el parser saca 0). Antes se
+  // devolvía como `ok: true` "para no disparar el circuit-breaker", y el efecto
+  // era el contrario del buscado: el barrido se anotaba como COMPLETO con 0
+  // anuncios, marcaba last_success_at y se iba tan tranquilo — un fallo mudo.
+  // Devolviéndolo como fallo reintentable, withResilience vuelve a pedir la
+  // página y, con un residencial que rota IP, el siguiente intento suele salir
+  // por otra IP y traer la buena.
+  const ligera = (r) => ({ ok: false, status: r.status ?? 200, reason: 'sin blob Nordic (variante ligera o bloqueo)' })
 
   if (PI_SOLO_PROXY) {
     const soloProxy = await fetchHtml(url, { useProxy: true, profile })
     if (hasBlob(soloProxy)) return soloProxy
-    return soloProxy.ok ? { ...soloProxy, reason: 'sin blob Nordic (variante ligera)' } : soloProxy
+
+    if (soloProxy.proxy_failed && PI_FALLBACK_DIRECTO) {
+      const rescate = await fetchHtml(url, { useProxy: false, profile })
+      const marca = { via: 'directo', proxy_caido: soloProxy.reason }
+      if (hasBlob(rescate)) {
+        console.warn(`[fetch] proxy caído (${soloProxy.reason}) → servido DIRECTO desde la VPS`)
+        return { ...rescate, ...marca }
+      }
+      // El portal SÍ contestó por la vía directa (un 404 de fin de paginación,
+      // un 403…): esa respuesta es la real y hay que conservarla — devolver en
+      // su lugar el fallo del proxy convertiría un final de paginación normal en
+      // un "fallo de red" y rompería la detección de bajas.
+      if (Number(rescate.status) > 0) return rescate.ok ? { ...ligera(rescate), ...marca } : { ...rescate, ...marca }
+      // Ni con el rescate: se informa del fallo del PROXY, que es el arreglable.
+      return { ...soloProxy, reason: `proxy: ${soloProxy.reason}` }
+    }
+
+    return soloProxy.ok ? ligera(soloProxy) : soloProxy
   }
 
   const direct = await fetchHtml(url, { useProxy: false, profile })
@@ -182,10 +262,11 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
   const proxied = await fetchHtml(url, { useProxy: true, profile })
   if (hasBlob(proxied)) return proxied
 
-  // Ninguna vía trajo el blob. Devolvemos el mejor 200 disponible (para no
-  // disparar el circuit-breaker con un falso "caído"), marcando el motivo.
-  if (proxied.ok) return { ...proxied, reason: 'sin blob Nordic (variante ligera)' }
-  if (direct.ok) return { ...direct, reason: 'sin blob Nordic (variante ligera)' }
+  // Ninguna vía trajo el blob: la página es inservible por las dos. Se devuelve
+  // como fallo (ver `ligera`) para que se reintente y, si persiste, se vea en el
+  // panel — en vez de colarse como un barrido "completo" de 0 anuncios.
+  if (proxied.ok) return ligera(proxied)
+  if (direct.ok) return ligera(direct)
   return direct
 }
 

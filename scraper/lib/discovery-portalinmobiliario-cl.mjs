@@ -265,9 +265,38 @@ async function updateTargetStats(client, targetId, { scrapedAt, completed, listi
        last_listing_count = $4,
        portal_reported_count = COALESCE($5, portal_reported_count),
        notes = $6,
+       -- Llegó a barrer: sea cual sea la cobertura, la red y el proxy funcionan.
+       -- El contador de bloqueos mide "no consigo ni conectar", así que se limpia.
+       last_failure_at = NULL,
+       consecutive_failures = 0,
        updated_at = now()
      WHERE id = $1`,
     [targetId, scrapedAt, completed, listingCount, portalTotal, reason ?? null]
+  )
+}
+
+/**
+ * El barrido no llegó a leer NI UNA página (proxy caído, circuito abierto,
+ * bloqueo del portal). Se anota el intento fallido SIN tocar `last_run_at`.
+ *
+ * Ese detalle es el arreglo de fondo: `selectDueTargets` decide con
+ * `last_run_at`, así que escribirlo aquí (lo que se hacía antes) le regalaba al
+ * fallo las 24 h de cadencia del objetivo — un problema de red de un minuto
+ * dejaba la comuna sin barrer un día entero. Y como el scheduler encola de golpe
+ * todos los objetivos vencidos, con el circuito abierto los gastaba TODOS en
+ * milisegundos, sin una sola petición. Dejando `last_run_at` intacto el objetivo
+ * sigue vencido y se reintenta en el ciclo siguiente (≤15 min), que además no
+ * cuesta nada: un barrido bloqueado no descarga páginas.
+ */
+export async function registerTargetFailure(client, targetId, { at, reason }) {
+  await client.query(
+    `UPDATE scrape_targets_cl SET
+       last_failure_at = $2,
+       consecutive_failures = consecutive_failures + 1,
+       notes = $3,
+       updated_at = now()
+     WHERE id = $1`,
+    [targetId, at, reason ?? 'barrido bloqueado']
   )
 }
 
@@ -288,6 +317,10 @@ async function updateTargetStats(client, targetId, { scrapedAt, completed, listi
 async function sweepBand(client, ctx, priceRange, seen) {
   const { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, completed = false, reason = null
+  // `blocked` = la banda no consiguió leer NI SU PRIMERA PÁGINA. Es distinto de
+  // "barrido incompleto": aquí no hubo barrido, no se gastó tráfico y no hay
+  // nada que anotar como corrida (ver discoverTarget).
+  let blocked = false
   // IDs vistos EN ESTA banda. Se cuenta aparte del `seen` global porque las
   // bandas solapan con el barrido base: contra el global, la primera página de
   // una banda daría "0 nuevos" y cortaría el barrido de inmediato.
@@ -312,6 +345,7 @@ async function sweepBand(client, ctx, priceRange, seen) {
         reason = page === 1 ? 'sin inventario (404)' : null
       } else {
         reason = `fetch p${page}: ${res.reason ?? 'fallo'}`
+        if (page === 1) blocked = true
       }
       break
     }
@@ -320,6 +354,16 @@ async function sweepBand(client, ctx, priceRange, seen) {
     const meta = parseMeta(res.html)
     const listings = parseList(res.html)
     if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
+    // Página 1 que responde 200 pero no trae ni anuncios ni total: no es una
+    // comuna vacía (esa contesta 404, o 200 con total=0), es una respuesta que
+    // no entendemos — variante ligera, interstitial de bloqueo, cambio de
+    // maquetación. Tratarla como "barrido completo de 0 anuncios" era lo que
+    // dejaba el objetivo en verde sin haber visto nada.
+    if (page === 1 && listings.length === 0 && meta.total == null) {
+      blocked = true
+      reason = 'p1 sin anuncios ni total (respuesta no reconocida)'
+      break
+    }
 
     const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
     let newInPage = 0
@@ -362,7 +406,7 @@ async function sweepBand(client, ctx, priceRange, seen) {
       reason = reason ?? `cobertura insuficiente: ${bandSeen.size}/${portalTotal} vistos`
     }
   }
-  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, coverage, reason }
+  return { pages, enqueued, portalTotal, resultsLimit, completed, capped, coverage, reason, blocked }
 }
 
 /**
@@ -462,6 +506,18 @@ export async function discoverTarget(client, target, deps = {}) {
   portalTotal = base.portalTotal; resultsLimit = base.resultsLimit; reason = base.reason
   let completed = base.completed
 
+  // Ni la primera página: esto no es un barrido, es un intento bloqueado. Se
+  // registra como fallo y se sale SIN tocar last_run_at, para que el objetivo
+  // siga vencido y se reintente en el próximo ciclo (ver registerTargetFailure).
+  if (base.blocked && seen.size === 0) {
+    await registerTargetFailure(client, target.id, { at: scrapedAt, reason })
+    return {
+      target_id: target.id, pages: 0, seen: 0, enqueued: 0, delisted: 0,
+      portal_total: null, results_limit: null, bands: 0, force_refetch: forceRefetch,
+      completed: false, exhaustive: false, capped: false, blocked: true, reason,
+    }
+  }
+
   if (base.capped) {
     // Comuna por encima del tope: subdividir por precio. Cada banda se barre
     // ENTERA; su unión cubre el 100% de la comuna. Los 2000 ya vistos en el
@@ -533,7 +589,7 @@ export async function discoverTarget(client, target, deps = {}) {
     await client.query(`UPDATE scrape_targets_cl SET force_refetch = false, updated_at = now() WHERE id = $1`, [target.id])
   }
 
-  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, force_refetch: forceRefetch, completed, exhaustive, capped: base.capped, reason }
+  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, force_refetch: forceRefetch, completed, exhaustive, capped: base.capped, blocked: false, reason }
 }
 
 /**
