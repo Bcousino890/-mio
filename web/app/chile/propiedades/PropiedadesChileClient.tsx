@@ -578,9 +578,11 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    setLoading(true)
-    const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE), sort: sortBy })
+  // Mismos filtros para dos consumidores (la grilla paginada y el mapa, que
+  // pide un lote propio más grande — ver más abajo): centralizado para que no
+  // se desincronicen si un filtro nuevo se agrega en un solo lugar.
+  const buildFilterParams = useCallback((pageArg: number, pageSizeArg: number) => {
+    const params = new URLSearchParams({ page: String(pageArg), page_size: String(pageSizeArg), sort: sortBy })
     if (operation !== 'all') params.append('operation', operation)
     if (comuna) params.append('comuna', comuna)
     if (codeQuery) params.append('q', codeQuery)
@@ -600,6 +602,12 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
         params.append('geo_polygon', JSON.stringify(geoShape.coordinates))
       }
     }
+    return params
+  }, [sortBy, operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, geoShape])
+
+  useEffect(() => {
+    setLoading(true)
+    const params = buildFilterParams(page, PAGE_SIZE)
 
     fetch(`/api/chile/property-cl?${params.toString()}`)
       .then(r => r.json())
@@ -615,7 +623,30 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, geoShape, reloadKey])
+  }, [page, buildFilterParams, reloadKey])
+
+  // Mapa: pide un lote propio (tope del backend, 200) independiente de la
+  // página de la grilla — si no, dibujar una zona con más de 24 resultados
+  // (PAGE_SIZE) solo mostraba la primera página de pines en el mapa aunque la
+  // grilla de abajo sí paginara sobre el total real.
+  const [mapItems, setMapItems] = useState<Property[]>([])
+  const [mapTotal, setMapTotal] = useState(0)
+  const [mapLoading, setMapLoading] = useState(false)
+  const MAP_PAGE_SIZE = 200
+
+  useEffect(() => {
+    if (!showMap) return
+    setMapLoading(true)
+    const params = buildFilterParams(1, MAP_PAGE_SIZE)
+    fetch(`/api/chile/property-cl?${params.toString()}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && Array.isArray(d.data)) { setMapItems(d.data); setMapTotal(d.total) }
+        else { setMapItems([]); setMapTotal(0) }
+      })
+      .catch(() => { setMapItems([]); setMapTotal(0) })
+      .finally(() => setMapLoading(false))
+  }, [showMap, buildFilterParams, reloadKey])
 
   const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0) + (onlyCaptadas ? 1 : 0) + (onlySmart ? 1 : 0) + (geoShape ? 1 : 0)
   const clearAll = () => {
@@ -757,21 +788,33 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
           })}
         </div>
 
-        {/* Mapa con dibujo: pinta las propiedades de la página actual y deja
+        {/* Mapa con dibujo: pinta hasta 200 propiedades del filtro actual
+            (lote propio, independiente de la página de la grilla) y deja
             recortar por un polígono/rectángulo/círculo a mano — el resultado
             vuelve a pedirse al backend (ST_Contains/ST_DWithin sobre el geom
-            indexado), así que la grilla de abajo y los propios pines del mapa
-            quedan filtrados igual. */}
+            indexado), así que la grilla de abajo y los pines del mapa quedan
+            filtrados igual. */}
         {showMap && (
-          <div className="h-[460px] rounded-xl overflow-hidden border border-slate-700/60 mb-4">
-            <PropertyMap
-              listings={items.map(propertyToListing)}
-              activeId={selected?.id ?? null}
-              onMarkerClick={id => { const p = items.find(i => i.id === id); if (p) setSelected(p) }}
-              onShapeDrawn={setGeoShape}
-              activeShape={geoShape}
-              tileStyle="satellite"
-            />
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5 text-[11px] text-slate-400">
+              <span>
+                {mapLoading
+                  ? 'Cargando mapa…'
+                  : mapTotal > mapItems.length
+                    ? `Mostrando ${mapItems.length.toLocaleString('es-CL')} de ${mapTotal.toLocaleString('es-CL')} propiedades en el mapa`
+                    : `${mapTotal.toLocaleString('es-CL')} propiedad${mapTotal === 1 ? '' : 'es'} en el mapa`}
+              </span>
+            </div>
+            <div className="h-[460px] rounded-xl overflow-hidden border border-slate-700/60">
+              <PropertyMap
+                listings={mapItems.map(propertyToListing)}
+                activeId={selected?.id ?? null}
+                onMarkerClick={id => { const p = mapItems.find(i => i.id === id) ?? items.find(i => i.id === id); if (p) setSelected(p) }}
+                onShapeDrawn={setGeoShape}
+                activeShape={geoShape}
+                tileStyle="satellite"
+              />
+            </div>
           </div>
         )}
 
