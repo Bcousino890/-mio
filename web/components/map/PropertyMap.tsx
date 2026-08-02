@@ -14,9 +14,10 @@ interface Props {
   onMarkerHover?: (id: string | null) => void
   onShapeDrawn?: (shape: GeoShapeFilter | null) => void
   activeShape?: GeoShapeFilter | null
-  /** 'carto' (por defecto, España) | 'satellite' (satélite híbrido de Google
-   * sin API key, mismo patrón que components/map/StreetViewMap.tsx y
-   * DetailMap.tsx — es el que usa Chile). */
+  /** 'carto' (por defecto, España, una sola capa fija) | 'satellite' (Chile:
+   * tiles de Google sin API key, mismo patrón que StreetViewMap.tsx/
+   * DetailMap.tsx, con un botón "Mapa"/"Satélite" para alternar entre las dos
+   * vistas de Google — nunca Carto/OSM). */
   tileStyle?: 'carto' | 'satellite'
 }
 
@@ -86,6 +87,14 @@ function loadLeaflet() {
   return leafletPromise
 }
 
+// Tiles de Google servidos directo (sin API key) — mismo patrón que
+// StreetViewMap.tsx/DetailMap.tsx. roadmap = calles (equivalente al "Mapa" de
+// Google Maps); satellite = híbrido (imagen + nombres de calles, lyrs=y).
+const GOOGLE_TILE_URL = {
+  roadmap: 'https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+  satellite: 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+}
+
 function clusterHtml(count: number) {
   const size = count >= 100 ? 56 : count >= 25 ? 48 : count >= 10 ? 42 : 36
   const inner = size - 12
@@ -126,6 +135,12 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   // marcadores, en cambio, se rehacen cada vez que cambian los anuncios — por
   // eso hace falta saber cuándo el mapa ya existe.
   const [mapReady, setMapReady] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tileLayerRef = useRef<any>(null)
+  // Submodo de Google (tileStyle='satellite'): "Mapa" (roadmap) o "Satélite"
+  // (híbrido) — las dos vistas que pide Chile, siempre tiles de Google, nunca
+  // Carto. No aplica cuando tileStyle='carto' (España sigue con una sola capa).
+  const [googleMapType, setGoogleMapType] = useState<'roadmap' | 'satellite'>('satellite')
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -149,10 +164,11 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
       })
 
       if (tileStyle === 'satellite') {
-        // Satélite híbrido de Google (lyrs=y: imagen + nombres de calles),
-        // tiles estáticos gratis sin API key — mismo patrón que
-        // StreetViewMap.tsx/DetailMap.tsx (Chile usa siempre este estilo).
-        L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        // Tiles de Google servidos directo, sin API key — mismo patrón que
+        // StreetViewMap.tsx/DetailMap.tsx. Arranca en "Satélite"; el botón de
+        // abajo cambia la URL de esta MISMA capa a "Mapa" (roadmap), sin
+        // recrear el mapa ni perder marcadores/zoom/zona dibujada.
+        tileLayerRef.current = L.tileLayer(GOOGLE_TILE_URL[googleMapType], {
           subdomains: ['0', '1', '2', '3'],
           attribution: '© Google',
           maxZoom: 21,
@@ -281,6 +297,13 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Botón "Mapa"/"Satélite": cambia la URL de la MISMA capa de tiles (Leaflet
+  // reutiliza la caché de tiles ya pedidos) en vez de quitar/agregar la capa.
+  useEffect(() => {
+    if (tileStyle !== 'satellite' || !tileLayerRef.current) return
+    tileLayerRef.current.setUrl(GOOGLE_TILE_URL[googleMapType])
+  }, [googleMapType, tileStyle])
+
   // Marcadores: se rehacen cada vez que cambia la lista (búsqueda, filtros,
   // página). Antes se creaban DENTRO del efecto de inicialización, que corre una
   // sola vez al montar: si los anuncios llegaban después —el caso normal, la
@@ -406,6 +429,25 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
           Agencia / Portal
         </div>
       </div>
+      {/* Mapa / Satélite — las dos vistas de Google, como el control nativo de
+          Google Maps. Solo aplica en modo satellite (Chile); España sigue con
+          una sola capa Carto fija. */}
+      {tileStyle === 'satellite' && (
+        <div className="absolute bottom-5 right-4 z-[1000] flex rounded-lg overflow-hidden shadow-lg border border-black/10">
+          <button
+            onClick={() => setGoogleMapType('roadmap')}
+            className={`px-3 py-1.5 text-xs font-semibold transition-colors ${googleMapType === 'roadmap' ? 'bg-blue-600 text-white' : 'bg-white/95 text-slate-700 hover:bg-white'}`}
+          >
+            Mapa
+          </button>
+          <button
+            onClick={() => setGoogleMapType('satellite')}
+            className={`px-3 py-1.5 text-xs font-semibold transition-colors ${googleMapType === 'satellite' ? 'bg-blue-600 text-white' : 'bg-white/95 text-slate-700 hover:bg-white'}`}
+          >
+            Satélite
+          </button>
+        </div>
+      )}
     </div>
   )
 }
