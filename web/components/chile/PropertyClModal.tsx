@@ -17,7 +17,7 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
-  Layers, Landmark, BadgeCheck, AlertTriangle, Save,
+  Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 import { toLatLng } from '@/lib/coords'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
@@ -814,14 +814,9 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                   <div className="mt-5">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold text-slate-300 inline-flex items-center gap-1.5"><MapPin size={15} className="text-amber-400" /> Ubicación</h3>
+                      {/* "Parcelas" ya no vive aquí: es un control del mapa y se
+                          dibuja dentro de él (también a pantalla completa). */}
                       <div className="flex items-center gap-2.5">
-                        {geo && (
-                          <button onClick={() => setShowParcels(v => !v)}
-                            title="Mostrar las parcelas del catastro SII sobre el satélite (como en /chile/catastro)"
-                            className={`text-xs inline-flex items-center gap-1 ${showParcels ? 'text-amber-400 hover:text-amber-300' : 'text-slate-500 hover:text-slate-300'}`}>
-                            <Layers size={12} /> Parcelas
-                          </button>
-                        )}
                         {geo && !manualPin && (
                           <button onClick={() => addManualPin(geo.coords.latitude, geo.coords.longitude)}
                             className="text-xs text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1">
@@ -912,6 +907,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                             onRealPinChange={handleRealPinChange}
                             highlightGeojson={resolved?.parcel?.geojson ?? null}
                             showParcels={showParcels}
+                            onToggleParcels={() => setShowParcels(v => !v)}
                             comunaCode={p.sii_comuna_code}
                             expanded={mapExpanded}
                             onToggleExpand={() => setMapExpanded((v) => !v)}
@@ -948,10 +944,28 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                       {manualPin && (
                         <div className="text-emerald-400 text-xs mt-0.5">Pin corregido · {manualPin.latitude.toFixed(5)}, {manualPin.longitude.toFixed(5)}</div>
                       )}
-                      {geo && (
-                        <a href={`https://www.google.com/maps/search/?api=1&query=${manualPin?.latitude ?? geo.coords.latitude},${manualPin?.longitude ?? geo.coords.longitude}`} target="_blank" rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1.5">Ver en el mapa <ExternalLink size={12} /></a>
-                      )}
+                      {geo && (() => {
+                        // Las coordenadas que se abren fuera son SIEMPRE las que
+                        // manda la ficha: el pin real corregido si existe y, si
+                        // no, la declarada por el anuncio.
+                        const lat = manualPin?.latitude ?? geo.coords.latitude
+                        const lng = manualPin?.longitude ?? geo.coords.longitude
+                        // Google Earth web con la cámara puesta en la coordenada
+                        // exacta: `@lat,lng,{altitud}a,{distancia}d,{fov}y,{rumbo}h,{inclinación}t,{giro}r`.
+                        // Se usa la forma de cámara y no `/search/…` porque esa
+                        // geocodifica y puede correr el punto a la dirección más
+                        // cercana — justo lo que aquí no se quiere.
+                        const earth = `https://earth.google.com/web/@${lat},${lng},0a,300d,35y,0h,0t,0r`
+                        const maps = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+                        return (
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                            <a href={earth} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300">Ver en Google Earth <ExternalLink size={12} /></a>
+                            <a href={maps} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">Google Maps <ExternalLink size={11} /></a>
+                          </div>
+                        )
+                      })()}
                     </div>
 
                     {/* Predio real (rol SII + dirección exacta) resuelto bajo el
