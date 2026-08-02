@@ -256,6 +256,8 @@ export async function POST(request: NextRequest) {
       stage: stage === undefined ? 'assigned' : stage,
       normalizer,
       forceFields,
+      // Dominio público propio, para las fotos de contacto (contacts[].photo_url).
+      baseUrl: process.env.APP_BASE_URL ?? null,
     })
 
     // Desde el botón, "no ha cambiado nada" no debe ser un no-op silencioso: la

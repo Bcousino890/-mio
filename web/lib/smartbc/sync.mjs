@@ -363,6 +363,10 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
     stage = 'assigned',
     includeNotes = true,
     log = () => {},
+    // Dominio público propio (APP_BASE_URL), para las fotos de contacto
+    // (contacts[].photo_url) — sync.mjs no lee process.env directamente,
+    // igual que el mapper; lo trae quien orquesta (el CLI).
+    baseUrl = null,
   } = opts
 
   const captaciones = await selectPendingCaptaciones(client, { limit })
@@ -395,7 +399,7 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
 
   const planned = []
   for (const cap of captaciones) {
-    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes, normalizer })
+    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes, normalizer, baseUrl })
     if (plan.action === 'unchanged') {
       summary.unchanged++
       // Se registra igual: deja el rastro de que la captación se revisó hoy y

@@ -150,6 +150,22 @@ export function externalIdFor(captacionId) {
 }
 
 /**
+ * URL pública de la foto de perfil (WhatsApp) que DealerNet asocia a un
+ * teléfono, vía el proxy propio (`/api/chile/dealernet-imagen` — no exige
+ * sesión, ver ese route.ts). SmartBC descarga cada `photo_url` server a
+ * server, así que tiene que ser una URL ABSOLUTA con nuestro dominio público:
+ * este módulo es puro y no lee `process.env`, así que `baseUrl` la trae quien
+ * llama (sync.mjs / route.ts), igual que `normalizer`.
+ *
+ * `null` sin `idimagen` (el teléfono no tiene foto) o sin `baseUrl`
+ * (entorno sin la variable configurada) — nunca una URL relativa rota.
+ */
+export function dealernetImageUrl(idimagen, { baseUrl = null, size = 200 } = {}) {
+  if (!idimagen || !baseUrl) return null
+  return `${String(baseUrl).replace(/\/+$/, '')}/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}&size=${size}`
+}
+
+/**
  * Moneda dual UF/CLP. El origen guarda AMBOS valores (el publicado y su
  * conversión), pero SmartBC guarda un precio y una moneda: hay que elegir, y se
  * elige el precio TAL CUAL LO PUBLICÓ el aviso. Mandar el CLP convertido con
@@ -203,14 +219,16 @@ export function sortPhones(phones) {
  * así que se cuenta en metadata y no se envía. El cruce teléfono↔persona se hace
  * por el parentesco, que es lo único que comparten ambas estructuras.
  */
-export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails, relacionados, seleccion }) {
+export function buildContacts({
+  captacionId, ownerName, ownerRut, phones, emails, relacionados, seleccion, baseUrl,
+}) {
   // Si alguien del equipo eligió a mano qué teléfonos van, manda esa decisión y
   // solo esa. Es lo contrario de "completar con lo que haya": los números que
   // DealerNet descubra después NO se cuelan solos en la ficha del CRM, esperan
   // a que alguien los apruebe. Quien mira la ficha sabe cuál de los 12 números
   // es el del dueño; el volcado automático, no.
   if (Array.isArray(seleccion) && seleccion.length) {
-    return buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion })
+    return buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion, phones, baseUrl })
   }
   const sorted = sortPhones(phones.filter((p) => p?.numero))
   // Los teléfonos SIN parentesco son del titular; los que traen `relacion`
@@ -231,6 +249,7 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
     has_whatsapp: firstOwnerPhone?.whatsapp ?? null,
     relationship: null,
     rut: trunc(ownerRut, LIMITS.rut),
+    photo_url: dealernetImageUrl(firstOwnerPhone?.idimagen, { baseUrl }),
     extra_phones: ownerExtras.length
       ? ownerExtras.map((p) => ({
           phone: trunc(p.numero, LIMITS.phone),
@@ -273,6 +292,7 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
       has_whatsapp: principal.whatsapp ?? null,
       relationship: trunc(rel?.relacion, LIMITS.relationship),
       rut: trunc(rut, LIMITS.rut),
+      photo_url: dealernetImageUrl(principal.idimagen, { baseUrl }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.numero, LIMITS.phone),
@@ -298,8 +318,13 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
  * Se agrupan por persona: varios teléfonos de un mismo contacto van como
  * `extra_phones` suyos, no como contactos repetidos.
  */
-function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion }) {
+function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion, phones = [], baseUrl }) {
   const ownerRutNorm = ownerRut ? String(ownerRut).replace(/\./g, '').trim().toUpperCase() : null
+  // La selección guardada (smartbc_contactos) no trae `idimagen` -- solo lo
+  // que hace falta para armar el contacto (nombre, RUT, parentesco). La foto
+  // se busca por el número, contra los teléfonos crudos de DealerNet, que sí
+  // la traen.
+  const idimagenPorNumero = new Map(phones.filter((p) => p?.numero).map((p) => [p.numero, p.idimagen ?? null]))
   // No se confia solo en `is_owner`/`contact_type` -- selecciones guardadas
   // antes de este fix los traen mal (calculados con "sin parentesco = titular",
   // que no cubre el numero que DealerNet etiqueta explicitamente "Titular").
@@ -343,6 +368,7 @@ function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, 
       has_whatsapp: principal.has_whatsapp ?? null,
       relationship: esTitular ? null : trunc(principal.relationship, LIMITS.relationship),
       rut: trunc(principal.rut ?? (esTitular ? ownerRut : null), LIMITS.rut),
+      photo_url: dealernetImageUrl(idimagenPorNumero.get(principal.phone), { baseUrl }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.phone, LIMITS.phone),
@@ -571,12 +597,16 @@ export const FORCEABLE_TEAM_FIELDS = ['notes', 'owner.contact']
  *   del contrato). Vacío por defecto: la regla general sigue siendo no pisar nunca
  *   campos del equipo — esto es la excepción explícita, un clic a la vez, para
  *   limpiar fichas que ya se sincronizaron con el texto viejo.
+ * @param {string|null} [options.baseUrl]    dominio público propio (`APP_BASE_URL`),
+ *   para armar `contacts[].photo_url` como URL absoluta. Sin ella, ningún contacto
+ *   lleva foto — nunca una URL relativa que SmartBC no podría descargar.
  */
 export function buildCaptacionPayload(bundle, {
   stage = 'assigned',
   includeNotes = true,
   normalizer = PASSTHROUGH,
   forceFields = [],
+  baseUrl = null,
 } = {}) {
   const cap = bundle.captacion
   const comuna = bundle.comuna ?? {}
@@ -608,6 +638,7 @@ export function buildCaptacionPayload(bundle, {
     ownerRut: cap.owner_rut,
     phones, emails, relacionados,
     seleccion: asArray(cap.smartbc_contactos),
+    baseUrl,
   })
   const photoItems = buildPhotos({ photos, storedPhotos, selectedPhotoUrls: selected })
 

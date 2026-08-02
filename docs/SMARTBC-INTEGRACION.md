@@ -204,6 +204,17 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
   `Hijo`, `Hija`, `Madre`, `Padre`, `Hermano/a`, `Suegro/a`, `Cuñado/a`, `Nieto/a`,
   `Tío/a`, `Sobrino/a` → `family` (con el texto original en `relationship`); todo lo
   demás (`Empleador`, sociedades…) → `other`, también con `relationship`.
+- `photo_url` (foto de perfil, v1.1.0 de SmartBC): la foto de WhatsApp que
+  DealerNet asocia al teléfono principal de cada contacto (`phones[].idimagen`),
+  servida por nuestro propio proxy (`/api/chile/dealernet-imagen`, sin sesión —
+  ver ese `route.ts`). SmartBC la descarga server a server, así que necesita una
+  URL **absoluta** con nuestro dominio público: se arma con la variable de
+  entorno `APP_BASE_URL` (`dealernetImageUrl()` en `mapper.mjs`, que sigue sin
+  leer `process.env` — `baseUrl` la trae quien orquesta, igual que `normalizer`).
+  Sin `APP_BASE_URL` configurada, o si el teléfono no tiene `idimagen`, el
+  contacto simplemente no lleva foto — nunca se manda una URL relativa rota.
+  En la selección manual (`smartbc_contactos`, que no guarda `idimagen`) la foto
+  se busca cruzando por el número contra los teléfonos crudos de DealerNet.
 
 ### 4.5 `photos` y `listings[]`
 

@@ -23,6 +23,7 @@ import {
   buildPriceDiscrepancyNote,
   buildProvenanceNote,
   buildSurfaceDiscrepancyNote,
+  dealernetImageUrl,
   diffPayload,
   externalIdFor,
   FORCEABLE_TEAM_FIELDS,
@@ -61,7 +62,7 @@ const CAMPOS_AVISO = new Set([
 ])
 const CAMPOS_CONTACTO = new Set([
   'external_id', 'contact_type', 'contact_name', 'phone', 'email', 'has_whatsapp',
-  'relationship', 'rut', 'extra_phones',
+  'relationship', 'rut', 'photo_url', 'extra_phones',
 ])
 
 const CAP_ID = '11111111-1111-1111-1111-111111111111'
@@ -220,6 +221,24 @@ test('UF sin valor UF cae al CLP disponible en vez de mandar null', () => {
   assert.deepEqual(pickPrice({ price: 9000, price_uf: null, currency: 'UF' }), { price: 9000, currency: 'clp' })
 })
 
+// ─── Foto de contacto (contacts[].photo_url) ─────────────────────────────────
+
+test('la URL de la foto es absoluta, con el dominio propio', () => {
+  const url = dealernetImageUrl('13387802', { baseUrl: 'https://crm.cremme.es' })
+  assert.equal(url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
+})
+
+test('sin idimagen o sin baseUrl no hay foto -- nunca una URL relativa rota', () => {
+  assert.equal(dealernetImageUrl(null, { baseUrl: 'https://crm.cremme.es' }), null)
+  assert.equal(dealernetImageUrl('13387802', { baseUrl: null }), null)
+  assert.equal(dealernetImageUrl('13387802'), null, 'sin baseUrl configurada (APP_BASE_URL vacía)')
+})
+
+test('una barra final en baseUrl no duplica la barra en la URL', () => {
+  const url = dealernetImageUrl('13387802', { baseUrl: 'https://crm.cremme.es/' })
+  assert.equal(url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
+})
+
 // ─── Contactos ───────────────────────────────────────────────────────────────
 
 test('teléfonos: probable antes que alternativo, y a igualdad manda la calidad', () => {
@@ -247,6 +266,55 @@ test('el titular lleva su mejor teléfono y el resto como extra_phones', () => {
   assert.equal(contacts[0].rut, '12345678-9')
   assert.equal(contacts[0].email, 'maria@ejemplo.cl')
   assert.deepEqual(contacts[0].extra_phones.map((p) => p.phone), ['+56987654321'])
+})
+
+test('el titular lleva la foto de su teléfono principal, si DealerNet trae una', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56912345678', categoria: 'probable', calidad: 9, whatsapp: true, idimagen: '13387802' },
+      { numero: '+56987654321', categoria: 'alternativo', calidad: 4 },
+    ],
+    emails: [],
+    relacionados: [],
+    baseUrl: 'https://crm.cremme.es',
+  })
+  assert.equal(contacts[0].phone, '+56912345678', 'el mejor teléfono es el de la foto')
+  assert.equal(contacts[0].photo_url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
+})
+
+test('sin APP_BASE_URL configurada, ningún contacto lleva foto (no una URL relativa rota)', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    // Sin baseUrl.
+  })
+  // `buildContacts` no aplica pruneNulls (solo lo hace buildCaptacionPayload
+  // al armar el payload final) -- el campo va explícito en null, no ausente.
+  assert.equal(contacts[0].photo_url, null)
+})
+
+test('un relacionado lleva la foto de SU teléfono, no la del titular', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: 'foto-titular' },
+      { numero: '+56911112222', categoria: 'probable', calidad: 8, relacion: 'Cónyuge', idimagen: 'foto-conyuge' },
+    ],
+    emails: [],
+    relacionados: [{ rut: '9876543', dv: '2', nombre: 'Juan Soto', relacion: 'Cónyuge' }],
+    baseUrl: 'https://crm.cremme.es',
+  })
+  const conyuge = contacts.find((c) => c.contact_name === 'Juan Soto')
+  assert.match(conyuge.photo_url, /id=foto-conyuge/)
 })
 
 test('un relacionado CON teléfono se envía; uno SIN teléfono no', () => {
@@ -364,6 +432,23 @@ test('con selección manual viajan SOLO los teléfonos elegidos', () => {
   assert.equal(contacts[0].phone, '+56912345678')
   assert.equal(contacts[0].contact_type, 'owner')
   assert.equal(contacts[0].rut, '12345678-9')
+})
+
+test('la selección manual también lleva foto, buscada por número contra los teléfonos crudos', () => {
+  // La fila guardada (smartbc_contactos) NO trae idimagen -- solo lo que hizo
+  // falta para elegir el nombre. La foto se cruza por el número contra
+  // `phones`, que sí la tiene.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+    baseUrl: 'https://crm.cremme.es',
+  })
+  assert.equal(contacts[0].photo_url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
 })
 
 test('una selección elegida ANTES de este fix igual reconoce al titular', () => {
@@ -639,6 +724,18 @@ test('sin pin corregido se usa la coordenada del anuncio, como antes', () => {
   const payload = buildCaptacionPayload(BUNDLE)
   assert.equal(payload.latitude, CAPTACION.latitude)
   assert.equal(payload.longitude, CAPTACION.longitude)
+})
+
+test('baseUrl llega hasta contacts[].photo_url en el payload completo', () => {
+  const bundleConFoto = {
+    ...BUNDLE,
+    captacion: { ...CAPTACION, phones: [{ ...CAPTACION.phones[0], idimagen: '13387802' }] },
+  }
+  const conBaseUrl = buildCaptacionPayload(bundleConFoto, { baseUrl: 'https://crm.cremme.es' })
+  assert.equal(conBaseUrl.contacts[0].photo_url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
+
+  const sinBaseUrl = buildCaptacionPayload(bundleConFoto)
+  assert.equal(sinBaseUrl.contacts[0].photo_url, undefined, 'sin baseUrl, ninguna foto viaja')
 })
 
 test('owner.contact nunca se envía: es redundante con contacts[]', () => {
