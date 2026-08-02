@@ -21,8 +21,17 @@ interface Props {
   tileStyle?: 'carto' | 'satellite'
 }
 
-function fmtPrice(n: number, op: string, currency?: Listing['currency']) {
+function fmtPrice(l: Listing) {
+  const { price: n, operation: op, currency } = l
   if (currency === 'CLP') {
+    // Precio TAL COMO LO PUBLICA el portal (mismo criterio que priceMain() en
+    // PropertyClModal): en el barrio alto casi todo se publica en UF, y forzar
+    // la conversión a CLP daba una precisión falsa además de no matchear lo
+    // que el portal (y sus propios mapas) realmente muestran en el pin.
+    if (l.price_uf != null) {
+      const k = `UF ${Math.round(l.price_uf).toLocaleString('es-CL')}`
+      return op === 'rent' ? `${k}/mes` : k
+    }
     // CLP: montos altos (cientos de millones) — abreviar en M sin símbolo €.
     const k = n >= 1_000_000
       ? `$${(n / 1_000_000).toLocaleString('es-CL', { maximumFractionDigits: 0 })}M`
@@ -37,7 +46,7 @@ function fmtPrice(n: number, op: string, currency?: Listing['currency']) {
 }
 
 function markerHtml(l: Listing, isActive: boolean) {
-  const priceStr = fmtPrice(l.price, l.operation, l.currency)
+  const priceStr = fmtPrice(l)
   const isPartic = l.advertiser_type === 'particular'
   const bg = isActive ? '#3b82f6' : '#ffffff'
   const text = isActive ? '#ffffff' : '#0f172a'
@@ -95,29 +104,40 @@ const GOOGLE_TILE_URL = {
   satellite: 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
 }
 
+// Píldora blanca "N unidades" — misma familia visual que el pin de precio
+// (markerHtml) y el mismo formato que ya usa el mapa de Portal Inmobiliario
+// para agrupar varios avisos en un punto cercano, en vez de un círculo con
+// solo el número.
+function clusterLabel(count: number) {
+  return `${count.toLocaleString('es-CL')} unidad${count === 1 ? '' : 'es'}`
+}
+
 function clusterHtml(count: number) {
-  const size = count >= 100 ? 56 : count >= 25 ? 48 : count >= 10 ? 42 : 36
-  const inner = size - 12
-  const fontSize = size >= 48 ? 14 : 12
-  return `<div style="position:relative;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;">
-    <div style="position:absolute;inset:0;border-radius:50%;background:rgba(37,99,235,0.22);"></div>
-    <div style="
-      position:relative;
-      width:${inner}px;height:${inner}px;
-      border-radius:50%;
-      background:#2563eb;
-      color:#fff;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      font-weight:700;
-      font-size:${fontSize}px;
-      font-family:system-ui,-apple-system,sans-serif;
-      box-shadow:0 3px 10px rgba(37,99,235,0.45);
-      border:2px solid #fff;
-      cursor:pointer;
-    ">${count}</div>
-  </div>`
+  return `<div style="
+    background:#ffffff;
+    color:#0f172a;
+    border:1px solid rgba(0,0,0,0.12);
+    border-radius:999px;
+    padding:6px 12px;
+    font-size:12px;
+    font-weight:700;
+    font-family:system-ui,-apple-system,sans-serif;
+    white-space:nowrap;
+    box-shadow:0 3px 10px rgba(0,0,0,0.3);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+    letter-spacing:-0.01em;
+  ">${clusterLabel(count)}</div>`
+}
+
+// Ancho aproximado de la píldora según el texto ("2 unidades" vs "128
+// unidades") — un iconSize fijo o bien recortaba los números grandes o
+// dejaba un div flotando de más en los chicos.
+function clusterIconSize(count: number): [number, number] {
+  const width = 26 + clusterLabel(count).length * 6.6
+  return [Math.round(width), 28]
 }
 
 export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover, onShapeDrawn, activeShape, tileStyle = 'carto' }: Props) {
@@ -198,7 +218,7 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
           return L.divIcon({
             className: '',
             html: clusterHtml(count),
-            iconSize: L.point(56, 56),
+            iconSize: L.point(...clusterIconSize(count)),
           })
         },
       })

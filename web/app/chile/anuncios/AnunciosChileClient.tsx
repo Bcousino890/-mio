@@ -179,11 +179,12 @@ export default function AnunciosChileClient() {
     return count
   }
 
-  useEffect(() => {
-    setLoading(true)
+  // Mismos filtros para dos consumidores (la lista paginada y el mapa, que
+  // pide un lote propio más grande — ver más abajo).
+  const buildFilterParams = useCallback((pageArg: number, pageSizeArg: number) => {
     const params = new URLSearchParams()
-    params.append('page', String(page))
-    params.append('page_size', String(PAGE_SIZE))
+    params.append('page', String(pageArg))
+    params.append('page_size', String(pageSizeArg))
     params.append('sort', sortBy)
 
     if (operation !== 'all') params.append('operation', operation)
@@ -203,6 +204,12 @@ export default function AnunciosChileClient() {
         params.append('geo_polygon', JSON.stringify(geoShape.coordinates))
       }
     }
+    return params
+  }, [sortBy, operation, advertiser, search, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved, geoShape])
+
+  useEffect(() => {
+    setLoading(true)
+    const params = buildFilterParams(page, PAGE_SIZE)
 
     fetch(`/api/chile/anuncios?${params.toString()}`)
       .then(r => r.json())
@@ -222,7 +229,29 @@ export default function AnunciosChileClient() {
         setListings([])
       })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, advertiser, search, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved, geoShape])
+  }, [page, buildFilterParams])
+
+  // Mapa: pide un lote propio (tope del backend, 200) independiente de la
+  // página de la lista — si no, dibujar una zona con más de 30 resultados
+  // (PAGE_SIZE) solo mostraba la primera página de pines en el mapa aunque la
+  // lista de la izquierda sí paginara sobre el total real.
+  const [mapListings, setMapListings] = useState<Listing[]>([])
+  const [mapTotal, setMapTotal] = useState(0)
+  const [mapLoading, setMapLoading] = useState(false)
+  const MAP_PAGE_SIZE = 200
+
+  useEffect(() => {
+    setMapLoading(true)
+    const params = buildFilterParams(1, MAP_PAGE_SIZE)
+    fetch(`/api/chile/anuncios?${params.toString()}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.data)) { setMapListings(data.data.map(transformChileRow)); setMapTotal(data.total) }
+        else { setMapListings([]); setMapTotal(0) }
+      })
+      .catch(() => { setMapListings([]); setMapTotal(0) })
+      .finally(() => setMapLoading(false))
+  }, [buildFilterParams])
 
   const handlePrevPage = useCallback(() => {
     setPage(Math.max(1, page - 1))
@@ -494,18 +523,28 @@ export default function AnunciosChileClient() {
           </div>
         </div>
 
-        {/* Map */}
+        {/* Map — pinta hasta 200 anuncios del filtro actual (lote propio,
+            independiente de la página de la lista de la izquierda). */}
         {(showMap || isDesktop) && (
-          <div className="hidden lg:block lg:col-span-2 h-screen">
-            <PropertyMap
-              listings={listings}
-              activeId={combinedActive}
-              onMarkerClick={(id) => setActiveId(id)}
-              onMarkerHover={(id) => setHoverId(id)}
-              onShapeDrawn={setGeoShape}
-              activeShape={geoShape}
-              tileStyle="satellite"
-            />
+          <div className="hidden lg:flex lg:col-span-2 h-screen flex-col">
+            <div className="flex-none px-3 py-1.5 text-[11px] text-slate-400 bg-slate-800 border-b border-slate-700">
+              {mapLoading
+                ? 'Cargando mapa…'
+                : mapTotal > mapListings.length
+                  ? `Mostrando ${mapListings.length.toLocaleString('es-CL')} de ${mapTotal.toLocaleString('es-CL')} anuncios en el mapa`
+                  : `${mapTotal.toLocaleString('es-CL')} anuncio${mapTotal === 1 ? '' : 's'} en el mapa`}
+            </div>
+            <div className="flex-1 min-h-0 relative">
+              <PropertyMap
+                listings={mapListings}
+                activeId={combinedActive}
+                onMarkerClick={(id) => setActiveId(id)}
+                onMarkerHover={(id) => setHoverId(id)}
+                onShapeDrawn={setGeoShape}
+                activeShape={geoShape}
+                tileStyle="satellite"
+              />
+            </div>
           </div>
         )}
       </div>
