@@ -449,7 +449,7 @@ export default function AnunciosChileClient() {
                 <ChevronDown size={14} />
               </button>
               {showSortMenu && (
-                <div className="absolute right-0 top-full mt-1 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden min-w-[180px]">
+                <div className="absolute right-0 top-full mt-1 z-[2000] bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden min-w-[180px]">
                   {(Object.keys(SORT_LABELS) as SortKey[]).map(key => (
                     <button
                       key={key}

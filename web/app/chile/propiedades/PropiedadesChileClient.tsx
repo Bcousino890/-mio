@@ -756,7 +756,7 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
               {SORT_LABELS[sortBy]} <ChevronDown size={13} />
             </button>
             {showSortMenu && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden min-w-[210px]">
+              <div className="absolute right-0 top-full mt-1 z-[2000] bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden min-w-[210px]">
                 {(Object.keys(SORT_LABELS) as SortKey[]).map(k => (
                   <button key={k} onClick={() => { setSortBy(k); setShowSortMenu(false) }} className={`block w-full text-left px-3 py-2 text-xs ${sortBy === k ? 'bg-amber-600 text-white' : 'text-slate-300 hover:bg-slate-700'}`}>{SORT_LABELS[k]}</button>
                 ))}

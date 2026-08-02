@@ -57,7 +57,7 @@ function markerHtml(l: Listing, isActive: boolean) {
   const dot = isPartic && !isActive ? 'background:#f59e0b;' : ''
   const dotHtml = isPartic ? `<span style="width:6px;height:6px;border-radius:50%;${dot || 'background:#3b82f6;'}display:inline-block;flex-shrink:0"></span>` : ''
 
-  return `<div style="
+  return `<div class="cf-pin" style="
     background:${bg};
     color:${text};
     border:1px solid ${border};
@@ -72,7 +72,6 @@ function markerHtml(l: Listing, isActive: boolean) {
     align-items:center;
     gap:5px;
     cursor:pointer;
-    transition:all .15s;
     letter-spacing:-0.01em;
   ">${dotHtml}${priceStr}</div>`
 }
@@ -113,7 +112,7 @@ function clusterLabel(count: number) {
 }
 
 function clusterHtml(count: number) {
-  return `<div style="
+  return `<div class="cf-pin" style="
     background:#ffffff;
     color:#0f172a;
     border:1px solid rgba(0,0,0,0.12);
@@ -211,7 +210,12 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         maxClusterRadius: 60,
         showCoverageOnHover: false,
         spiderfyOnMaxZoom: true,
-        zoomToBoundsOnClick: true,
+        // El click de cluster se maneja a mano (clusterclick, más abajo): un
+        // edificio con varias unidades comparte la MISMA coordenada, así que
+        // acercar el zoom (zoomToBoundsOnClick) nunca las separa — hacía
+        // falta seguir haciendo zoom manualmente hasta el tope para que
+        // spiderfyOnMaxZoom recién ahí las abriera.
+        zoomToBoundsOnClick: false,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         iconCreateFunction: (cluster: any) => {
           const count = cluster.getChildCount()
@@ -221,6 +225,22 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
             iconSize: L.point(...clusterIconSize(count)),
           })
         },
+      })
+
+      // Mismo punto exacto (edificio/condominio con varias unidades) → abrir
+      // en abanico DE UNA, sin importar el zoom, para poder elegir cuál ver.
+      // Zona con propiedades cercanas pero distintas → acercar el zoom, igual
+      // que antes (zoomToBoundsOnClick).
+      clusterGroup.on('clusterclick', (e: any) => {
+        const cluster = e.layer
+        const children = cluster.getAllChildMarkers()
+        const first = children[0]?.getLatLng()
+        const samePoint = first && children.every((m: any) => m.getLatLng().distanceTo(first) < 1)
+        if (samePoint) {
+          cluster.spiderfy()
+        } else {
+          map.fitBounds(cluster.getBounds(), { padding: [64, 64], maxZoom: 18 })
+        }
       })
 
       map.addLayer(clusterGroup)
@@ -421,11 +441,30 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
   }, [activeId, listings])
 
   return (
-    <div className="relative w-full h-full">
+    // `isolate` (contexto de apilamiento propio) es la parte que importa:
+    // sin él, el z-index interno de Leaflet (los panes van de 200 a 700,
+    // los controles ~1000) y el de los overlays de abajo (z-[1000]) se
+    // comparan contra el resto de la PÁGINA entera en vez de quedarse
+    // contenidos dentro del mapa — cualquier dropdown de la página con un
+    // z-index menor (ej. el selector de orden, z-50) terminaba con el mapa
+    // pintado ENCIMA en cuanto sus cajas se superponían, aunque el dropdown
+    // estuviera "más arriba" en el documento.
+    <div className="relative isolate w-full h-full">
+      {/* Motion con criterio, no decoración: el hover de pin/cluster confirma
+          que son clicables (mismo lift sutil que un mapa nativo), y el badge
+          de zona dibujada entra con un fundido corto porque aparece como
+          consecuencia directa de un gesto del usuario (dibujar) — no un
+          elemento estático que no necesita anunciar su llegada. */}
+      <style>{`
+        .cf-pin { transition: transform .18s cubic-bezier(0.16,1,0.3,1), box-shadow .18s cubic-bezier(0.16,1,0.3,1); }
+        .cf-pin:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
+        @keyframes cf-badge-in { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+        .cf-badge-in { animation: cf-badge-in .22s cubic-bezier(0.16,1,0.3,1); }
+      `}</style>
       <div ref={containerRef} className="w-full h-full" />
       {/* Draw mode indicator + clear button */}
       {activeShape && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] flex items-center gap-2 bg-blue-600/90 backdrop-blur border border-blue-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
+        <div className="cf-badge-in absolute top-3 left-1/2 z-[1000] flex items-center gap-2 bg-blue-600/90 backdrop-blur border border-blue-500/50 rounded-full px-3 py-1.5 text-xs text-white font-medium shadow-lg">
           <span>Zona dibujada activa</span>
           <button
             onClick={() => {
