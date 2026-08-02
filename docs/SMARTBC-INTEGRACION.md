@@ -108,6 +108,29 @@ AND jsonb_array_length(phones) > 0
 
 Y se re-sincroniza cuando `updated_at` avanza respecto del último envío registrado.
 
+**Captación rechazada/borrada (v1.2.0 de su API, 2026-08-02).** Si nosotros
+borramos una captación (`DELETE`) o la movimos a etapa de rechazo por API,
+SmartBC la reabre solo con reenviarla normal (sin `stage` explícito) — no hace
+falta "recrearla". Nuestro sincronizador nunca llama a `DELETE` ni envía
+`stage` en las actualizaciones (`diffPayload` lo salta a propósito, ver
+arriba), así que esto no cambia nada de nuestro lado: cualquier captación
+nuestra que haya quedado rechazada por API se reabre sola en la próxima corrida.
+
+Ojo con la excepción: si el rechazo lo hizo el **equipo de SmartBC a mano
+desde el panel** (no nosotros por API), no se reabre solo — hay que pedirlo
+con `stage` explícito. `GET /captaciones/{external_id}` distingue los dos
+casos con `rejected_by`: `"api"` (se reabre sola) | `"panel"` (hay que
+pedirlo) | `null` (no está rechazada). Si alguna vez una captación nuestra
+queda estancada, este es el primer campo a mirar antes de asumir que basta
+con reenviarla.
+
+También arreglaron que `owner.confirmed: true` no se aplicaba nunca sobre una
+captación ya existente. No nos afecta en la práctica — seguimos sin enviar
+`owner.confirmed` nunca (ver arriba) — pero es la confirmación de que, si
+algún día cambia esa decisión, el campo ahora sí funciona como documenta el
+contrato: `false → true` se aplica siempre, `true → false` queda protegido si
+el equipo ya confirmó al dueño desde el panel.
+
 ---
 
 ## 4. Mapeo campo a campo
@@ -148,7 +171,7 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 | `address_scraped` | `cap.address` | dirección tal cual la publicó el aviso |
 | `address_real` | `cap.sii_direccion` | **campo del equipo**. Es la dirección exacta del catastro SII para el rol resuelto — mejor dato que el del aviso. Se envía: si el equipo ya puso una, la API la protege sola |
 | `address_verified` | `cap.match_verified` | **campo del equipo**. Solo se envía cuando es `true` (dirección TGR = dirección SII, confirmación documental) |
-| `latitude`, `longitude` | `cap.latitude`, `cap.longitude` | |
+| `latitude`, `longitude` | `property_cl.manual_latitude/longitude` ?? `cap.latitude/longitude` | El **pin corregido a mano** en la ficha de Propiedades manda sobre la coordenada del anuncio, igual que `address_real` manda sobre `address_scraped` — es la ubicación que alguien del equipo confirmó mirando el catastro, no la que declaró el aviso. `NULL` si nadie corrigió el pin todavía |
 | `rol_propiedad` | `cap.sii_rol` | **campo del equipo**. Formato "manzana-predio" (ej. `795-198`) |
 
 ### 4.3 Propietario y seguimiento
@@ -157,9 +180,9 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 |---|---|---|
 | `owner.name` | `cap.owner_name` | nombre del certificado TGR (o el titular DealerNet si TGR no corrió) |
 | `owner.phone` | mejor teléfono de `cap.phones[]` | orden: `calidad` → `ranking` → móvil con WhatsApp primero |
-| `owner.contact` | derivado | ej. `"RUT 12.345.678-9 · 4 teléfonos vía DealerNet"` |
+| `owner.contact` | — | **ya no se envía**. Era un resumen derivado (`"RUT 12.345.678-9 · 4 teléfonos · 2 emails"`) redundante con `contacts[]`, que trae lo mismo con nombre y estructura — en la ficha de SmartBC se veía como un bloque de "datos heredados" con pinta de bot, duplicando lo que ya muestran las tarjetas de contacto. Sigue en `FORCEABLE_TEAM_FIELDS` para poder limpiarlo de fichas que se sincronizaron con ese texto antes de este cambio |
 | `owner.confirmed` | — | **nunca se envía** (§3) |
-| `notes` | derivado, solo procedencia | ej. `"Rol SII 795-198 · match 0.97 verificado con TGR · origen casafari-mio"`. Campo del equipo: si ya escribieron algo, no se pisa |
+| `notes` | derivado: procedencia + discrepancias (`buildNotes`) | Procedencia: `"Rol SII 795-198 · match 0.97 verificado con TGR"`. Se le suman, si aplican, una línea de superficie (`"Terreno real (catastro SII): 260 m² — el anuncio declara 320 m²"`, umbral `SURFACE_DISCREPANCY_THRESHOLD = 5%`) y una de precio entre corredoras (`"Precio distinto entre corredoras: $450.000.000 (A) vs $520.000.000 (B)"`, umbral `PRICE_DISCREPANCY_THRESHOLD = 5%`, comparando `listings_cl.price` — siempre en CLP — de los avisos activos). Campo del equipo: si ya escribieron algo, no se pisa |
 | `revision_notes`, `next_action_at`, `next_action_note` | — | no se envían: son del trabajo comercial del equipo |
 
 ### 4.4 `contacts[]` (máx. 20)
@@ -167,16 +190,31 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 - **Titular**: `external_id: "mio-<uuid>-owner"`, `contact_type: "owner"`,
   `contact_name: cap.owner_name`, `rut: cap.owner_rut`, `phone` = el mejor teléfono,
   `has_whatsapp` = `phones[].whatsapp`, `extra_phones[]` = el resto de sus teléfonos
-  (máx. 20) con `label` = `tipo`/`categoria` de DealerNet.
+  (máx. 20) con `label` = `tipo`/`categoria` de DealerNet. DealerNet no siempre deja
+  el parentesco vacío para el número del propio dueño — a veces lo etiqueta
+  explícitamente `"Titular"` (o `"Titular, Sociedad"` si el número también es de la
+  empresa) — así que esa fila **no** se duplica como relacionado aparte: se reconoce
+  por relación o por RUT y se pliega en este mismo contacto (`esRelacionTitular`).
 - **Relacionados** (`cap.relacionados[]` = `{rut, dv, nombre, relacion}`): se envía
   **solo el relacionado que tenga al menos un teléfono** asociado (el cruce se hace por
-  `phones[].relacion` ↔ `relacionados[].relacion`). Un relacionado sin teléfono no
-  aporta nada al equipo y el tope son 20 contactos — DealerNet llega a devolver decenas.
-  `external_id: "mio-<uuid>-rel-<rut>"`.
-- Mapeo de `relacion` → `contact_type`: `Cónyuge` → `spouse`; `Hijo`, `Hija`, `Madre`,
-  `Padre`, `Hermano/a`, `Suegro/a`, `Cuñado/a`, `Nieto/a`, `Tío/a`, `Sobrino/a` →
-  `family` (con el texto original en `relationship`); todo lo demás (`Empleador`,
-  sociedades…) → `other`, también con `relationship`.
+  `phones[].relacion` ↔ `relacionados[].relacion`), y sin contar al titular (punto
+  anterior). Un relacionado sin teléfono no aporta nada al equipo y el tope son 20
+  contactos — DealerNet llega a devolver decenas. `external_id: "mio-<uuid>-rel-<rut>"`.
+- Mapeo de `relacion` → `contact_type`: `Titular` → `owner`; `Cónyuge` → `spouse`;
+  `Hijo`, `Hija`, `Madre`, `Padre`, `Hermano/a`, `Suegro/a`, `Cuñado/a`, `Nieto/a`,
+  `Tío/a`, `Sobrino/a` → `family` (con el texto original en `relationship`); todo lo
+  demás (`Empleador`, sociedades…) → `other`, también con `relationship`.
+- `photo_url` (foto de perfil, v1.1.0 de SmartBC): la foto de WhatsApp que
+  DealerNet asocia al teléfono principal de cada contacto (`phones[].idimagen`),
+  servida por nuestro propio proxy (`/api/chile/dealernet-imagen`, sin sesión —
+  ver ese `route.ts`). SmartBC la descarga server a server, así que necesita una
+  URL **absoluta** con nuestro dominio público: se arma con la variable de
+  entorno `APP_BASE_URL` (`dealernetImageUrl()` en `mapper.mjs`, que sigue sin
+  leer `process.env` — `baseUrl` la trae quien orquesta, igual que `normalizer`).
+  Sin `APP_BASE_URL` configurada, o si el teléfono no tiene `idimagen`, el
+  contacto simplemente no lleva foto — nunca se manda una URL relativa rota.
+  En la selección manual (`smartbc_contactos`, que no guarda `idimagen`) la foto
+  se busca cruzando por el número contra los teléfonos crudos de DealerNet.
 
 ### 4.5 `photos` y `listings[]`
 
@@ -263,6 +301,9 @@ Se implementaron con el valor recomendado; ninguna está enterrada en el código
 | Condición de envío | `contact_found` + sin revisión + dueño + teléfono (§3) | `PENDING_SQL` en `smartbc-sync-cl.mjs` |
 | Etapa inicial | `assigned` ("Para llamar"): la ficha llega con dueño y teléfono verificados, así que entra directa en la cola de llamadas | `--stage preliminary_data`, o `--stage ''` para no opinar |
 | `notes` de procedencia | Sí, una línea con rol, score y si está verificado con TGR | `--no-notes` |
+| Umbral de aviso: superficie vs. catastro SII | 5% de diferencia relativa | `SURFACE_DISCREPANCY_THRESHOLD` en `mapper.mjs` |
+| Umbral de aviso: precio entre corredoras | 5% de diferencia relativa | `PRICE_DISCREPANCY_THRESHOLD` en `mapper.mjs` |
+| Precio en 0 | Se trata como "sin dato" (no se envía), nunca como precio real | `pickPrice()` en `mapper.mjs` — ninguna propiedad se publica gratis; un 0 es un valor que no se pudo extraer |
 
 ---
 

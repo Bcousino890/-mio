@@ -38,12 +38,19 @@ SELECT cap.*,
        com.name    AS comuna_name,
        com.region  AS comuna_region,
        p.localidad AS property_localidad,
+       -- Mismos dos campos extra que PENDING_SQL en sync.mjs (pin corregido +
+       -- superficie de catastro): el botón "Agregar a Smart" tiene que armar
+       -- exactamente el mismo bundle que la sincronización automática.
+       p.manual_latitude::float8  AS property_manual_latitude,
+       p.manual_longitude::float8 AS property_manual_longitude,
+       sr.superficie_terreno_m2   AS sii_superficie_terreno_m2,
        s.payload_hash,
        s.last_payload,
        s.synced_at
   FROM captaciones_cl cap
   LEFT JOIN smartbc_sync_cl s ON s.captacion_id = cap.id
   LEFT JOIN property_cl p     ON p.id = cap.property_cl_id
+  LEFT JOIN sii_roles_cl sr   ON sr.sii_comuna_code = cap.sii_comuna_code AND sr.rol = cap.sii_rol
   LEFT JOIN LATERAL (
     SELECT c.name, c.region
       FROM chile_comunas c
@@ -249,6 +256,8 @@ export async function POST(request: NextRequest) {
       stage: stage === undefined ? 'assigned' : stage,
       normalizer,
       forceFields,
+      // Dominio público propio, para las fotos de contacto (contacts[].photo_url).
+      baseUrl: process.env.APP_BASE_URL ?? null,
     })
 
     // Desde el botón, "no ha cambiado nada" no debe ser un no-op silencioso: la

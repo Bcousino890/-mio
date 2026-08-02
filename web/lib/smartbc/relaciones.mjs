@@ -36,6 +36,19 @@ export function foldRelacion(s) {
 }
 
 /**
+ * ¿Esta relación (simple o compuesta, "Titular, Sociedad") incluye "Titular"?
+ *
+ * DealerNet no siempre deja el campo vacío para el número del propio dueño:
+ * a veces lo etiqueta explícitamente "Titular" (o "Titular, Sociedad" cuando
+ * el número también es de la empresa). Tratar "solo vacío = titular" perdía
+ * ese caso, y el contacto acababa viajando a SmartBC como other en vez de
+ * owner — ahí es donde se ve "OTRO" junto al nombre del dueño.
+ */
+export function esRelacionTitular(relacion) {
+  return splitRelaciones(relacion).some((r) => foldRelacion(r) === 'titular')
+}
+
+/**
  * Una persona de la ficha, lista para elegirla como dueña de un teléfono.
  *
  * @typedef {Object} Persona

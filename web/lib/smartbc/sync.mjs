@@ -72,6 +72,15 @@ SELECT cap.*,
        com.name    AS comuna_name,
        com.region  AS comuna_region,
        p.localidad AS property_localidad,
+       -- Pin corregido a mano en la ficha de Propiedades (mapa, "Pin real"):
+       -- mejor dato que la coordenada del anuncio, igual que address_real ya
+       -- manda sobre address_scraped. NULL si nadie corrigió el pin todavía.
+       p.manual_latitude::float8  AS property_manual_latitude,
+       p.manual_longitude::float8 AS property_manual_longitude,
+       -- Superficie de terreno del catastro SII para el rol resuelto: el dato
+       -- oficial contra el que se compara lo que declaró el anuncio (ver
+       -- buildProvenanceNote, discrepancia de superficie).
+       sr.superficie_terreno_m2   AS sii_superficie_terreno_m2,
        s.payload_hash,
        s.last_payload,
        s.external_id AS synced_external_id,
@@ -79,6 +88,7 @@ SELECT cap.*,
   FROM principal cap
   LEFT JOIN smartbc_sync_cl s ON s.captacion_id = cap.id
   LEFT JOIN property_cl p     ON p.id = cap.property_cl_id
+  LEFT JOIN sii_roles_cl sr   ON sr.sii_comuna_code = cap.sii_comuna_code AND sr.rol = cap.sii_rol
   LEFT JOIN LATERAL (
     SELECT c.name, c.region
       FROM chile_comunas c
@@ -158,7 +168,12 @@ export function toBundle(cap, listings) {
   return {
     captacion: cap,
     comuna: { name: cap.comuna_name, region: cap.comuna_region },
-    property: { localidad: cap.property_localidad },
+    property: {
+      localidad: cap.property_localidad,
+      manual_latitude: cap.property_manual_latitude ?? null,
+      manual_longitude: cap.property_manual_longitude ?? null,
+    },
+    catastro: { superficie_terreno_m2: cap.sii_superficie_terreno_m2 ?? null },
     listings,
   }
 }
@@ -348,6 +363,10 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
     stage = 'assigned',
     includeNotes = true,
     log = () => {},
+    // Dominio público propio (APP_BASE_URL), para las fotos de contacto
+    // (contacts[].photo_url) — sync.mjs no lee process.env directamente,
+    // igual que el mapper; lo trae quien orquesta (el CLI).
+    baseUrl = null,
   } = opts
 
   const captaciones = await selectPendingCaptaciones(client, { limit })
@@ -380,7 +399,7 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
 
   const planned = []
   for (const cap of captaciones) {
-    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes, normalizer })
+    const plan = planItem(cap, listingsByCap.get(cap.id) ?? [], { stage, includeNotes, normalizer, baseUrl })
     if (plan.action === 'unchanged') {
       summary.unchanged++
       // Se registra igual: deja el rastro de que la captación se revisó hoy y

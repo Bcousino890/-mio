@@ -85,6 +85,8 @@ async function main() {
       stage: args.stage,
       includeNotes: args.includeNotes,
       log: (msg) => console.error(`  ${msg}`),
+      // Dominio público propio, para las fotos de contacto (contacts[].photo_url).
+      baseUrl: process.env.APP_BASE_URL ?? null,
     })
 
     console.error(
