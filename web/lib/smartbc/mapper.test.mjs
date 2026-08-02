@@ -21,6 +21,7 @@ import {
   buildPhotos,
   diffPayload,
   externalIdFor,
+  FORCEABLE_TEAM_FIELDS,
   isEmptyPatch,
   mapContactType,
   mapOperation,
@@ -566,6 +567,24 @@ test('options nunca se envía: no se pisan los campos del equipo', () => {
   const payload = buildCaptacionPayload(BUNDLE)
   assert.equal(payload.options, undefined)
   assert.equal(payload.assigned_to_email, undefined)
+})
+
+test('forceFields solo viaja si se pide explícitamente, y solo con campos de la whitelist', () => {
+  assert.deepEqual(FORCEABLE_TEAM_FIELDS, ['notes', 'owner.contact'])
+
+  const sinForzar = buildCaptacionPayload(BUNDLE, { forceFields: [] })
+  assert.equal(sinForzar.options, undefined)
+
+  const conForzar = buildCaptacionPayload(BUNDLE, { forceFields: ['notes', 'owner.contact'] })
+  assert.deepEqual(conForzar.options, { force_fields: ['notes', 'owner.contact'] })
+
+  // Un campo fuera de la whitelist (p. ej. owner.phone, que sí puede llevar una
+  // corrección real de la captadora) nunca se cuela, aunque alguien lo pida.
+  const conCampoInvalido = buildCaptacionPayload(BUNDLE, { forceFields: ['owner.phone', 'notes'] })
+  assert.deepEqual(conCampoInvalido.options, { force_fields: ['notes'] })
+
+  const soloInvalidos = buildCaptacionPayload(BUNDLE, { forceFields: ['owner.phone'] })
+  assert.equal(soloInvalidos.options, undefined)
 })
 
 test('un tipo desconocido cae a other y deja el original en metadata', () => {

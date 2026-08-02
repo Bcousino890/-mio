@@ -226,7 +226,7 @@ literalmente "la misma propiedad publicada por otras corredoras". Deduplicados p
 | `pipeline` | no se envía (usa el del país) |
 | `stage` | **a decidir** — ver §6 |
 | `assigned_to_email` | no se envía: SmartBC reparte automáticamente y la asignación es suya |
-| `options` | no se envía. Nunca forzamos `overwrite_manual_fields` ni `force_fields` |
+| `options` | no se envía en la sincronización automática. Excepción manual: el botón "Forzar notas y contacto" de la ficha puede mandar `{ force_fields: ['notes'] }` y/o `{ force_fields: ['owner.contact'] }` — nunca `overwrite_manual_fields` (todos los campos) ni ningún otro campo de la whitelist `FORCEABLE_TEAM_FIELDS` en `mapper.mjs`, porque esos dos son los únicos que siempre escribimos nosotros (texto derivado), nunca la captadora a mano |
 | `metadata` | `{ origen: "casafari-mio", captacion_id, property_cl_id, listing_cl_id, sii_rol, sii_comuna_code, match_score, match_confidence, match_verified, tgr_status, dealernet_status, relacionados_total, relacionados_enviados, property_type_origen }` |
 
 ---
