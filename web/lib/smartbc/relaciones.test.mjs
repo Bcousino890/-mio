@@ -173,13 +173,21 @@ test('el texto "Relación directa con" del anuncio no cuenta como parentesco', (
   assert.deepEqual(splitRelaciones('Relación directa con Hijo, Nuera'), ['Hijo', 'Nuera'])
 })
 
-// ─── Edad aproximada por RUT (fvillena/rut-a-edad) ──────────────────────────
+// ─── Edad aproximada por RUT (fvillena/rut-a-edad, desuc/desuctools) ────────
 
 test('reproduce el ejemplo publicado del modelo: RUT 5126663 → 69 años (2018)', () => {
   // https://github.com/fvillena/rut-a-edad — "El individuo tiene 69 años y
   // nació en abril de 1949". Ancla el cálculo contra un resultado ya conocido,
   // no solo contra la fórmula reescrita.
   assert.equal(edadAproximada(5126663, new Date('2018-06-15')), 69)
+})
+
+test('la edad se calcula por fecha calendario, no por año truncado', () => {
+  // Caso real reportado: RUT 21.191.599-4, nació en diciembre de 2002. El
+  // modelo estima su nacimiento a mediados de diciembre de 2002 — con una
+  // resta de años truncados daba 24 en vez de 23 (adelantaba el cumpleaños
+  // de este año calendario aunque la fecha real ya lo hubiera cumplido).
+  assert.equal(edadAproximada(21191599, new Date('2026-08-02')), 23)
 })
 
 test('la edad crece con el correlativo — más antiguo el RUT, mayor la edad', () => {

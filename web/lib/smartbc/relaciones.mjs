@@ -53,11 +53,24 @@ export function rutDeRelacionado(rel) {
 
 // ─── Edad aproximada por RUT ────────────────────────────────────────────────
 // En Chile el RUT se asigna de forma correlativa al nacer (Registro Civil), así
-// que el número por sí solo predice el año de nacimiento con bastante
-// precisión. Regresión lineal de fvillena/rut-a-edad — 1175 RUT con fecha de
-// nacimiento conocida, R²=0.9574: https://github.com/fvillena/rut-a-edad
-const RUT_EDAD_PENDIENTE = 3.3364e-6
-const RUT_EDAD_INTERCEPTO = 1932.26
+// que el número por sí solo predice la fecha de nacimiento con precisión
+// razonable. Misma regresión lineal (hasta la 5ª cifra decimal) en dos fuentes
+// independientes:
+//   · fvillena/rut-a-edad — 1175 RUT con fecha de nacimiento conocida,
+//     R²=0.9574: https://github.com/fvillena/rut-a-edad
+//   · desuc/desuctools::edad_rut — más precisión decimal, y calcula la edad
+//     por fecha calendario (no por año truncado):
+//     https://github.com/desuc/desuctools/blob/master/R/edad_rut.R
+//
+// Es una ESTIMACIÓN, no un dato verificado — sirve para distinguir a simple
+// vista entre varios relacionados con el mismo parentesco ("Hijo" x3), nunca
+// se envía al CRM. Puede fallar por años en casos puntuales (el propio
+// docstring de desuctools lo advierte para personas migrantes: alguien que
+// obtuvo su RUT ya adulto rompe el supuesto de fondo, "correlativo = orden de
+// nacimiento"), así que ningún ajuste de coeficientes la vuelve exacta.
+const RUT_EDAD_PENDIENTE = 3.3363697569700348e-6
+const RUT_EDAD_INTERCEPTO = 1932.2573852507373
+const MS_POR_DIA = 24 * 60 * 60 * 1000
 
 /**
  * Correlativo numérico de un RUT formateado ("9.250.701-7" → 9250701).
@@ -74,16 +87,28 @@ export function numeroDeRut(rutTexto) {
 }
 
 /**
+ * Año decimal (p. ej. 1949.36) → fecha calendario, repartiendo la fracción en
+ * los milisegundos reales de ESE año (365 o 366 días según corresponda).
+ * Mismo cálculo que hace `lubridate::date_decimal()` en desuc/desuctools.
+ *
+ * @param {number} anioDecimal
+ * @returns {Date}
+ */
+function fechaDesdeAnioDecimal(anioDecimal) {
+  const anio = Math.floor(anioDecimal)
+  const inicioAnio = Date.UTC(anio, 0, 1)
+  const inicioSiguiente = Date.UTC(anio + 1, 0, 1)
+  return new Date(inicioAnio + (anioDecimal - anio) * (inicioSiguiente - inicioAnio))
+}
+
+/**
  * Edad aproximada de una persona natural a partir del correlativo de su RUT.
  *
- * `null` si el número no da una edad de persona viva — RUT de empresa (nunca
- * fue asignado al nacer) o correlativo corrupto. No hace falta distinguirlos
- * a mano: la fórmula misma los delata, porque les da un año de nacimiento
- * fuera de cualquier vida humana posible (una Sociedad con RUT 76.xxx.xxx
- * "nacería" el año 2185).
- *
- * Es una ESTIMACIÓN para distinguir entre varios relacionados con el mismo
- * parentesco ("Hijo" x3) — no un dato verificado, no se envía al CRM.
+ * `null` si la fecha de nacimiento estimada queda en el futuro respecto a
+ * `hoy` — RUT de empresa (nunca fue asignado al nacer) o correlativo
+ * corrupto. No hace falta distinguirlos a mano: la fórmula misma los delata,
+ * porque les da una fecha de nacimiento fuera de cualquier vida humana
+ * posible (una Sociedad con RUT 76.xxx.xxx "nacería" en 2185).
  *
  * @param {number | string | null | undefined} rutNumerico Correlativo SIN dígito verificador.
  * @param {Date} [hoy]
@@ -92,9 +117,12 @@ export function numeroDeRut(rutTexto) {
 export function edadAproximada(rutNumerico, hoy = new Date()) {
   const n = Number(rutNumerico)
   if (!Number.isFinite(n) || n <= 0) return null
-  const anioNacimiento = n * RUT_EDAD_PENDIENTE + RUT_EDAD_INTERCEPTO
-  const edad = hoy.getFullYear() - Math.trunc(anioNacimiento)
-  return edad >= 0 && edad <= 110 ? edad : null
+  const nacimiento = fechaDesdeAnioDecimal(n * RUT_EDAD_PENDIENTE + RUT_EDAD_INTERCEPTO)
+  if (nacimiento.getTime() > hoy.getTime()) return null
+  const edad = Math.floor((hoy.getTime() - nacimiento.getTime()) / MS_POR_DIA / 365.25)
+  // Cota defensiva: con el intercepto actual ningún RUT válido pasa de ~95
+  // años calculados desde hoy, pero no cuesta nada dejar el resguardo.
+  return edad <= 110 ? edad : null
 }
 
 /**

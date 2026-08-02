@@ -16,8 +16,15 @@ import {
 // Misma definición de parentescos que usa el envío al CRM.
 import { candidatosDeNombre, foldRelacion, splitRelaciones, edadAproximada } from '@/lib/smartbc/relaciones.mjs'
 
-/** Tooltip común de la edad estimada — misma frase donde sea que se muestre. */
-const EDAD_APROX_TITLE = 'Edad aproximada, estimada a partir del correlativo del RUT (no es un dato verificado) — fvillena/rut-a-edad'
+/**
+ * Tooltip común de la edad estimada — misma frase donde sea que se muestre.
+ * "Puede fallar por años" no es cautela de más: en la calibración contra
+ * casos reales, 1 de 2 quedó a 10 años de la edad real (típico de alguien que
+ * obtuvo su RUT ya adulto, donde el correlativo no refleja el año de
+ * nacimiento). Sirve para distinguir a simple vista, no para confiar en el
+ * número puntual.
+ */
+const EDAD_APROX_TITLE = 'Edad aproximada estimada por RUT — puede fallar por años (p. ej. en RUT tramitados en la adultez). No es un dato verificado.'
 
 export interface Phone {
   phone_e164: string
