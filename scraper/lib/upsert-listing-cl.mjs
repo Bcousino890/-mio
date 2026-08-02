@@ -192,6 +192,15 @@ export async function upsertListingCl(client, parsed, options = {}) {
 
   const changeType = detectChangeType(existing, next)
 
+  // Los placeholders van en ORDEN ESTRICTO, uno por columna y en la misma
+  // secuencia que la lista de columnas. No es cosmético: cuando se añadieron
+  // price_usd/usd_rate/usd_rate_date a la lista, sus valores se engancharon al
+  // final ($36,$37,$38) y el resto de la secuencia quedó descolocada — usd_rate
+  // acababa recibiendo la FECHA de la tasa UF y Postgres rechazaba la fila
+  // entera con 'invalid input syntax for type numeric'. Efecto en producción:
+  // desde el minuto en que se desplegó, NINGUNA ficha volvió a guardarse. Con la
+  // numeración correlativa, añadir una columna es añadir su valor en la misma
+  // posición del array, y un descuadre se ve a simple vista.
   const { rows: upserted } = await client.query(
     `INSERT INTO listings_cl (
        portal, source_type, external_id, source_url, operation, advertiser_type, advertiser_name, phone,
@@ -201,10 +210,9 @@ export async function upsertListingCl(client, parsed, options = {}) {
        portal_first_seen_at, parser_version,
        status, is_active, last_seen_at, detail_parsed_at, updated_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-       $18,$19,$20,$21,$22,$23,$24,$25,$35,$36,$37,$38,
-       $26,$27,$28,$30,$31,$32,$33,$34,$39,
-       'active', true, $29, $29, now()
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+       $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
+       'active', true, $39, $39, now()
      )
      ON CONFLICT (portal, external_id) DO UPDATE SET
        source_type = EXCLUDED.source_type, source_url = EXCLUDED.source_url,
@@ -238,21 +246,49 @@ export async function upsertListingCl(client, parsed, options = {}) {
        detail_parsed_at = EXCLUDED.detail_parsed_at,
        status = 'active', is_active = true, last_seen_at = EXCLUDED.last_seen_at, updated_at = now()
      RETURNING id`,
+    // Un valor por columna, en el MISMO orden que la lista de columnas del
+    // INSERT. Los comentarios de posición no son decoración: son lo que hace
+    // que añadir una columna en medio no vuelva a descuadrar la fila entera.
     [
-      parsed.portal ?? 'portalinmobiliario', parsed.source_type ?? 'portal', parsed.external_id, parsed.source_url,
-      parsed.operation ?? null, parsed.advertiser_type ?? 'unknown', parsed.advertiser_name ?? null, parsed.phone ?? null,
-      priceClp, priceUf, ufRate, ufRateDate, currency, parsed.bedrooms ?? null, parsed.bathrooms ?? null,
-      parsed.square_meters ?? null, parsed.property_type ?? null,
-      comunaId, parsed.comuna ?? null, localidad, parsed.address ?? null, parsed.latitude ?? null, parsed.longitude ?? null,
-      parsed.description ?? null, JSON.stringify(photos),
-      parsed.property_code ?? null, parsed.advertiser_id ?? null, parsed.seller_reference ?? null,
-      scrapedAt,
-      JSON.stringify(parsed.features ?? []),
-      parsed.has_video ?? false, parsed.video_modal_url ?? null, parsed.advertiser_logo ?? null,
-      portalFirstSeenAt,
-      parsed.photos_total_count ?? null,
-      priceUsd, usdRate, usdRateDate,
-      parsed.parser_version ?? null,
+      /*  1 portal              */ parsed.portal ?? 'portalinmobiliario',
+      /*  2 source_type         */ parsed.source_type ?? 'portal',
+      /*  3 external_id         */ parsed.external_id,
+      /*  4 source_url          */ parsed.source_url,
+      /*  5 operation           */ parsed.operation ?? null,
+      /*  6 advertiser_type     */ parsed.advertiser_type ?? 'unknown',
+      /*  7 advertiser_name     */ parsed.advertiser_name ?? null,
+      /*  8 phone               */ parsed.phone ?? null,
+      /*  9 price               */ priceClp,
+      /* 10 price_uf            */ priceUf,
+      /* 11 price_usd           */ priceUsd,
+      /* 12 usd_rate            */ usdRate,
+      /* 13 usd_rate_date       */ usdRateDate,
+      /* 14 uf_rate             */ ufRate,
+      /* 15 uf_rate_date        */ ufRateDate,
+      /* 16 currency            */ currency,
+      /* 17 bedrooms            */ parsed.bedrooms ?? null,
+      /* 18 bathrooms           */ parsed.bathrooms ?? null,
+      /* 19 square_meters       */ parsed.square_meters ?? null,
+      /* 20 property_type       */ parsed.property_type ?? null,
+      /* 21 comuna_id           */ comunaId,
+      /* 22 comuna_raw          */ parsed.comuna ?? null,
+      /* 23 localidad           */ localidad,
+      /* 24 address             */ parsed.address ?? null,
+      /* 25 latitude            */ parsed.latitude ?? null,
+      /* 26 longitude           */ parsed.longitude ?? null,
+      /* 27 description         */ parsed.description ?? null,
+      /* 28 photos              */ JSON.stringify(photos),
+      /* 29 photos_total_count  */ parsed.photos_total_count ?? null,
+      /* 30 property_code       */ parsed.property_code ?? null,
+      /* 31 advertiser_id       */ parsed.advertiser_id ?? null,
+      /* 32 seller_reference    */ parsed.seller_reference ?? null,
+      /* 33 features            */ JSON.stringify(parsed.features ?? []),
+      /* 34 has_video           */ parsed.has_video ?? false,
+      /* 35 video_modal_url     */ parsed.video_modal_url ?? null,
+      /* 36 advertiser_logo     */ parsed.advertiser_logo ?? null,
+      /* 37 portal_first_seen_at*/ portalFirstSeenAt,
+      /* 38 parser_version      */ parsed.parser_version ?? null,
+      /* 39 last_seen_at + detail_parsed_at */ scrapedAt,
     ]
   )
   const listingId = upserted[0].id
