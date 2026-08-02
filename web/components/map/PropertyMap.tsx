@@ -14,6 +14,10 @@ interface Props {
   onMarkerHover?: (id: string | null) => void
   onShapeDrawn?: (shape: GeoShapeFilter | null) => void
   activeShape?: GeoShapeFilter | null
+  /** 'carto' (por defecto, España) | 'satellite' (satélite híbrido de Google
+   * sin API key, mismo patrón que components/map/StreetViewMap.tsx y
+   * DetailMap.tsx — es el que usa Chile). */
+  tileStyle?: 'carto' | 'satellite'
 }
 
 function fmtPrice(n: number, op: string, currency?: Listing['currency']) {
@@ -107,7 +111,7 @@ function clusterHtml(count: number) {
   </div>`
 }
 
-export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover, onShapeDrawn, activeShape }: Props) {
+export default function PropertyMap({ listings, activeId, onMarkerClick, onMarkerHover, onShapeDrawn, activeShape, tileStyle = 'carto' }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null)
@@ -144,11 +148,23 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         attributionControl: false,
       })
 
-      // Carto light for contrast with our dark UI
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap © CARTO',
-        maxZoom: 20,
-      }).addTo(map)
+      if (tileStyle === 'satellite') {
+        // Satélite híbrido de Google (lyrs=y: imagen + nombres de calles),
+        // tiles estáticos gratis sin API key — mismo patrón que
+        // StreetViewMap.tsx/DetailMap.tsx (Chile usa siempre este estilo).
+        L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+          subdomains: ['0', '1', '2', '3'],
+          attribution: '© Google',
+          maxZoom: 21,
+          maxNativeZoom: 20,
+        }).addTo(map)
+      } else {
+        // Carto light for contrast with our dark UI
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+          attribution: '© OpenStreetMap © CARTO',
+          maxZoom: 20,
+        }).addTo(map)
+      }
 
       // Custom zoom controls placement
       L.control.zoom({ position: 'topright' }).addTo(map)

@@ -770,6 +770,7 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
               onMarkerClick={id => { const p = items.find(i => i.id === id); if (p) setSelected(p) }}
               onShapeDrawn={setGeoShape}
               activeShape={geoShape}
+              tileStyle="satellite"
             />
           </div>
         )}

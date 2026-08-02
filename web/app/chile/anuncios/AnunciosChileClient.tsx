@@ -504,6 +504,7 @@ export default function AnunciosChileClient() {
               onMarkerHover={(id) => setHoverId(id)}
               onShapeDrawn={setGeoShape}
               activeShape={geoShape}
+              tileStyle="satellite"
             />
           </div>
         )}
