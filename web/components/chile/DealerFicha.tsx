@@ -8,11 +8,23 @@
 // consultas (DealerQueryHistory) muestren EXACTAMENTE la misma ficha completa,
 // sin duplicar el layout.
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Phone, Mail, MapPin, CheckCircle2, MessageCircle,
-  Copy, Check, Users, UserRound,
+  Copy, Check, Users, UserRound, ChevronDown,
 } from 'lucide-react'
+// Misma definición de parentescos que usa el envío al CRM.
+import { candidatosDeNombre, foldRelacion, splitRelaciones, edadAproximada } from '@/lib/smartbc/relaciones.mjs'
+
+/**
+ * Tooltip común de la edad estimada — misma frase donde sea que se muestre.
+ * "Puede fallar por años" no es cautela de más: en la calibración contra
+ * casos reales, 1 de 2 quedó a 10 años de la edad real (típico de alguien que
+ * obtuvo su RUT ya adulto, donde el correlativo no refleja el año de
+ * nacimiento). Sirve para distinguir a simple vista, no para confiar en el
+ * número puntual.
+ */
+const EDAD_APROX_TITLE = 'Edad aproximada estimada por RUT — puede fallar por años (p. ej. en RUT tramitados en la adultez). No es un dato verificado.'
 
 export interface Phone {
   phone_e164: string
@@ -155,6 +167,201 @@ export interface PhoneRowData {
   relacion: string | null
 }
 
+/** Una persona de la ficha (relacionado de DealerNet o titular del TGR). */
+export interface PersonaOpcion {
+  nombre: string
+  relacion: string | null
+  rut: string | null
+  /** Edad aproximada estimada por RUT (ver `edadAproximada`). `null` en RUT de empresa o sin RUT. */
+  edad: number | null
+}
+
+/**
+ * Elegir, de la lista de relacionados, con qué nombre viaja un teléfono al CRM.
+ *
+ * DealerNet nunca dice de quién es un número: del teléfono solo se sabe el
+ * parentesco ("Hijo") y los nombres viven en la tabla de Relacionados — donde
+ * hay tres hijos. Escribirlo a mano obligaba a bajar hasta esa tabla, leerlo y
+ * copiarlo sin equivocarse; acá se elige de esa misma lista, con los que calzan
+ * con la relación del número arriba del todo (el primero es el que el pipeline
+ * pone solo). Al elegir viaja también el RUT de esa persona, que es lo que la
+ * identifica en el CRM.
+ *
+ * Sigue admitiendo texto libre: hay números de gente que no está en la tabla, y
+ * hay nombres legales que el equipo prefiere escribir como los usa la persona.
+ */
+export function NamePicker({
+  value, options, relacion, onChange, onOpenChange,
+}: {
+  value: string
+  options: PersonaOpcion[]
+  relacion?: string | null
+  /** `opcion` viene solo cuando el nombre se eligió de la lista. */
+  onChange: (nombre: string, opcion?: PersonaOpcion) => void
+  onOpenChange?: (abierto: boolean) => void
+}) {
+  const [abierto, setAbierto] = useState(false)
+  // `null` = no se está filtrando y el input muestra el nombre elegido.
+  const [filtro, setFiltro] = useState<string | null>(null)
+  const [activo, setActivo] = useState(-1)
+  const cajaRef = useRef<HTMLDivElement>(null)
+
+  const cerrar = useCallback(() => {
+    setAbierto(false)
+    setFiltro(null)
+    setActivo(-1)
+    onOpenChange?.(false)
+  }, [onOpenChange])
+
+  const abrir = useCallback(() => {
+    setAbierto(true)
+    onOpenChange?.(true)
+  }, [onOpenChange])
+
+  // Clic fuera: cerrar sin tocar lo escrito.
+  useEffect(() => {
+    if (!abierto) return
+    const fuera = (e: MouseEvent) => {
+      if (cajaRef.current && !cajaRef.current.contains(e.target as Node)) cerrar()
+    }
+    document.addEventListener('mousedown', fuera)
+    return () => document.removeEventListener('mousedown', fuera)
+  }, [abierto, cerrar])
+
+  const { sugeridos, otros } = candidatosDeNombre(relacion, options)
+  const q = foldRelacion(filtro ?? '')
+  const filtrar = (lista: PersonaOpcion[]) => (q
+    ? lista.filter((o) => foldRelacion(`${o.nombre} ${o.relacion ?? ''} ${o.rut ?? ''}`).includes(q))
+    : lista)
+  const gSugeridos = filtrar(sugeridos)
+  const gOtros = filtrar(otros)
+  const planos = [...gSugeridos, ...gOtros]
+
+  const elegida = options.find((o) => foldRelacion(o.nombre) === foldRelacion(value))
+  const esElegida = (o: PersonaOpcion) => foldRelacion(o.nombre) === foldRelacion(value)
+
+  const elegir = (o: PersonaOpcion) => {
+    onChange(o.nombre, o)
+    cerrar()
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!abierto) abrir()
+      setActivo((i) => Math.min(i + 1, planos.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActivo((i) => Math.max(i - 1, -1))
+    } else if (e.key === 'Enter' && abierto && planos[activo]) {
+      e.preventDefault()
+      elegir(planos[activo])
+    } else if (e.key === 'Escape' && abierto) {
+      // Frena el Escape del modal de la ficha: cierra la lista, no la captación.
+      e.preventDefault()
+      e.stopPropagation()
+      cerrar()
+    }
+  }
+
+  // Funciones que devuelven JSX, no componentes: declarar un componente dentro
+  // del render le cambia la identidad en cada pasada y React desmonta el botón
+  // entre el mousedown y el click — el clic sobre una opción se perdería.
+  const opcion = (o: PersonaOpcion, i: number) => (
+    <button
+      key={o.rut ?? o.nombre}
+      type="button"
+      role="option"
+      aria-selected={esElegida(o)}
+      // Sin esto el input pierde el foco antes del clic y la lista se cierra sola.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => elegir(o)}
+      onMouseEnter={() => setActivo(i)}
+      className={`w-full flex items-center gap-1.5 px-2 py-1.5 text-left transition-colors ${
+        i === activo ? 'bg-[var(--c-hover)]' : ''
+      }`}
+    >
+      <Check size={10} className={`shrink-0 ${esElegida(o) ? 'text-emerald-400' : 'text-transparent'}`} />
+      <span className="text-[11px] text-slate-100 truncate flex-1">{o.nombre}</span>
+      {o.relacion && <span className="text-[9px] text-amber-400/90 shrink-0">{o.relacion}</span>}
+      {/* RUT + edad juntos: son el mismo dato de identidad, y es lo que
+          distingue a los tres "Hijo" cuando el nombre solo no alcanza. */}
+      {(o.rut || o.edad != null) && (
+        <span className="text-[9px] font-mono text-slate-500 shrink-0" title={o.edad != null ? EDAD_APROX_TITLE : undefined}>
+          {o.rut}{o.rut && o.edad != null ? ' · ' : ''}{o.edad != null ? `~${o.edad}a` : ''}
+        </span>
+      )}
+    </button>
+  )
+
+  const encabezado = (texto: string) => (
+    <p className="px-2 pt-1.5 pb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">{texto}</p>
+  )
+
+  return (
+    <div ref={cajaRef} className="relative mt-1">
+      <div className="flex items-center gap-1">
+        <input
+          value={filtro ?? value ?? ''}
+          onChange={(e) => {
+            setFiltro(e.target.value)
+            setActivo(-1)
+            if (!abierto) abrir()
+            onChange(e.target.value)
+          }}
+          onFocus={abrir}
+          onKeyDown={onKeyDown}
+          placeholder="Elegir de relacionados o escribir el nombre"
+          role="combobox"
+          aria-expanded={abierto}
+          aria-autocomplete="list"
+          className="flex-1 min-w-0 bg-[var(--c-card)] border border-[var(--c-border-strong)] rounded px-1.5 py-0.5 text-[11px] text-slate-100 placeholder:text-slate-600 focus:border-emerald-600 focus:outline-none"
+        />
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => (abierto ? cerrar() : abrir())}
+          title="Ver los relacionados de la ficha"
+          aria-label="Ver los relacionados de la ficha"
+          className="shrink-0 p-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-[var(--c-hover)] transition-colors"
+        >
+          <ChevronDown size={12} className={abierto ? 'rotate-180 transition-transform' : 'transition-transform'} />
+        </button>
+      </div>
+
+      {/* Quién quedó elegido: el parentesco solo no basta para saber cuál de los
+          tres hijos es, el RUT y la edad aproximada sí. */}
+      {elegida && (elegida.relacion || elegida.rut || elegida.edad != null) && (
+        <p className="text-[9px] text-slate-500 mt-0.5 truncate" title={elegida.edad != null ? EDAD_APROX_TITLE : undefined}>
+          {[elegida.relacion, elegida.rut, elegida.edad != null ? `~${elegida.edad} años` : null]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      )}
+
+      {abierto && (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--c-border-strong)] bg-[var(--c-card)] shadow-xl"
+        >
+          {planos.length === 0 ? (
+            <p className="px-2 py-2 text-[10px] text-slate-500">
+              Ningún relacionado coincide — el nombre que escribas viaja igual.
+            </p>
+          ) : (
+            <>
+              {gSugeridos.length > 0 && encabezado(`Calzan con «${splitRelaciones(relacion).join(', ')}»`)}
+              {gSugeridos.map((o, i) => opcion(o, i))}
+              {gOtros.length > 0 && encabezado(gSugeridos.length ? 'Resto de la ficha' : 'Relacionados')}
+              {gOtros.map((o, i) => opcion(o, gSugeridos.length + i))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Fila de teléfono de la ficha Dealer: foto — número — relación — copiar.
 // Reutilizada tal cual (misma foto/relación directa/badges) por la ficha de
 // Captación, que antes mostraba los números como una simple grilla de píldoras
@@ -169,9 +376,11 @@ export interface PhoneRowData {
  * DealerNet no da: de un teléfono solo se sabe el parentesco ("Cuñada (Por
  * Conyuge)"), no a cuál de los 23 relacionados corresponde. Eso lo resuelve
  * quien mira la ficha, y es lo que acaba viendo quien llama desde el CRM.
+ * Con `nameOptions` ese nombre se ELIGE de la lista de relacionados en vez de
+ * escribirse a mano; sin ellas la fila queda con el campo libre de siempre.
  */
 export function PhoneRow({
-  phone: p, copied, onCopy, selected, onToggleSelect, name, onNameChange,
+  phone: p, copied, onCopy, selected, onToggleSelect, name, onNameChange, nameOptions,
 }: {
   phone: PhoneRowData
   copied: boolean
@@ -179,11 +388,17 @@ export function PhoneRow({
   selected?: boolean
   onToggleSelect?: () => void
   name?: string
-  onNameChange?: (v: string) => void
+  onNameChange?: (v: string, opcion?: PersonaOpcion) => void
+  nameOptions?: PersonaOpcion[]
 }) {
   const seleccionable = typeof onToggleSelect === 'function'
+  // La lista de nombres se despliega SOBRE las filas de abajo: mientras está
+  // abierta, esta fila tiene que pintarse por encima de las siguientes.
+  const [listaAbierta, setListaAbierta] = useState(false)
   return (
     <div className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
+      listaAbierta ? 'relative z-30 ' : ''
+    }${
       seleccionable && selected
         ? 'border-emerald-600/70 bg-emerald-950/20'
         : 'border-[var(--c-border-strong)] bg-[var(--c-hover)]'
@@ -232,12 +447,22 @@ export function PhoneRow({
           </p>
         )}
         {seleccionable && selected && onNameChange && (
-          <input
-            value={name ?? ''}
-            onChange={(e) => onNameChange(e.target.value)}
-            placeholder="Nombre con el que viaja al CRM"
-            className="mt-1 w-full bg-slate-900/60 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-100 placeholder:text-slate-600 focus:border-emerald-600 focus:outline-none"
-          />
+          nameOptions && nameOptions.length > 0 ? (
+            <NamePicker
+              value={name ?? ''}
+              options={nameOptions}
+              relacion={p.relacion}
+              onChange={onNameChange}
+              onOpenChange={setListaAbierta}
+            />
+          ) : (
+            <input
+              value={name ?? ''}
+              onChange={(e) => onNameChange(e.target.value)}
+              placeholder="Nombre con el que viaja al CRM"
+              className="mt-1 w-full bg-slate-900/60 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-100 placeholder:text-slate-600 focus:border-emerald-600 focus:outline-none"
+            />
+          )
         )}
       </div>
       <CopyButton copied={copied} onClick={onCopy} title="Copiar número" />
@@ -268,12 +493,14 @@ export function RelacionadosTable({ relacionados, onLookupRut }: { relacionados:
               <th className="px-2 py-1.5 font-semibold">RUT</th>
               <th className="px-2 py-1.5 font-semibold">Nombre</th>
               <th className="px-2 py-1.5 font-semibold">Relación</th>
+              <th className="px-2 py-1.5 font-semibold" title={EDAD_APROX_TITLE}>Edad aprox.</th>
               <th className="px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
             {relacionados.map((r, i) => {
               const rutStr = r.rut != null && r.dv ? `${r.rut}-${r.dv}` : null
+              const edad = edadAproximada(r.rut)
               return (
                 <tr key={i} className="border-t border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors">
                   <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">
@@ -301,6 +528,7 @@ export function RelacionadosTable({ relacionados, onLookupRut }: { relacionados:
                     </span>
                   </td>
                   <td className="px-2 py-1.5 text-amber-400/90 whitespace-nowrap">{r.relacion ?? '—'}</td>
+                  <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">{edad != null ? `~${edad}` : '—'}</td>
                   <td className="px-2 py-1.5 text-right whitespace-nowrap">
                     {rutStr && onLookupRut && (
                       <button

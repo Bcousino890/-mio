@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
   MapPin, Layers, ExternalLink, AlertCircle, CheckCircle2,
@@ -13,7 +13,7 @@ import {
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
 import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
 // Misma lógica de parentesco que usa el envío al CRM: una sola definición.
-import { duenoDeTelefono } from '@/lib/smartbc/relaciones.mjs'
+import { duenoDeTelefono, personasDeLaFicha } from '@/lib/smartbc/relaciones.mjs'
 import { DuenosRolPicker } from '@/components/chile/DuenosRolPicker'
 
 const ListingMatchMap = dynamic(() => import('@/components/map/ListingMatchMap'), { ssr: false })
@@ -88,7 +88,9 @@ export interface Captacion {
   relacionados: Array<{ rut: number | null; dv: string | null; nombre: string | null; relacion: string | null }> | null
   // Selección manual de qué contactos viajan al CRM (migración 0092). NULL =
   // nadie ha elegido todavía y la sincronización automática decide sola.
-  smartbc_contactos?: Array<{ phone: string; name?: string | null }> | null
+  smartbc_contactos?: Array<{
+    phone: string; name?: string | null; rut?: string | null; relationship?: string | null
+  }> | null
   smartbc_contactos_at?: string | null
   dealernet_error: string | null
   stage: string
@@ -483,23 +485,43 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   // la cuñada del cónyuge. Aquí sí se distingue —está el parentesco y la
   // categoría delante—, así que la elección se hace aquí y se guarda: la
   // sincronización automática la respeta y no vuelve a meter los 12.
-  // De qui\u00e9n es este tel\u00e9fono. DealerNet entrega las dos mitades por separado:
-  // en el n\u00famero solo pone el parentesco y los nombres viven en la lista de
-  // relacionados. Adem\u00e1s un mismo n\u00famero puede ser de varias personas
-  // ("Conyuge, Hija, Suegra"); la primera es la m\u00e1s directa, as\u00ed que es la que
-  // manda. Sin parentesco, el n\u00famero es del titular.
+  // Todas las personas de la ficha, que son las que se pueden elegir como
+  // dueñas de cada teléfono: los relacionados de DealerNet y el titular del
+  // certificado TGR.
+  const personas = useMemo(
+    () => personasDeLaFicha({
+      relacionados: captacion.relacionados ?? [],
+      ownerName: captacion.owner_name,
+      ownerRut: captacion.owner_rut,
+    }),
+    [captacion.relacionados, captacion.owner_name, captacion.owner_rut],
+  )
+
+  // De quién es este teléfono. DealerNet entrega las dos mitades por separado:
+  // en el número solo pone el parentesco y los nombres viven en la lista de
+  // relacionados. Además un mismo número puede ser de varias personas
+  // ("Conyuge, Hija, Suegra"); la primera es la más directa, así que es la que
+  // manda. Sin parentesco, el número es del titular.
   const duenoDelTelefono = useCallback(
     (relacion: string | null | undefined) => duenoDeTelefono(relacion, {
       ownerName: captacion.owner_name,
-      relacionados: captacion.relacionados ?? [],
+      ownerRut: captacion.owner_rut,
+      relacionados: personas,
     }),
-    [captacion.owner_name, captacion.relacionados],
+    [captacion.owner_name, captacion.owner_rut, personas],
   )
 
-  const [seleccion, setSeleccion] = useState<Record<string, { name: string }>>(() => {
+  // Quién es cada teléfono elegido. El RUT y el parentesco vienen de la persona
+  // que se eligió en la lista: es lo que distingue a un hijo de los otros dos
+  // en el CRM, donde el nombre suelto no identifica a nadie.
+  const [seleccion, setSeleccion] = useState<Record<string, {
+    name: string; rut: string | null; relationship: string | null
+  }>>(() => {
     const guardada = captacion.smartbc_contactos
     if (Array.isArray(guardada) && guardada.length) {
-      return Object.fromEntries(guardada.map((c) => [c.phone, { name: c.name ?? '' }]))
+      return Object.fromEntries(guardada.map((c) => [c.phone, {
+        name: c.name ?? '', rut: c.rut ?? null, relationship: c.relationship ?? null,
+      }]))
     }
     return {}
   })
@@ -517,8 +539,30 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
         const { [numero]: _quitado, ...resto } = prev
         return resto
       }
-      return { ...prev, [numero]: { name: duenoDelTelefono(relacion).name } }
+      const dueno = duenoDelTelefono(relacion)
+      return { ...prev, [numero]: { name: dueno.name, rut: dueno.rut, relationship: dueno.relationship } }
     })
+  }, [duenoDelTelefono])
+
+  // Cambio de nombre desde la fila. Con `opcion` el nombre se eligió de la
+  // lista y se sabe exactamente de quién es el número; escrito a mano no, así
+  // que no viaja el RUT de nadie —mejor sin RUT que con el de otro.
+  const cambiarNombre = useCallback((
+    numero: string,
+    relacion: string | null | undefined,
+    nombre: string,
+    opcion?: { nombre: string; relacion: string | null; rut: string | null },
+  ) => {
+    setSeleccion((prev) => ({
+      ...prev,
+      [numero]: opcion
+        ? { name: opcion.nombre, rut: opcion.rut, relationship: opcion.relacion }
+        : {
+            name: nombre,
+            rut: null,
+            relationship: prev[numero]?.relationship ?? duenoDelTelefono(relacion).relationship,
+          },
+    }))
   }, [duenoDelTelefono])
 
   const enviarASmart = useCallback(async () => {
@@ -532,12 +576,14 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
           name: seleccion[p.numero].name || null,
           // La relación concreta de esa persona, no la cadena entera: al CRM
           // viaja "Conyuge", no "Conyuge, Hija, Suegra".
-          relationship: duenoDelTelefono(p.relacion).relationship,
+          relationship: seleccion[p.numero].relationship ?? duenoDelTelefono(p.relacion).relationship,
           has_whatsapp: p.whatsapp ?? null,
           label: p.tipo ?? p.categoria ?? null,
           // Sin parentesco, el número es del titular: así los clasifica DealerNet.
           is_owner: !p.relacion,
-          rut: !p.relacion ? captacion.owner_rut ?? null : null,
+          // El RUT de la persona elegida en la lista. Es lo que agrupa varios
+          // números de un mismo contacto en el CRM en vez de repetirlo.
+          rut: seleccion[p.numero].rut ?? (!p.relacion ? captacion.owner_rut ?? null : null),
         }))
       const res = await fetch('/api/chile/smartbc', {
         method: 'POST',
@@ -698,7 +744,8 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
                     selected={Boolean(seleccion[p.numero])}
                     onToggleSelect={() => toggleTelefono(p.numero, p.relacion)}
                     name={seleccion[p.numero]?.name}
-                    onNameChange={(v) => setSeleccion((prev) => ({ ...prev, [p.numero]: { name: v } }))}
+                    onNameChange={(v, opcion) => cambiarNombre(p.numero, p.relacion, v, opcion)}
+                    nameOptions={personas}
                   />
                 ))}
               </div>
