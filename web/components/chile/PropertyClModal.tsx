@@ -72,6 +72,12 @@ export type Property = {
   cover_photo: string | null
   days_on_market: number | null
   listings: Listing[]
+  // Coordenadas declaradas por el anuncio (NUMERIC_COORDS en
+  // /api/chile/property-cl) — el pin "de fábrica", antes de cualquier
+  // corrección manual. Se usan para pintar el pin en el mapa de búsqueda
+  // cuando no hay manual_latitude/longitude.
+  latitude?: number | null
+  longitude?: number | null
   manual_latitude: number | null
   manual_longitude: number | null
   // Sello de la última unión/separación manual (0079) — distingue un grupo
