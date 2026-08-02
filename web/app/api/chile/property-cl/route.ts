@@ -5,7 +5,8 @@ import {
   linkCaptacionToProperty, lookupSiiDireccion,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
-import { scrapeAndUpsertListingCl, extractMlcId, type ScrapeResult } from '@/lib/scrape-listing-cl'
+import { scrapeAndUpsertListingCl, type ScrapeResult } from '@/lib/scrape-listing-cl'
+import { parsePropertyCodeQuery } from '@/lib/property-code-query'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/property-cl — propiedades CANÓNICAS deduplicadas (plan Anuncios CL
@@ -268,38 +269,86 @@ export async function GET(request: NextRequest) {
       : `FROM property_cl p LEFT JOIN chile_comunas c ON c.id = p.comuna_id`
 
     const conditions: string[] = []
+    // Buscar por CÓDIGO es una búsqueda dirigida: quien pega una URL o un
+    // código quiere ESE inmueble, no "ese inmueble si además encaja con los
+    // filtros que traía la pantalla". Los dos filtros que nadie eligió —
+    // "solo publicados" (implícito) y la operación (viene en Venta por
+    // defecto)— se levantan mientras hay código, porque si no un anuncio de
+    // arriendo o uno ya retirado daba cero resultados y la pantalla decía que
+    // no existe cuando sí está en la base.
+    const buscandoPorCodigo = !id && !!q
     if (id) {
       conditions.push(`p.id = ${addParam(id)}`)
-    } else {
+    } else if (!buscandoPorCodigo) {
       // La lista muestra por defecto solo lo que sigue publicado; el detalle por
       // id sí puede traer una ficha ya dada de baja (historial).
       conditions.push(`${F.active} = true`)
     }
-    if (operation && operation !== 'all') conditions.push(`${F.operation} = ${addParam(operation)}`)
+    if (operation && operation !== 'all' && !buscandoPorCodigo) conditions.push(`${F.operation} = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
     // Si `q` es un código/URL de Portal Inmobiliario y no aparece en la
     // búsqueda, se usa más abajo para scrapearlo en vivo (ver bloque tras la
     // consulta principal).
     let qMlcId: string | null = null
     if (q) {
-      // Acepta: código de propiedad ML ("5495"), código interno de la
-      // corredora (seller_reference), código interno del CRM (ref_code, ej.
-      // "PI-2607-00042"), código/URL del anuncio (MLC-id, ej. "MLC-2009525691"
-      // o una URL completa de portalinmobiliario.com que lo contenga), o la
-      // URL del anuncio pegada tal cual.
-      const mlcId = extractMlcId(q)
-      qMlcId = mlcId
-      const likeParam = addParam(`%${q}%`)
-      const exactParam = addParam(q)
-      const listingMatch = mlcId
-        ? `${listUngrouped ? 'l' : 'lq'}.external_id = ${addParam(mlcId)}`
-        : `(${listUngrouped ? 'l' : 'lq'}.property_code = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.seller_reference = ${exactParam} OR ${listUngrouped ? 'l' : 'lq'}.external_id ILIKE ${likeParam})`
-      const sourceUrlMatch = `${listUngrouped ? 'l' : 'lq'}.source_url ILIKE ${likeParam}`
-      conditions.push(
-        listUngrouped
-          ? `(p.ref_code ILIKE ${likeParam} OR ${listingMatch} OR ${sourceUrlMatch})`
-          : `(p.ref_code ILIKE ${likeParam} OR EXISTS (SELECT 1 FROM listings_cl lq WHERE lq.property_cl_id = p.id AND (${listingMatch} OR ${sourceUrlMatch})))`
-      )
+      // Acepta CUALQUIERA de las formas en que se nombra un inmueble (ver
+      // lib/property-code-query.ts, que es quien las distingue):
+      //   - la URL pegada del navegador, con slug y sufijos
+      //     (…/MLC-2107783039-se-vende-gran-casa-…-_JM),
+      //   - el número suelto del anuncio ("2107783039"),
+      //   - el mismo con prefijo ("MLC-2107783039" / "MLC2107783039"),
+      //   - el código interno del CRM ("PI-2607-21087"),
+      //   - el código interno de la corredora (property_code /
+      //     seller_reference), y
+      //   - la URL de la web propia de una corredora.
+      const parsed = parsePropertyCodeQuery(q)
+      qMlcId = parsed.scrapeable ? parsed.mlcId : null
+
+      // Prefijo de la tabla de anuncios: sin agrupar la fila YA es el anuncio;
+      // agrupando hay que mirar los anuncios de la ficha con un EXISTS.
+      const L = listUngrouped ? 'l' : 'lq'
+
+      // Condiciones sobre el ANUNCIO (listings_cl).
+      const listingOr: string[] = []
+      if (parsed.mlcId) {
+        const idParam = addParam(parsed.mlcId)
+        const idLike = addParam(`%${parsed.mlcId}%`)
+        listingOr.push(`${L}.external_id = ${idParam}`)
+        // La URL guardada es la canónica corta, pero un anuncio importado de
+        // otra fuente puede llevar la larga: basta con que contenga el MLC-id.
+        listingOr.push(`${L}.source_url ILIKE ${idLike}`)
+      }
+      // El número suelto puede ser además un código interno corto, así que los
+      // códigos se comparan igual aunque ya haya MLC-id.
+      for (const code of parsed.codes) {
+        const codeParam = addParam(code)
+        listingOr.push(`${L}.property_code = ${codeParam}`, `${L}.seller_reference = ${codeParam}`)
+      }
+      if (parsed.likeText) {
+        const likeParam = addParam(`%${parsed.likeText}%`)
+        listingOr.push(
+          `${L}.external_id ILIKE ${likeParam}`,
+          `${L}.property_code ILIKE ${likeParam}`,
+          `${L}.seller_reference ILIKE ${likeParam}`,
+          `${L}.source_url ILIKE ${likeParam}`,
+        )
+      }
+
+      // Condiciones sobre la FICHA canónica: el código interno del CRM.
+      const propertyOr: string[] = []
+      for (const code of parsed.codes) propertyOr.push(`p.ref_code = ${addParam(code)}`)
+      if (parsed.likeText) propertyOr.push(`p.ref_code ILIKE ${addParam(`%${parsed.likeText}%`)}`)
+
+      const listingClause = listingOr.length === 0
+        ? null
+        : listUngrouped
+          ? `(${listingOr.join(' OR ')})`
+          : `EXISTS (SELECT 1 FROM listings_cl lq WHERE lq.property_cl_id = p.id AND (${listingOr.join(' OR ')}))`
+
+      const allOr = [...propertyOr, ...(listingClause ? [listingClause] : [])]
+      // Un texto que no da ninguna condición (solo puede pasar con la entrada
+      // vacía tras limpiar comillas) no debe devolver la lista entera.
+      conditions.push(allOr.length > 0 ? `(${allOr.join(' OR ')})` : 'false')
     }
     if (comunaCode) conditions.push(`c.sii_comuna_code = ${addParam(comunaCode)}`)
     if (priceMin !== null) conditions.push(`${F.price} >= ${addParam(priceMin)}`)
@@ -312,6 +361,20 @@ export async function GET(request: NextRequest) {
     if (onlySmart) conditions.push('p.smart_crm_at IS NOT NULL')
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
+
+    // Canario contra el fallo que rompía este buscador: si se declara un `$n`
+    // y luego NO aparece en el SQL, Postgres no puede deducir su tipo y tumba
+    // la consulta ENTERA con «could not determine data type of parameter $n».
+    // No es un resultado vacío, es un 500 — y desde la pantalla se veía igual
+    // que "esa propiedad no existe". Aquí queda dicho en el log qué pasó.
+    const usados = new Set((whereClause.match(/\$\d+/g) ?? []).map(s => Number(s.slice(1))))
+    const huerfanos = params.map((_, i) => i + 1).filter(n => !usados.has(n))
+    if (huerfanos.length > 0) {
+      console.error(
+        `property-cl: parámetros declarados y no usados ($${huerfanos.join(', $')}) — la consulta va a fallar`,
+        { where: whereClause },
+      )
+    }
 
     // Estadísticas agregadas sobre TODO el conjunto filtrado (no solo la página):
     // total, en canje, mediana de precio y ubicación confirmada — para la barra
