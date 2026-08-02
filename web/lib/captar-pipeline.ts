@@ -179,7 +179,7 @@ function chileProxyUrl(): string | null {
   return null
 }
 
-async function fetchListingPageVia(url: string, proxy: string | null): Promise<{ status: number; html: string }> {
+async function fetchListingPageVia(url: string, proxy: string | null): Promise<{ status: number; html: string; finalUrl: string }> {
   const init: RequestInit & { dispatcher?: Dispatcher } = {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -197,7 +197,35 @@ async function fetchListingPageVia(url: string, proxy: string | null): Promise<{
   }
   if (proxy) init.dispatcher = new ProxyAgent(proxy)
   const res = await fetch(url, init)
-  return { status: res.status, html: await res.text() }
+  // `finalUrl` importa: un bloqueo de Portal Inmobiliario no llega como 403, sino
+  // como un 302 a la PORTADA con un 200 perfectamente normal (ver esLaFicha).
+  return { status: res.status, html: await res.text(), finalUrl: res.url || url }
+}
+
+/**
+ * ¿Esta respuesta es DE VERDAD la ficha que pedimos?
+ *
+ * Portal Inmobiliario no bloquea con un 403: redirige a la portada y devuelve un
+ * 200 impecable. Y la portada lleva su propio blob `__NORDIC_RENDERING_CTX__`,
+ * así que pasaba la comprobación de "tiene blob = es buena" y se daba por ficha.
+ *
+ * El daño no era quedarse sin datos: era guardarlos MAL. El parser recoge
+ * cualquier imagen de mlstatic de la página, así que a la portada le sacaba ~60
+ * fotos DE OTROS ANUNCIOS y las guardaba en esta ficha, con un
+ * `photos_total_count` de 119 que no es de nadie. Comprobado desde una IP
+ * bloqueada: las tres fichas de prueba devolvían la misma portada y las mismas
+ * 60 fotos ajenas. Mejor un error visible que una ficha contaminada.
+ */
+export function esLaFicha(html: string, urlPedida: string, finalUrl?: string | null): boolean {
+  // Redirigido a la raíz del portal = no nos han dado la ficha.
+  if (finalUrl) {
+    try {
+      if (new URL(finalUrl).pathname.replace(/\/+$/, '') === '') return false
+    } catch { /* URL rara: se decide por el contenido */ }
+  }
+  const id = urlPedida.match(/MLC-?\d+/i)?.[0]?.replace('-', '')
+  if (id && !new RegExp(id.replace(/^MLC/i, 'MLC-?'), 'i').test(html)) return false
+  return true
 }
 
 /**
@@ -214,11 +242,16 @@ export async function fetchListingPage(url: string): Promise<string> {
   const cleanUrl = url.split('#')[0].split('?')[0]
   const hasBlob = (html: string) => html.includes('__NORDIC_RENDERING_CTX__')
 
-  let direct: { status: number; html: string } | null = null
+  let direct: { status: number; html: string; finalUrl: string } | null = null
   let directErr: unknown = null
+  let redirigidoAPortada = false
   try {
     direct = await fetchListingPageVia(cleanUrl, null)
-    if (direct.status === 200 && hasBlob(direct.html)) return direct.html
+    if (direct.status === 200 && hasBlob(direct.html)) {
+      if (esLaFicha(direct.html, cleanUrl, direct.finalUrl)) return direct.html
+      // La portada disfrazada de ficha: no vale, pero el proxy puede dar la buena.
+      redirigidoAPortada = true
+    }
   } catch (e) {
     directErr = e
   }
@@ -227,12 +260,19 @@ export async function fetchListingPage(url: string): Promise<string> {
   if (proxy) {
     try {
       const proxied = await fetchListingPageVia(cleanUrl, proxy)
-      if (proxied.status === 200) return proxied.html
+      if (proxied.status === 200 && esLaFicha(proxied.html, cleanUrl, proxied.finalUrl)) return proxied.html
+      if (proxied.status === 200) redirigidoAPortada = true
     } catch {
       // sin proxy que responda, se degrada al resultado directo de abajo
     }
   }
 
+  // Antes se devolvía igualmente la respuesta directa. Si era la portada, el
+  // parser la tomaba por ficha y guardaba fotos de otros anuncios: un error aquí
+  // es mucho más barato que una ficha contaminada.
+  if (redirigidoAPortada) {
+    throw new Error('El portal devolvió su portada en vez del anuncio (bloqueo de IP): no se scrapea para no guardar datos de otro anuncio')
+  }
   if (direct) {
     if (direct.status !== 200) throw new Error(`HTTP ${direct.status}`)
     return direct.html // 200 sin blob Nordic — variante ligera, mejor que nada
