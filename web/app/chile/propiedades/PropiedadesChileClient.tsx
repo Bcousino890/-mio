@@ -417,9 +417,10 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
   const [operation, setOperation] = useState(initial.get('op') || 'sale')
   const [comuna, setComuna] = useState(initial.get('comuna') || '')
   const [searchInput, setSearchInput] = useState(initial.get('comuna') || '')
-  // Buscador por código o URL: código de propiedad ML, código interno de la
-  // corredora, código interno del CRM (ref_code, "PI-2607-00042") o URL del
-  // anuncio (MLC-id) pegada tal cual desde portalinmobiliario.com.
+  // Buscador por código o URL. Acepta todas las formas en que se nombra un
+  // inmueble —URL pegada del navegador con slug, número del anuncio suelto
+  // ("2107783039"), "MLC-2107783039", código interno del CRM ("PI-2607-21087")
+  // o el de la corredora—; quien las distingue es lib/property-code-query.ts.
   const [codeQuery, setCodeQuery] = useState(initial.get('q') || '')
   const [codeInput, setCodeInput] = useState(initial.get('q') || '')
   const [priceMin, setPriceMin] = useState<number | null>(initial.get('pmin') ? Number(initial.get('pmin')) : null)
@@ -464,10 +465,14 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [searchInput])
 
+  // Espera más que el buscador de comuna (350 ms) a propósito: un código de 10
+  // dígitos que no esté en la base sale a buscarse EN VIVO al portal, y con una
+  // espera corta cada estado intermedio de lo que se está tecleando dispararía
+  // una descarga condenada a fallar.
   const codeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (codeDebounceRef.current) clearTimeout(codeDebounceRef.current)
-    codeDebounceRef.current = setTimeout(() => { setCodeQuery(codeInput.trim()); setPage(1) }, 350)
+    codeDebounceRef.current = setTimeout(() => { setCodeQuery(codeInput.trim()); setPage(1) }, 600)
     return () => { if (codeDebounceRef.current) clearTimeout(codeDebounceRef.current) }
   }, [codeInput])
 
@@ -592,8 +597,14 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
           </div>
           <div className="relative w-64 shrink-0">
             <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input type="text" placeholder="Código de propiedad o URL del portal…" value={codeInput} onChange={e => setCodeInput(e.target.value)}
-              title="Busca por código de propiedad, código interno de la corredora, código interno del CRM (PI-...) o pega la URL del anuncio en portalinmobiliario.com"
+            <input type="text" placeholder="Código, MLC-… o pega la URL…" value={codeInput} onChange={e => setCodeInput(e.target.value)}
+              title={'Acepta cualquiera de estas formas del mismo inmueble:\n' +
+                '· URL pegada del navegador (https://www.portalinmobiliario.com/MLC-2107783039-se-vende-…-_JM)\n' +
+                '· el número del anuncio suelto (2107783039)\n' +
+                '· el número con prefijo (MLC-2107783039)\n' +
+                '· el código interno del CRM (PI-2607-21087)\n' +
+                '· el código interno de la corredora\n' +
+                'Busca en venta y arriendo y también en anuncios ya retirados. Si no está en la base, se trae en vivo del portal.'}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 pl-9 pr-8 py-2 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
             {codeInput && <button onClick={() => setCodeInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X size={14} /></button>}
           </div>
@@ -635,6 +646,18 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
             )}
           </div>
         </div>
+
+        {/* Buscar por código ignora "Venta/Arriendo" y el "solo publicados"
+            implícito (ver /api/chile/property-cl): quien pega un código quiere
+            ESE inmueble. Se dice aquí para que no parezca que el selector de
+            operación dejó de funcionar. */}
+        {codeQuery && (
+          <div className="flex items-center gap-1.5 mb-2 text-[11px] text-amber-300/80">
+            <Hash size={11} />
+            <span>Buscando <span className="font-mono text-amber-300">{codeQuery}</span> en venta y arriendo, incluidos anuncios ya retirados</span>
+            <button onClick={() => { setCodeInput(''); setCodeQuery('') }} className="text-slate-500 hover:text-slate-300 underline underline-offset-2">quitar</button>
+          </div>
+        )}
 
         {/* Chips de comuna prioritaria */}
         <div className="flex flex-wrap gap-1.5 mb-3">
