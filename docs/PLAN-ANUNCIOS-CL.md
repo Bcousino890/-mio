@@ -365,11 +365,44 @@ fases, no como bloque final.
   `property_code` (bajadas = señal comercial). Alimenta la UI (H5).
 - **H16 · Resiliencia del scraper.** Reintentos con backoff + dead-letter en
   `pg-boss`; circuit-breaker por dominio en `fetch.mjs`; respetar `robots.txt` y
-  rate-limit cortés. Hoy `fetch.mjs` no tiene backoff/circuit-breaker.
+  rate-limit cortés.
+  - **Qué cuenta como caída y qué no** (`resilient-fetch.mjs`): solo los fallos
+    de INFRAESTRUCTURA (sin respuesta, 403/429/5xx, o un 200 con cuerpo
+    inservible) se reintentan y alimentan el circuit-breaker. Un 404 es una
+    respuesta legítima —el final de la paginación de CADA banda de precio lo
+    es— y ni se reintenta ni cuenta como caída: contarlo abría el circuito en
+    barridos perfectamente sanos y tumbaba el pipeline entero durante el
+    cooldown.
+  - **Un intento bloqueado no consume cadencia** (`registerTargetFailure`): si
+    el barrido no consigue leer ni una página, se anota en
+    `scrape_targets_cl.consecutive_failures` / `last_failure_at` SIN tocar
+    `last_run_at`. El objetivo sigue vencido y se reintenta en el ciclo
+    siguiente (≤15 min) en vez de perder sus 24 h de cadencia por un problema
+    de red de un minuto.
+  - **Rescate por vía directa** (`PI_FALLBACK_DIRECTO`): si el que falla es el
+    PROXY (no resuelve / no conecta / 407), el barrido se sirve directo desde la
+    VPS para no quedar parado hasta que alguien lo note. Si el que responde mal
+    es el PORTAL (403, 429, variante ligera), no hay rescate: ahí sigue en pie
+    la decisión de no exponer la IP de la VPS.
+  - **Credenciales en caliente** (`env-vivo.mjs`): el `.env` está montado en el
+    worker y se relee al vuelo, así que guardar un proxy nuevo desde la UI surte
+    efecto en la siguiente petición. Antes `env_file` se resolvía solo al crear
+    el contenedor y el worker se quedaba con las credenciales viejas para
+    siempre.
 - **H17 · Observabilidad y alertas.** Health/heartbeat del worker; métricas de
   cobertura (nº scrapeado por comuna vs el contador del portal, ej. 3.741 en Las
   Condes); **alerta de parser roto** (caída súbita de campos = ML cambió el
   layout del blob Nordic); dead-man switch si una comuna no corre en >2 ciclos.
+  - **El panel no puede pintar verde un objetivo que falla**
+    (`/chile/anuncios-health`): el estado se calculaba solo con `last_run_at`,
+    que un intento bloqueado también escribía — así que la fila salía "al día"
+    justo por haber fallado. Ahora un objetivo con `consecutive_failures > 0` se
+    muestra como **fallando**, con cuántos intentos lleva y desde cuándo.
+  - **Botón "Diagnosticar red"** (`/api/chile/anuncios-health/probe`): pide una
+    página real a Portal Inmobiliario por las DOS vías (directa y Evomi) y
+    separa los tres problemas que antes se veían todos como `circuit_open`: el
+    proxy no responde / el portal bloquea la IP de la VPS / llega un 200 con la
+    variante ligera (sin blob Nordic, el parser sacaría 0).
 - **H18 · Almacenamiento eficiente: guardar TODO, que pese poco.**
   - **Snapshot solo-al-cambiar + direccionado por contenido**: `content_hash` del
     JSON normalizado; si es idéntico al último → no se inserta fila, solo se

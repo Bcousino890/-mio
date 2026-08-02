@@ -125,17 +125,33 @@ jobs:
               echo "🔑 POSTGRES_PASSWORD generado aleatoriamente"
             fi
 
-            # SmartProxy Chile (SMARTPROXY_CL_*): si están definidos como secrets
-            # del repo, se sincronizan al .env del VPS en cada deploy (si no, no
-            # se toca nada — sigue funcionando como antes). Así rotar el secret
-            # en GitHub alcanza, sin entrar por SSH a editar el .env a mano.
-            upsert_env() {
+            # Credenciales de integraciones: los secrets del repo SIEMBRAN el .env
+            # del VPS, pero NO pisan lo que ya haya.
+            #
+            # Antes se sobrescribían en cada deploy, y eso convertía en mentira la
+            # pantalla de Configuración del CRM: el usuario guardaba unas
+            # credenciales nuevas de proxy, la UI respondía "Guardadas y activas"
+            # (y lo estaban), y el siguiente deploy las revertía en silencio al
+            # valor del secret de GitHub. Quien manda ahora es lo que hay puesto en
+            # el VPS; los secrets solo cubren el arranque de una máquina nueva o
+            # una variable que todavía no exista.
+            #
+            # Para rotar por GitHub: borrar la línea del .env del VPS (o vaciarla)
+            # y volver a desplegar.
+            seed_env() {
               local key="$1" val="$2"
               [ -z "$val" ] && return
+              # Ya tiene valor no vacío → se respeta (probablemente puesto por la UI).
+              if grep -q "^${key}=..*" .env; then
+                echo "· ${key}: ya configurado en el VPS, no se toca"
+                return
+              fi
               grep -v "^${key}=" .env > .env.tmp || true
               mv .env.tmp .env
               echo "${key}=${val}" >> .env
+              echo "· ${key}: sembrado desde los secrets del repo"
             }
+            upsert_env() { seed_env "$1" "$2"; }
             # Evomi (residencial CL) es el proxy ACTIVO del plan (H10) y el que
             # scraper/lib/fetch.mjs prefiere para Portal Inmobiliario — pero NUNCA
             # se sincronizaba, así que en la VPS no existía y el fallback a proxy

@@ -69,6 +69,9 @@ test('handleDetailJob: si getUfRate falla, sigue el upsert sin ufRate (no revien
       parse: async () => PARSED_UF_LISTING,
       upsert: async (client, parsed, options) => { capturedOptions = options; return { listingId: 'l1', changeType: 'new' }; },
       getUfRate: async () => ({ ok: false, reason: 'mindicador.cl caído' }),
+      // También se inyecta la del dólar: sin esto el test llamaba a la de verdad
+      // (petición de red real), así que fallaba o pasaba según hubiera internet.
+      getUsdRate: async () => ({ ok: false, reason: 'mindicador.cl caído' }),
     }
   );
   assert.equal(res.ok, true);
@@ -87,6 +90,30 @@ test('handleDetailJob: fetch fallido no llama a getUfRate (evita el fetch de UF 
   );
   assert.equal(res.ok, false);
   assert.equal(ufCalled, false);
+});
+
+test('handleDetailJob: un 404 cierra el job (el anuncio ya no existe), no se reintenta', async () => {
+  const res = await handleDetailJob(
+    {},
+    { externalId: 'MLC-1', sourceUrl: 'https://x/MLC-1-slug-_JM' },
+    { fetch: async () => ({ ok: false, status: 404, reason: 'HTTP 404' }) }
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /404/);
+});
+
+test('handleDetailJob: un fallo de red LANZA, para que la ficha se reintente en vez de perderse', async () => {
+  // Antes devolvía {ok:false} y pg-boss daba el job por COMPLETADO: con el
+  // circuito abierto se tiraban lotes enteros de fichas en milisegundos, y un
+  // anuncio nuevo no se volvía a intentar hasta el siguiente barrido completo.
+  await assert.rejects(
+    () => handleDetailJob(
+      {},
+      { externalId: 'MLC-1', sourceUrl: 'https://x/MLC-1-slug-_JM' },
+      { fetch: async () => ({ ok: false, status: 0, reason: 'circuit_open:www.portalinmobiliario.com (reintentar en 168s)' }) }
+    ),
+    /circuit_open/
+  );
 });
 
 // ─── dedup-cluster ───────────────────────────────────────────────────────────

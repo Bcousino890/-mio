@@ -125,7 +125,7 @@ function listing(id, extra = {}) {
 /** Fake client: enruta las 4 consultas de discoverTarget sobre un store en memoria. */
 function makeClient({ known = [], activeInComuna = [] }) {
   const knownSet = new Set(known)
-  const state = { delistedIds: [], versionLogged: [], stats: null }
+  const state = { delistedIds: [], versionLogged: [], stats: null, failure: null }
   return {
     state,
     async query(sql, params = []) {
@@ -146,6 +146,13 @@ function makeClient({ known = [], activeInComuna = [] }) {
       if (q.startsWith('INSERT INTO listing_version_log_cl')) {
         state.versionLogged = params[0]
         return { rowCount: params[0].length }
+      }
+      // Dos UPDATE distintos sobre la misma tabla: el de estadísticas de un
+      // barrido que SÍ corrió, y el de un intento bloqueado (que a propósito no
+      // toca last_run_at). Se distinguen por si escriben last_run_at.
+      if (q.startsWith('UPDATE scrape_targets_cl SET last_failure_at')) {
+        state.failure = { targetId: params[0], at: params[1], reason: params[2] }
+        return { rowCount: 1 }
       }
       if (q.startsWith('UPDATE scrape_targets_cl SET')) {
         state.stats = { targetId: params[0], scrapedAt: params[1], completed: params[2], listingCount: params[3], portalTotal: params[4] }
@@ -192,7 +199,7 @@ test('discoverTarget: pagina, filtra proyectos, encola solo lo nuevo, marca baja
   assert.equal(client.state.stats.portalTotal, 3)
 })
 
-test('discoverTarget: fetch que falla en página 1 → incompleto, sin bajas', async () => {
+test('discoverTarget: fetch que falla en página 1 → intento bloqueado, NO consume la cadencia', async () => {
   const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
   const res = await discoverTarget(client, TARGET, {
     fetch: async () => ({ ok: false, status: 500, reason: 'HTTP 500' }),
@@ -200,11 +207,53 @@ test('discoverTarget: fetch que falla en página 1 → incompleto, sin bajas', a
     sleep: async () => {},
   })
   assert.equal(res.completed, false)
+  assert.equal(res.blocked, true)
   assert.equal(res.pages, 0)
   assert.match(res.reason, /500/)
   assert.equal(res.delisted, 0) // barrido incompleto → NO se marcan bajas
   assert.equal(client.state.delistedIds.length, 0)
-  assert.equal(client.state.stats.completed, false) // igual registra last_run_at
+  // Clave del arreglo: no se escribe last_run_at (que es lo que mira
+  // selectDueTargets), así que el objetivo sigue vencido y se reintenta en el
+  // siguiente ciclo de 15 min en vez de esperar las 24 h de cadencia.
+  assert.equal(client.state.stats, null)
+  assert.equal(client.state.failure.targetId, TARGET.id)
+  assert.match(client.state.failure.reason, /500/)
+})
+
+test('discoverTarget: circuito abierto → bloqueado, sin peticiones y sin gastar la cadencia', async () => {
+  const client = makeClient({ known: [], activeInComuna: [] })
+  let llamadas = 0
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => {
+      llamadas++
+      return { ok: false, status: 0, reason: 'circuit_open:www.portalinmobiliario.com (reintentar en 168s)' }
+    },
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(llamadas, 1) // se rinde en la p1, no pagina a ciegas
+  assert.equal(res.blocked, true)
+  assert.equal(client.state.stats, null)
+  assert.match(client.state.failure.reason, /circuit_open/)
+})
+
+test('discoverTarget: p1 responde 200 pero sin anuncios ni total → bloqueado, no "comuna vacía"', async () => {
+  // La variante ligera de Portal Inmobiliario: HTTP 200 con HTML sin el blob
+  // Nordic. Antes se contaba como barrido COMPLETO de 0 anuncios y el objetivo
+  // quedaba marcado con éxito.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({ ok: true, html: '<html>ligera</html>' }),
+    parseList: () => [],
+    parseMeta: () => ({ total: null, pageCount: null, resultsLimit: null }),
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.blocked, true)
+  assert.equal(res.completed, false)
+  assert.equal(client.state.stats, null)
+  assert.equal(client.state.delistedIds.length, 0)
+  assert.match(client.state.failure.reason, /no reconocida/)
 })
 
 test('discoverTarget: 404 en página 1 = comuna vacía → completo, sin bajas, éxito', async () => {

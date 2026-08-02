@@ -25,6 +25,43 @@
 
 export const SLEEP = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// Códigos en los que el servidor CONTESTÓ y su respuesta es definitiva para esa
+// URL: no hay nada que reintentar y, sobre todo, no son evidencia de que el
+// dominio (ni el proxy) estén caídos.
+//
+// El 404 es el caso importante y era el agujero real: paginar el listado de una
+// comuna TERMINA en 404 (es la señal natural de "no hay más páginas", ver
+// sweepBand en discovery-portalinmobiliario-cl.mjs) y una banda de precio vacía
+// devuelve 404 en su página 1. Contándolos como fallo, un barrido normal metía
+// un fallo por banda en el contador del circuito; con varias bandas vacías
+// seguidas se cruzaba el umbral de 5 y el circuito se abría SIN que hubiera
+// ningún problema de red. A partir de ahí, todo lo demás (el resto de comunas,
+// las fichas de detalle) moría con `circuit_open` durante el cooldown. Además
+// cada 404 se reintentaba 4 veces con backoff: ~14 s y 3 peticiones de proxy
+// tiradas por cada final de banda, que se pagan por GB.
+const RESPUESTAS_DEFINITIVAS = new Set([400, 401, 404, 405, 410, 414, 451])
+
+/**
+ * ¿Este resultado fallido es un problema de INFRAESTRUCTURA (red, proxy, bloqueo
+ * o respuesta inservible) y no una respuesta legítima del servidor?
+ *
+ * - `status: 0` → ni siquiera hubo respuesta HTTP (DNS, proxy caído, timeout).
+ * - `RESPUESTAS_DEFINITIVAS` → el servidor contestó y esa ES la respuesta.
+ * - el resto (403, 407, 429, 5xx, y también un 200 cuyo cuerpo vino inservible
+ *   —variante ligera sin el blob Nordic—) → merece reintento: con un proxy
+ *   residencial que rota IP, el siguiente intento sale por otra salida y suele
+ *   traer la buena.
+ */
+export function isInfraFailure(res) {
+  if (!res || res.ok) return false
+  // Algunos caminos devuelven el código solo dentro del motivo ("HTTP 404"), sin
+  // campo `status`. Se rescata de ahí antes de decidir: dar por "fallo de red" un
+  // 404 que sí traía su código en el texto haría que se reintentara un anuncio
+  // dado de baja hasta agotar los reintentos.
+  const status = Number(res.status) || Number(/\bHTTP (\d{3})\b/.exec(String(res.reason ?? ''))?.[1]) || 0
+  return !RESPUESTAS_DEFINITIVAS.has(status)
+}
+
 const DEFAULTS = {
   retries: 4,
   baseBackoffMs: 2000,      // 2s, 4s, 8s, 16s...
@@ -151,10 +188,17 @@ export async function withResilience(fetchImpl, url, options = {}) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     lastResult = await fetchImpl(url, fetchOpts)
     if (lastResult.ok) break
+    // Respuesta definitiva del servidor (404 al final de la paginación, 410…):
+    // reintentarla es tiempo y tráfico de proxy tirados, y la respuesta no va a
+    // cambiar.
+    if (!isInfraFailure(lastResult)) break
     if (attempt < retries) await SLEEP(baseBackoffMs * 2 ** (attempt - 1))
   }
 
-  if (lastResult.ok) recordSuccess(domain)
+  // Un 404 CIERRA el circuito igual que un 200: prueba que el dominio y el proxy
+  // están vivos y contestando. Lo que el circuito vigila es "¿se puede hablar con
+  // este dominio?", no "¿existe esta URL?".
+  if (lastResult.ok || !isInfraFailure(lastResult)) recordSuccess(domain)
   else recordFailure(domain, { failureThreshold, cooldownMs })
 
   return lastResult

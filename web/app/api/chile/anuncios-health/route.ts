@@ -156,7 +156,14 @@ export async function GET(request: Request) {
           t.last_run_at, t.last_success_at,
           t.last_listing_count, t.portal_reported_count,
           t.notes,
+          t.last_failure_at, t.consecutive_failures,
+          -- 'fallando' va PRIMERO y a propósito: el estado se calculaba solo con
+          -- last_run_at, que un barrido bloqueado también escribía, así que el
+          -- panel pintaba "al día" (verde) precisamente por haber fallado. Ahora
+          -- un intento bloqueado no toca last_run_at (ver registerTargetFailure)
+          -- y se ve como lo que es.
           CASE
+            WHEN t.consecutive_failures > 0 THEN 'fallando'
             WHEN t.last_run_at IS NULL THEN 'nunca'
             WHEN t.last_run_at < now() - make_interval(hours => t.interval_hours * 2) THEN 'atrasado'
             ELSE 'al-dia'
@@ -296,6 +303,11 @@ export async function GET(request: Request) {
         // Por qué acabó así el último barrido (bloqueo, comuna vacía, cobertura
         // insuficiente…). Sin esto, "0 anuncios vistos" no dice nada.
         notes: t.notes ?? null,
+        // Intentos que ni siquiera consiguieron leer una página (proxy caído,
+        // circuito abierto, bloqueo). No mueven last_run_at: el objetivo sigue
+        // vencido y se reintenta cada ciclo de 15 min hasta que se destrabe.
+        last_failure_at: t.last_failure_at,
+        consecutive_failures: num(t.consecutive_failures),
         // Histórico (guardado la última vez que corrió un barrido) + EN VIVO
         // (consultado ahora mismo). El frontend usa live_portal_total cuando
         // está disponible; portal_reported_count queda de referencia/fallback.
