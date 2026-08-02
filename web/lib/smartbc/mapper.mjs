@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto'
 import { PASSTHROUGH } from './catalogo.mjs'
 // Los parentescos viven aparte porque también los usa la ficha de Captación en
 // el navegador, y este módulo importa node:crypto (ver relaciones.mjs).
-import { splitRelaciones } from './relaciones.mjs'
+import { splitRelaciones, rutDeRelacionado } from './relaciones.mjs'
 import { formatRolCl } from '../rol-format.mjs'
 export { splitRelaciones }
 
@@ -237,13 +237,13 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
   const seen = new Set()
   for (const rel of relacionados) {
     if (contacts.length >= LIMITS.contacts) break
-    // Un tel\u00e9fono puede pertenecer a varias personas a la vez ("Conyuge, Hija,
-    // Suegra"): cuenta como suyo si su relaci\u00f3n aparece en esa lista, no solo
+    // Un teléfono puede pertenecer a varias personas a la vez ("Conyuge, Hija,
+    // Suegra"): cuenta como suyo si su relación aparece en esa lista, no solo
     // si la cadena entera coincide.
     const suyos = relPhones.filter((p) =>
       splitRelaciones(p.relacion).some((r) => norm(r) === norm(rel?.relacion)))
     if (!suyos.length) continue
-    const rut = rel?.rut != null ? `${rel.rut}${rel.dv ? `-${rel.dv}` : ''}` : null
+    const rut = rutDeRelacionado(rel)
     const key = rut ?? norm(rel?.nombre)
     if (!key || seen.has(key)) continue
     seen.add(key)
