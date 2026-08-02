@@ -108,6 +108,29 @@ AND jsonb_array_length(phones) > 0
 
 Y se re-sincroniza cuando `updated_at` avanza respecto del último envío registrado.
 
+**Captación rechazada/borrada (v1.2.0 de su API, 2026-08-02).** Si nosotros
+borramos una captación (`DELETE`) o la movimos a etapa de rechazo por API,
+SmartBC la reabre solo con reenviarla normal (sin `stage` explícito) — no hace
+falta "recrearla". Nuestro sincronizador nunca llama a `DELETE` ni envía
+`stage` en las actualizaciones (`diffPayload` lo salta a propósito, ver
+arriba), así que esto no cambia nada de nuestro lado: cualquier captación
+nuestra que haya quedado rechazada por API se reabre sola en la próxima corrida.
+
+Ojo con la excepción: si el rechazo lo hizo el **equipo de SmartBC a mano
+desde el panel** (no nosotros por API), no se reabre solo — hay que pedirlo
+con `stage` explícito. `GET /captaciones/{external_id}` distingue los dos
+casos con `rejected_by`: `"api"` (se reabre sola) | `"panel"` (hay que
+pedirlo) | `null` (no está rechazada). Si alguna vez una captación nuestra
+queda estancada, este es el primer campo a mirar antes de asumir que basta
+con reenviarla.
+
+También arreglaron que `owner.confirmed: true` no se aplicaba nunca sobre una
+captación ya existente. No nos afecta en la práctica — seguimos sin enviar
+`owner.confirmed` nunca (ver arriba) — pero es la confirmación de que, si
+algún día cambia esa decisión, el campo ahora sí funciona como documenta el
+contrato: `false → true` se aplica siempre, `true → false` queda protegido si
+el equipo ya confirmó al dueño desde el panel.
+
 ---
 
 ## 4. Mapeo campo a campo
