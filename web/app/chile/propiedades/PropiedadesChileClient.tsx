@@ -6,7 +6,7 @@ import {
   Search, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight,
   BedDouble, Bath, Ruler, MapPin, Users, ShieldCheck, GitCompareArrows, ExternalLink,
   Home, ImageOff, TrendingDown, CalendarClock, Building2, BadgeCheck, Trophy, Images, Video, Plus, RefreshCw,
-  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers, Wand2, Hash,
+  Maximize2, Minimize2, Link2, Unlink, Check, Move, AlertTriangle, Layers, Wand2, Hash, Map as MapIcon, LayoutList,
 } from 'lucide-react'
 
 // La ficha (modal) y sus tipos/helpers viven en un módulo compartido: la misma
@@ -15,6 +15,17 @@ import PropertyModal, {
   type Property, type Listing, CONF, clp, clpShort, priceMain, priceAlt,
   marketTime, priceSpread, CorredoraThumb,
 } from '@/components/chile/PropertyClModal'
+// Tipo "Listing" de PropertyMap — homónimo pero distinto del `Listing` de
+// arriba (ese es el desglose de avisos DENTRO de una Property; este es el
+// shape plano que espera el mapa). Se alias para que convivan sin chocar.
+import type { Listing as MapListing } from '@/lib/types'
+import type { GeoShapeFilter } from '@/components/filters/FilterPanel'
+import { useUfRateCl } from '@/hooks/useUfRateCl'
+
+// Mismo mapa Leaflet + dibujo (polígono/rectángulo/círculo) que ya usan
+// /anuncios (España) y /chile/anuncios — buscar "dentro de una zona dibujada"
+// es la misma necesidad en las tres listas.
+const PropertyMap = dynamic(() => import('@/components/map/PropertyMap'), { ssr: false })
 
 type Stats = {
   total: number; multi_corredora: number; confirmed: number; median_price: number | null
@@ -28,6 +39,46 @@ const SORT_LABELS: Record<SortKey, string> = {
 }
 const PRIORITY_COMUNAS = ['Las Condes', 'Vitacura', 'Lo Barnechea', 'Providencia', 'Ñuñoa', 'La Reina', 'Colina', 'Peñalolén']
 const PAGE_SIZE = 24
+const SANTIAGO_CENTER: [number, number] = [-33.4489, -70.6693]
+
+// Adapta la propiedad canónica al shape plano que espera PropertyMap (el
+// mismo componente de mapa+dibujo que ya usan /anuncios y /chile/anuncios) —
+// solo para el pin y el popup del mapa, no reemplaza a PropertyCardCl.
+function propertyToListing(p: Property): MapListing {
+  const price = p.canonical_price ?? 0
+  const listedDate = new Date().toISOString().split('T')[0]
+  return {
+    id: p.id,
+    property_id: p.ref_code ?? p.id,
+    title: `${p.bedrooms ?? '?'} dorm · ${p.square_meters ?? '?'} m² · ${p.comuna_name ?? 'Chile'}`,
+    operation: p.operation === 'rent' ? 'rent' : 'sale',
+    price,
+    currency: 'CLP',
+    price_uf: p.canonical_price_uf != null ? Number(p.canonical_price_uf) : null,
+    square_meters: p.square_meters ?? 0,
+    price_sqm: p.price_sqm ?? 0,
+    bedrooms: p.bedrooms ?? 0,
+    bathrooms: p.bathrooms ?? 0,
+    zone_name: p.comuna_name || 'Sin comuna',
+    portal: 'portalinmobiliario',
+    source_type: 'portal',
+    advertiser_type: 'professional',
+    advertiser_name: 'Portal Inmobiliario',
+    days_on_market: p.days_on_market ?? 0,
+    is_active: true,
+    // El pin manual (corregido a mano) manda sobre el declarado por el aviso.
+    latitude: p.manual_latitude ?? p.latitude ?? SANTIAGO_CENTER[0],
+    longitude: p.manual_longitude ?? p.longitude ?? SANTIAGO_CENTER[1],
+    photos: p.cover_photo ? [p.cover_photo] : [],
+    source_url: '',
+    listing_count: p.listing_count,
+    portals: [],
+    price_drops: 0,
+    rc_status: 'none',
+    priceHistory: [{ date: listedDate, price, event: 'listed' as const }],
+    sources: [],
+  }
+}
 
 // ─── Card ───────────────────────────────────────────────────────────────────
 // Además de abrir la ficha, la tarjeta es el gesto de MATCHING MANUAL: se
@@ -457,6 +508,17 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
   const [sortBy, setSortBy] = useState<SortKey>((initial.get('sort') as SortKey) in SORT_LABELS ? (initial.get('sort') as SortKey) : 'recent')
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [showFilters, setShowFilters] = useState(true)
+  // Mapa con dibujo (polígono/rectángulo/círculo) para buscar dentro de una
+  // zona a medida — apagado por defecto, no reemplaza a la grilla. La forma
+  // dibujada NO se persiste en la URL (a diferencia del resto de filtros):
+  // un polígono de muchos puntos volvería la URL enorme y poco compartible.
+  const [showMap, setShowMap] = useState(false)
+  const [geoShape, setGeoShape] = useState<GeoShapeFilter | null>(null)
+  // Filtro de precio en CLP o UF. Por dentro el precio SIEMPRE viaja en CLP
+  // (priceMin/priceMax) — este toggle solo cambia en qué unidad se leen/
+  // escriben esos inputs, convirtiendo con la tasa del día.
+  const [priceUnit, setPriceUnit] = useState<'clp' | 'uf'>('clp')
+  const { rate: ufRate, date: ufRateDate } = useUfRateCl()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -476,7 +538,7 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
     return () => { if (codeDebounceRef.current) clearTimeout(codeDebounceRef.current) }
   }, [codeInput])
 
-  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, sortBy, grouped])
+  useEffect(() => { setPage(1) }, [operation, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, sortBy, grouped, geoShape])
 
   // Sincroniza el estado a la URL sin recargar (history.replaceState). Incluye
   // la ficha abierta (?p=<id>) — URL específica y compartible por propiedad,
@@ -531,6 +593,13 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
     if (onlyCaptadas) params.append('only_captadas', 'true')
     if (onlySmart) params.append('only_smart', 'true')
     if (grouped) params.append('grouped', '1')
+    if (geoShape) {
+      if (geoShape.type === 'circle' && geoShape.center && geoShape.radius != null) {
+        params.append('geo_circle', `${geoShape.center[0]},${geoShape.center[1]},${geoShape.radius}`)
+      } else if (geoShape.coordinates) {
+        params.append('geo_polygon', JSON.stringify(geoShape.coordinates))
+      }
+    }
 
     fetch(`/api/chile/property-cl?${params.toString()}`)
       .then(r => r.json())
@@ -546,14 +615,27 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
       })
       .catch(() => { setItems([]); setTotal(0) })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, reloadKey])
+  }, [page, sortBy, operation, comuna, codeQuery, priceMin, priceMax, sqmMin, bedroomsMin, onlyMulti, onlyConfirmed, onlyCaptadas, onlySmart, grouped, geoShape, reloadKey])
 
-  const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0) + (onlyCaptadas ? 1 : 0) + (onlySmart ? 1 : 0)
+  const activeFilters = (priceMin != null || priceMax != null ? 1 : 0) + (sqmMin != null ? 1 : 0) + (bedroomsMin != null ? 1 : 0) + (onlyMulti ? 1 : 0) + (onlyConfirmed ? 1 : 0) + (onlyCaptadas ? 1 : 0) + (onlySmart ? 1 : 0) + (geoShape ? 1 : 0)
   const clearAll = () => {
     setPriceMin(null); setPriceMax(null); setSqmMin(null); setBedroomsMin(null); setOnlyMulti(false); setOnlyConfirmed(false)
     setOnlyCaptadas(false); setOnlySmart(false)
     setComuna(''); setSearchInput('')
     setCodeQuery(''); setCodeInput('')
+    setGeoShape(null)
+  }
+  // Valor mostrado en los inputs de precio según la unidad activa — por dentro
+  // priceMin/priceMax SIGUEN en CLP, esto solo convierte para mostrar/escribir.
+  const priceMinDisplay = priceUnit === 'uf' && ufRate ? (priceMin != null ? Math.round(priceMin / ufRate) : '') : (priceMin ?? '')
+  const priceMaxDisplay = priceUnit === 'uf' && ufRate ? (priceMax != null ? Math.round(priceMax / ufRate) : '') : (priceMax ?? '')
+  const setPriceMinFromInput = (raw: string) => {
+    const v = raw ? Number(raw) : null
+    setPriceMin(v == null ? null : (priceUnit === 'uf' && ufRate ? Math.round(v * ufRate) : v))
+  }
+  const setPriceMaxFromInput = (raw: string) => {
+    const v = raw ? Number(raw) : null
+    setPriceMax(v == null ? null : (priceUnit === 'uf' && ufRate ? Math.round(v * ufRate) : v))
   }
 
   return (
@@ -614,6 +696,11 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
           <button onClick={() => setShowFilters(!showFilters)} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${activeFilters > 0 ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
             <SlidersHorizontal size={14} /> Filtros {activeFilters > 0 && `(${activeFilters})`}
           </button>
+          <button onClick={() => setShowMap(m => !m)}
+            title="Buscar dentro de una zona dibujada a mano en el mapa (polígono, rectángulo o círculo)"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${showMap ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>
+            {showMap ? <LayoutList size={14} /> : <MapIcon size={14} />} {showMap ? 'Ocultar mapa' : 'Mapa'} {geoShape && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+          </button>
           {/* Matching manual: el modo selección. El arrastre funciona siempre,
               con o sin este modo activo. */}
           <button onClick={runDedup} disabled={dedupRunning}
@@ -670,13 +757,40 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
           })}
         </div>
 
+        {/* Mapa con dibujo: pinta las propiedades de la página actual y deja
+            recortar por un polígono/rectángulo/círculo a mano — el resultado
+            vuelve a pedirse al backend (ST_Contains/ST_DWithin sobre el geom
+            indexado), así que la grilla de abajo y los propios pines del mapa
+            quedan filtrados igual. */}
+        {showMap && (
+          <div className="h-[460px] rounded-xl overflow-hidden border border-slate-700/60 mb-4">
+            <PropertyMap
+              listings={items.map(propertyToListing)}
+              activeId={selected?.id ?? null}
+              onMarkerClick={id => { const p = items.find(i => i.id === id); if (p) setSelected(p) }}
+              onShapeDrawn={setGeoShape}
+              activeShape={geoShape}
+              tileStyle="satellite"
+            />
+          </div>
+        )}
+
         {showFilters && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4 bg-slate-800/40 border border-slate-700/60 rounded-xl p-3">
             <div className="col-span-2 sm:col-span-1">
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">Precio (CLP)</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-semibold text-slate-400">Precio ({priceUnit === 'uf' ? 'UF' : 'CLP'})</label>
+                <div className="flex rounded-md overflow-hidden border border-slate-600 shrink-0">
+                  <button type="button" onClick={() => setPriceUnit('clp')}
+                    className={`px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${priceUnit === 'clp' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}>CLP</button>
+                  <button type="button" onClick={() => setPriceUnit('uf')} disabled={!ufRate}
+                    title={ufRate ? `1 UF = ${clp(ufRate)} (${ufRateDate})` : 'Cargando tasa UF…'}
+                    className={`px-1.5 py-0.5 text-[10px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${priceUnit === 'uf' ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}>UF</button>
+                </div>
+              </div>
               <div className="flex gap-1">
-                <input type="number" placeholder="Min" value={priceMin ?? ''} onChange={e => setPriceMin(e.target.value ? Number(e.target.value) : null)} className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:border-amber-500" />
-                <input type="number" placeholder="Max" value={priceMax ?? ''} onChange={e => setPriceMax(e.target.value ? Number(e.target.value) : null)} className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:border-amber-500" />
+                <input type="number" placeholder="Min" value={priceMinDisplay} onChange={e => setPriceMinFromInput(e.target.value)} className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:border-amber-500" />
+                <input type="number" placeholder="Max" value={priceMaxDisplay} onChange={e => setPriceMaxFromInput(e.target.value)} className="w-full bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1.5 rounded-lg text-sm focus:outline-none focus:border-amber-500" />
               </div>
             </div>
             <div><label className="block text-[11px] font-semibold text-slate-400 mb-1">m² mín.</label>

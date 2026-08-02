@@ -3,9 +3,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import nextDynamicImport from 'next/dynamic'
 import PropertyCard from '@/components/PropertyCard'
-import PropertyClModal, { type Property as PropertyCl } from '@/components/chile/PropertyClModal'
+import PropertyClModal, { type Property as PropertyCl, clp } from '@/components/chile/PropertyClModal'
 import { SlidersHorizontal, Map, ChevronDown, ChevronLeft, ChevronRight, X, Menu } from 'lucide-react'
 import type { Listing } from '@/lib/types'
+import type { GeoShapeFilter } from '@/components/filters/FilterPanel'
+import { useUfRateCl } from '@/hooks/useUfRateCl'
 
 const PropertyMap = nextDynamicImport(() => import('@/components/map/PropertyMap'), { ssr: false })
 
@@ -54,7 +56,9 @@ function transformChileRow(row: any): Listing {
     days_on_market: row.days_on_market || 0,
     is_active: row.is_active !== false,
     latitude: row.latitude ? parseFloat(row.latitude) : -33.8688,
-    longitude: row.longitude ? parseFloat(row.longitude) : -51.2093,
+    // Antes -51.2093: no es Chile (cae en el Atlántico), copiado por error del
+    // fallback de otra región. Sin coordenadas, centrar en Santiago.
+    longitude: row.longitude ? parseFloat(row.longitude) : -70.6693,
     photos: Array.isArray(row.photos) ? row.photos.filter((p: any) => typeof p === 'string') : [],
     source_url: row.source_url || '',
     listing_count: 1,
@@ -103,6 +107,14 @@ export default function AnunciosChileClient() {
   const [bedroomsMin, setBedroomsMin] = useState<number | null>(null)
   const [bathroomsMin, setBathroomsMin] = useState<number | null>(null)
   const [identityResolved, setIdentityResolved] = useState(false)
+  // Mapa con dibujo (polígono/rectángulo/círculo) para acotar la búsqueda a una
+  // zona — mismos parámetros geo_circle/geo_polygon que ya entiende
+  // /api/chile/anuncios.
+  const [geoShape, setGeoShape] = useState<GeoShapeFilter | null>(null)
+  // Precio en CLP o UF: priceMin/priceMax siguen viajando en CLP, el toggle
+  // solo cambia la unidad en la que se leen/escriben los inputs.
+  const [priceUnit, setPriceUnit] = useState<'clp' | 'uf'>('clp')
+  const { rate: ufRate, date: ufRateDate } = useUfRateCl()
   // SSR-safe desktop detection: window is not available during server render,
   // so we resolve isDesktop after mount and keep it updated on resize.
   const [isDesktop, setIsDesktop] = useState(false)
@@ -152,7 +164,7 @@ export default function AnunciosChileClient() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [searchInput])
 
-  useEffect(() => { setPage(1) }, [operation, advertiser, sortBy, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved])
+  useEffect(() => { setPage(1) }, [operation, advertiser, sortBy, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved, geoShape])
 
   const getActiveFilterCount = (): number => {
     let count = 0
@@ -163,6 +175,7 @@ export default function AnunciosChileClient() {
     if (operation !== 'all') count++
     if (advertiser !== 'all') count++
     if (identityResolved) count++
+    if (geoShape) count++
     return count
   }
 
@@ -183,6 +196,13 @@ export default function AnunciosChileClient() {
     if (bedroomsMin !== null) params.append('bedrooms_min', String(bedroomsMin))
     if (bathroomsMin !== null) params.append('bathrooms_min', String(bathroomsMin))
     if (identityResolved) params.append('only_identity_resolved', 'true')
+    if (geoShape) {
+      if (geoShape.type === 'circle' && geoShape.center && geoShape.radius != null) {
+        params.append('geo_circle', `${geoShape.center[0]},${geoShape.center[1]},${geoShape.radius}`)
+      } else if (geoShape.coordinates) {
+        params.append('geo_polygon', JSON.stringify(geoShape.coordinates))
+      }
+    }
 
     fetch(`/api/chile/anuncios?${params.toString()}`)
       .then(r => r.json())
@@ -202,7 +222,7 @@ export default function AnunciosChileClient() {
         setListings([])
       })
       .finally(() => setLoading(false))
-  }, [page, sortBy, operation, advertiser, search, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved])
+  }, [page, sortBy, operation, advertiser, search, priceMin, priceMax, sqmMin, sqmMax, bedroomsMin, bathroomsMin, identityResolved, geoShape])
 
   const handlePrevPage = useCallback(() => {
     setPage(Math.max(1, page - 1))
@@ -211,6 +231,19 @@ export default function AnunciosChileClient() {
   const handleNextPage = useCallback(() => {
     setPage(Math.min(totalPages, page + 1))
   }, [page, totalPages])
+
+  // Valor mostrado en los inputs de precio según la unidad activa — por dentro
+  // priceMin/priceMax SIGUEN en CLP, esto solo convierte para mostrar/escribir.
+  const priceMinDisplay = priceUnit === 'uf' && ufRate ? (priceMin != null ? Math.round(priceMin / ufRate) : '') : (priceMin ?? '')
+  const priceMaxDisplay = priceUnit === 'uf' && ufRate ? (priceMax != null ? Math.round(priceMax / ufRate) : '') : (priceMax ?? '')
+  const setPriceMinFromInput = (raw: string) => {
+    const v = raw ? Number(raw) : null
+    setPriceMin(v == null ? null : (priceUnit === 'uf' && ufRate ? Math.round(v * ufRate) : v))
+  }
+  const setPriceMaxFromInput = (raw: string) => {
+    const v = raw ? Number(raw) : null
+    setPriceMax(v == null ? null : (priceUnit === 'uf' && ufRate ? Math.round(v * ufRate) : v))
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -289,20 +322,29 @@ export default function AnunciosChileClient() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-2">Precio (CLP)</label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-slate-400">Precio ({priceUnit === 'uf' ? 'UF' : 'CLP'})</label>
+                    <div className="flex rounded-md overflow-hidden border border-slate-600 shrink-0">
+                      <button type="button" onClick={() => setPriceUnit('clp')}
+                        className={`px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${priceUnit === 'clp' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}>CLP</button>
+                      <button type="button" onClick={() => setPriceUnit('uf')} disabled={!ufRate}
+                        title={ufRate ? `1 UF = ${clp(ufRate)} (${ufRateDate})` : 'Cargando tasa UF…'}
+                        className={`px-1.5 py-0.5 text-[10px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${priceUnit === 'uf' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-slate-200'}`}>UF</button>
+                    </div>
+                  </div>
                   <div className="flex gap-2">
                     <input
                       type="number"
                       placeholder="Min"
-                      value={priceMin ?? ''}
-                      onChange={e => setPriceMin(e.target.value ? Number(e.target.value) : null)}
+                      value={priceMinDisplay}
+                      onChange={e => setPriceMinFromInput(e.target.value)}
                       className="flex-1 bg-slate-700 border border-slate-600 text-slate-100 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-400"
                     />
                     <input
                       type="number"
                       placeholder="Max"
-                      value={priceMax ?? ''}
-                      onChange={e => setPriceMax(e.target.value ? Number(e.target.value) : null)}
+                      value={priceMaxDisplay}
+                      onChange={e => setPriceMaxFromInput(e.target.value)}
                       className="flex-1 bg-slate-700 border border-slate-600 text-slate-100 px-3 py-2 rounded text-sm focus:outline-none focus:border-blue-400"
                     />
                   </div>
@@ -460,6 +502,9 @@ export default function AnunciosChileClient() {
               activeId={combinedActive}
               onMarkerClick={(id) => setActiveId(id)}
               onMarkerHover={(id) => setHoverId(id)}
+              onShapeDrawn={setGeoShape}
+              activeShape={geoShape}
+              tileStyle="satellite"
             />
           </div>
         )}

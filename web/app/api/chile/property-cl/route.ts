@@ -236,6 +236,12 @@ export async function GET(request: NextRequest) {
   // que muestra el portal y no parezca que faltan propiedades.
   const grouped = sp.get('grouped') === '1'
 
+  // Búsqueda por forma dibujada en el mapa (polígono/rectángulo cerrado, o
+  // círculo) — mismo formato que /api/chile/anuncios: geo_polygon es un JSON
+  // de pares [lat,lng] y geo_circle es "lat,lng,radio_metros".
+  const geoPolygon = sp.get('geo_polygon')?.trim()
+  const geoCircle = sp.get('geo_circle')?.trim()
+
   const sortParam = sp.get('sort')
   const sort = sortParam && SORT_CLAUSES[sortParam] ? sortParam : 'recent'
 
@@ -261,6 +267,13 @@ export async function GET(request: NextRequest) {
     const F = listUngrouped
       ? { operation: 'l.operation', price: 'l.price', sqm: 'l.square_meters', bedrooms: 'l.bedrooms', active: 'l.is_active' }
       : { operation: 'p.operation', price: 'p.canonical_price', sqm: 'p.square_meters', bedrooms: 'p.bedrooms', active: 'p.is_active' }
+
+    // Mismo criterio: sin agrupar, el punto que importa es el del ANUNCIO
+    // (listings_cl.geom), no el de la ficha consolidada — dos anuncios de la
+    // misma ficha pueden declarar pines distintos, y la vista sin agrupar ya
+    // existe justo para mostrarlos por separado. geom es una columna generada
+    // (ST_Point sobre latitude/longitude) e indexada con GIST en ambas tablas.
+    const geomCol = listUngrouped ? 'l.geom' : 'p.geom'
 
     // LEFT JOIN a property_cl, NO inner: un anuncio recién guardado todavía no
     // tiene ficha asignada (se la pone el dedup, que corre cada 15 min). Con
@@ -363,6 +376,35 @@ export async function GET(request: NextRequest) {
     if (onlyConfirmed) conditions.push(`p.location_confidence = 'confirmed'`)
     if (onlyCaptadas) conditions.push(CAPTADA_PREDICATE)
     if (onlySmart) conditions.push('p.smart_crm_at IS NOT NULL')
+
+    // Búsqueda geoespacial (zona dibujada en el mapa) — mismo patrón que
+    // /api/chile/anuncios: ST_Contains para polígono/rectángulo cerrado,
+    // ST_DWithin (geography, en metros) para círculo.
+    if (geoPolygon) {
+      try {
+        const coords = JSON.parse(geoPolygon) as [number, number][]
+        if (coords.length >= 3) {
+          const wktCoords = coords.map(([lat, lng]) => `${lng} ${lat}`).join(',')
+          const wkt = `POLYGON((${wktCoords}))`
+          conditions.push(`ST_Contains(ST_GeomFromText(${addParam(wkt)}, 4326), ${geomCol})`)
+        }
+      } catch {
+        // ignorar geo_polygon inválido
+      }
+    }
+    if (geoCircle) {
+      const parts = geoCircle.split(',')
+      if (parts.length === 3) {
+        const [lat, lng, radiusM] = parts.map(Number)
+        if (!isNaN(lat) && !isNaN(lng) && !isNaN(radiusM) && radiusM > 0) {
+          conditions.push(`ST_DWithin(
+            ${geomCol}::geography,
+            ST_SetSRID(ST_Point(${addParam(lng)}, ${addParam(lat)}), 4326)::geography,
+            ${addParam(radiusM)}
+          )`)
+        }
+      }
+    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : 'WHERE true'
 
