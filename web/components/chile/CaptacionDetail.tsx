@@ -505,6 +505,11 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
   })
   const [enviando, setEnviando] = useState(false)
   const [envio, setEnvio] = useState<{ ok: boolean; msg: string; url?: string | null } | null>(null)
+  // Solo para fichas que ya se sincronizaron con el texto viejo (mencionaba
+  // "DealerNet"/"casafari-mio" en notas y contacto): sobrescribe esos dos
+  // campos aunque el equipo ya tenga algo escrito ahí en SmartBC. Apagado por
+  // defecto — es la excepción, no la regla.
+  const [forzarNotas, setForzarNotas] = useState(false)
 
   const toggleTelefono = useCallback((numero: string, relacion: string | null | undefined) => {
     setSeleccion((prev) => {
@@ -537,16 +542,27 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
       const res = await fetch('/api/chile/smartbc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: captacion.id, contactos }),
+        body: JSON.stringify({
+          id: captacion.id,
+          contactos,
+          ...(forzarNotas ? { force_fields: ['notes', 'owner.contact'] } : {}),
+        }),
       })
       const data = await res.json()
       if (data.success) {
         const accion = data.data.action === 'created' ? 'creada en el CRM' : 'actualizada en el CRM'
+        // Si SmartBC igual protegió notes/owner.contact (p. ej. el equipo lo
+        // marcó como no-forzable de su lado), que se note en vez de sonar a éxito total.
+        const protegidos = forzarNotas
+          ? (data.data.protected_fields ?? []).filter((f: string) => f === 'notes' || f === 'owner.contact')
+          : []
         setEnvio({
           ok: true,
-          msg: `${accion} · ${data.data.contactos_enviados} contacto(s) enviados`,
+          msg: `${accion} · ${data.data.contactos_enviados} contacto(s) enviados`
+            + (forzarNotas ? (protegidos.length ? ` · SmartBC protegió: ${protegidos.join(', ')}` : ' · notas y contacto forzados') : ''),
           url: data.data.admin_url,
         })
+        if (forzarNotas) setForzarNotas(false)
       } else {
         // El motivo exacto importa: "arregla el dato" (validation_error) no es
         // lo mismo que "vuelve a intentarlo" (rate_limited, 503).
@@ -560,7 +576,7 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
     } finally {
       setEnviando(false)
     }
-  }, [phones, seleccion, captacion.id, captacion.owner_rut, duenoDelTelefono])
+  }, [phones, seleccion, captacion.id, captacion.owner_rut, duenoDelTelefono, forzarNotas])
 
   const nSeleccionados = Object.keys(seleccion).length
 
@@ -708,6 +724,23 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
                     selección guardada {new Date(captacion.smartbc_contactos_at).toLocaleDateString('es-CL')}
                   </span>
                 )}
+                {/* Excepción explícita a "SmartBC solo escribe campos vacíos": para
+                    fichas que ya se sincronizaron con el texto viejo (mencionaba
+                    "DealerNet"/"casafari-mio"), esta casilla pisa notes y
+                    owner.contact con el texto limpio actual. Apagada por defecto
+                    y se apaga sola después de un envío exitoso. */}
+                <label
+                  className="flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer select-none"
+                  title="Sobrescribe las notas y el campo de contacto en SmartBC con el texto actual, aunque ya haya algo escrito ahí. Úsalo solo para limpiar fichas viejas que aún mencionan DealerNet o casafari-mio."
+                >
+                  <input
+                    type="checkbox"
+                    checked={forzarNotas}
+                    onChange={(e) => setForzarNotas(e.target.checked)}
+                    className="accent-amber-500"
+                  />
+                  Forzar notas y contacto (sobrescribe lo ya escrito en SmartBC)
+                </label>
                 {envio && (
                   <span className={`text-[11px] ${envio.ok ? 'text-emerald-400' : 'text-rose-300'}`}>
                     {envio.ok ? '✓ ' : '✗ '}{envio.msg}
