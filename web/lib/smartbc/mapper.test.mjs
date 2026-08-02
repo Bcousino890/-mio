@@ -166,6 +166,7 @@ test('tipo de propiedad: lo conocido mapea, lo demás cae a other (no se inventa
 test('parentesco → contact_type', () => {
   assert.equal(mapContactType('Cónyuge'), 'spouse')
   assert.equal(mapContactType('conyuge'), 'spouse')
+  assert.equal(mapContactType('Conviviente Civil'), 'spouse')
   assert.equal(mapContactType('Hija'), 'family')
   assert.equal(mapContactType('Suegra'), 'family')
   assert.equal(mapContactType('Empleador'), 'other')

@@ -101,7 +101,7 @@ export function mapPropertyType(raw) {
 export function mapContactType(relacion) {
   if (!relacion) return 'other'
   const r = String(relacion).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  if (/conyuge|esposo|esposa|marido|pareja/.test(r)) return 'spouse'
+  if (/conyuge|esposo|esposa|marido|pareja|convivient/.test(r)) return 'spouse'
   if (/hij|madre|padre|mama|papa|herman|abuel|niet|tio|tia|sobrin|primo|prima|suegr|cunad|yerno|nuera|familiar/.test(r)) return 'family'
   return 'other'
 }
@@ -561,7 +561,7 @@ export function buildCaptacionPayload(bundle, {
   const bestPhone = contacts[0]?.phone ?? null
   const ownerContact = [
     cap.owner_rut ? `RUT ${cap.owner_rut}` : null,
-    phones.length ? `${phones.length} teléfono${phones.length > 1 ? 's' : ''} vía DealerNet` : null,
+    phones.length ? `${phones.length} teléfono${phones.length > 1 ? 's' : ''}` : null,
     emails.length ? `${emails.length} email${emails.length > 1 ? 's' : ''}` : null,
   ].filter(Boolean).join(' · ') || null
 
@@ -675,7 +675,12 @@ export function buildCaptacionPayload(bundle, {
   return payload
 }
 
-/** Línea de procedencia para `notes` (campo del equipo: solo se escribe si está vacío). */
+/**
+ * Línea de procedencia para `notes` (campo del equipo: solo se escribe si está
+ * vacío). Solo datos que le sirven a quien va a llamar — nada de los nombres
+ * internos de nuestro pipeline (ni "DealerNet" ni "casafari-mio"): esos viven
+ * en `metadata`, que es la pista de auditoría, no la ficha visible.
+ */
 export function buildProvenanceNote(cap) {
   const partes = []
   if (cap.sii_rol) partes.push(`Rol SII ${cap.sii_rol}`)
@@ -683,7 +688,6 @@ export function buildProvenanceNote(cap) {
   if (score != null) partes.push(`match ${score.toFixed(2)}`)
   if (cap.match_verified === true) partes.push('verificado con certificado TGR')
   if (cap.owner_name && cap.tgr_status === 'ok') partes.push('dueño según TGR')
-  partes.push('origen casafari-mio')
   return partes.join(' · ')
 }
 
