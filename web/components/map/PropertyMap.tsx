@@ -45,35 +45,59 @@ function fmtPrice(l: Listing) {
   return k
 }
 
+// Callout con colita apuntando al punto exacto (mismo lenguaje visual que
+// Zillow/Redfin/Airbnb) en vez de una píldora suelta sin relación visual con
+// su coordenada — es la diferencia entre "un precio flotando cerca" y "un pin
+// que señala ESTA propiedad". Una sola sombra con `filter:drop-shadow` sobre
+// el contenedor (no `box-shadow` en la píldora) para que la sombra abrace la
+// silueta completa —píldora + colita— en vez de dos sombras rectangulares
+// desconectadas.
 function markerHtml(l: Listing, isActive: boolean) {
   const priceStr = fmtPrice(l)
   const isPartic = l.advertiser_type === 'particular'
   const bg = isActive ? '#3b82f6' : '#ffffff'
   const text = isActive ? '#ffffff' : '#0f172a'
-  const border = isActive ? 'transparent' : 'rgba(0,0,0,0.12)'
-  const shadow = isActive
-    ? '0 4px 16px rgba(59,130,246,0.5)'
-    : '0 2px 8px rgba(0,0,0,0.25)'
-  const dot = isPartic && !isActive ? 'background:#f59e0b;' : ''
-  const dotHtml = isPartic ? `<span style="width:6px;height:6px;border-radius:50%;${dot || 'background:#3b82f6;'}display:inline-block;flex-shrink:0"></span>` : ''
+  const dotHtml = isPartic
+    ? `<span style="width:6px;height:6px;border-radius:50%;background:${isActive ? '#ffffff' : '#f59e0b'};display:inline-block;flex-shrink:0"></span>`
+    : ''
 
-  return `<div class="cf-pin" style="
+  return `<div class="cf-marker" style="
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    filter:drop-shadow(0 3px 8px rgba(0,0,0,${isActive ? '0.42' : '0.28'}));
+    cursor:pointer;
+  "><div style="
     background:${bg};
     color:${text};
-    border:1px solid ${border};
     border-radius:999px;
-    padding:4px 10px;
+    padding:5px 10px;
     font-size:12px;
     font-weight:700;
     font-family:system-ui,-apple-system,sans-serif;
     white-space:nowrap;
-    box-shadow:${shadow};
     display:flex;
     align-items:center;
     gap:5px;
-    cursor:pointer;
     letter-spacing:-0.01em;
-  ">${dotHtml}${priceStr}</div>`
+  ">${dotHtml}${priceStr}</div><div style="
+    width:0;height:0;
+    border-left:5px solid transparent;
+    border-right:5px solid transparent;
+    border-top:6px solid ${bg};
+    margin-top:-1px;
+  "></div></div>`
+}
+
+// Ancho aproximado del callout (píldora + colita) para poder anclarlo por la
+// PUNTA de la colita — que es el punto real de la propiedad — en vez de por
+// una esquina arbitraria de la píldora. Misma lógica de estimar el ancho por
+// longitud de texto que clusterIconSize, porque a esta altura (creación del
+// ícono) el texto todavía no está en el DOM y no se puede medir de verdad.
+function markerIconAnchor(l: Listing): [number, number] {
+  const isPartic = l.advertiser_type === 'particular'
+  const width = 20 + fmtPrice(l).length * 6.8 + (isPartic ? 11 : 0)
+  return [Math.round(width) / 2, 29]
 }
 
 // leaflet.markercluster's UMD bundle reads the bare global `L` instead of
@@ -207,7 +231,10 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const clusterGroup = (L as any).markerClusterGroup({
-        maxClusterRadius: 60,
+        // Un poco más ancho que el default (60): las píldoras de precio son
+        // más anchas que un pin de punta, y con 60 dos clusters vecinos
+        // podían quedar tan cerca que sus etiquetas se pisaban entre sí.
+        maxClusterRadius: 75,
         showCoverageOnHover: false,
         spiderfyOnMaxZoom: true,
         // El click de cluster se maneja a mano (clusterclick, más abajo): un
@@ -219,10 +246,17 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         iconCreateFunction: (cluster: any) => {
           const count = cluster.getChildCount()
+          const size = clusterIconSize(count)
           return L.divIcon({
             className: '',
             html: clusterHtml(count),
-            iconSize: L.point(...clusterIconSize(count)),
+            iconSize: L.point(...size),
+            // Centrado (a diferencia del pin, que ancla por la punta de la
+            // colita): un cluster representa varias propiedades cercanas, no
+            // UNA coordenada exacta, así que no tiene un punto propio al que
+            // apuntar — sin esto, Leaflet usaba su default (esquina), y la
+            // píldora quedaba visiblemente corrida del centro real del grupo.
+            iconAnchor: L.point(size[0] / 2, size[1] / 2),
           })
         },
       })
@@ -368,7 +402,7 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
           const icon = L.divIcon({
             className: '',
             html: markerHtml(l, false),
-            iconAnchor: [0, 0],
+            iconAnchor: markerIconAnchor(l),
           })
 
           const isClp = l.currency === 'CLP'
@@ -425,7 +459,7 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
         marker.setIcon(L.divIcon({
           className: '',
           html: markerHtml(l, isActive),
-          iconAnchor: [0, 0],
+          iconAnchor: markerIconAnchor(l),
         }))
         marker.setZIndexOffset(isActive ? 1000 : 0)
       })
@@ -458,6 +492,8 @@ export default function PropertyMap({ listings, activeId, onMarkerClick, onMarke
       <style>{`
         .cf-pin { transition: transform .18s cubic-bezier(0.16,1,0.3,1), box-shadow .18s cubic-bezier(0.16,1,0.3,1); }
         .cf-pin:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
+        .cf-marker { transition: transform .18s cubic-bezier(0.16,1,0.3,1), filter .18s cubic-bezier(0.16,1,0.3,1); }
+        .cf-marker:hover { transform: translateY(-2px); filter: drop-shadow(0 6px 14px rgba(0,0,0,0.4)) !important; }
         @keyframes cf-badge-in { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
         .cf-badge-in { animation: cf-badge-in .22s cubic-bezier(0.16,1,0.3,1); }
       `}</style>
