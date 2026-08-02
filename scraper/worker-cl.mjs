@@ -42,6 +42,7 @@
 import PgBoss from 'pg-boss'
 import pg from 'pg'
 import { fetchHtmlResilient } from './lib/fetch.mjs'
+import { isInfraFailure } from './lib/resilient-fetch.mjs'
 import { parseDetailPage, CURRENT_PARSER_VERSION } from './lib/parse-portalinmobiliario.mjs'
 import { upsertListingCl } from './lib/upsert-listing-cl.mjs'
 import { syncListingMediaCl } from './lib/media-sync-cl.mjs'
@@ -90,6 +91,15 @@ export async function handleDetailJob(dbClient, jobData, deps = {}) {
   const res = await fetchImpl(url, { profile: 'portalinmobiliario' })
   if (!res.ok) {
     console.error(`[detail] ${externalId}: fetch falló (${res.reason})`)
+    // Fallo de INFRAESTRUCTURA (proxy caído, circuito abierto, 403/429/5xx): la
+    // ficha no tiene la culpa y hay que volver a intentarlo. Devolver {ok:false}
+    // hacía que pg-boss diera el job por COMPLETADO y el anuncio se perdía de la
+    // cola — con el circuito abierto se tiraban lotes enteros en milisegundos, y
+    // un anuncio nuevo no volvía a intentarse hasta el siguiente barrido completo
+    // (24 h). Lanzando, pg-boss lo reintenta con su backoff.
+    if (isInfraFailure(res)) throw new Error(`fetch bloqueado: ${res.reason}`)
+    // Respuesta definitiva (404 = anuncio dado de baja): no hay nada que
+    // reintentar, el job se cierra.
     return { ok: false, reason: res.reason }
   }
 
@@ -352,7 +362,12 @@ async function main() {
   // pendientes para ~3.700 anuncios reales y un anuncio nuevo quedaba enterrado
   // días detrás de sus propios duplicados — la razón de que el contador de
   // anuncios crudos no subiera. Verificado: con 'short', 5 envíos = 1 job.
-  const DEDUPED_QUEUES = new Set([QUEUES.DETAIL, QUEUES.MEDIA_SYNC])
+  // DISCOVERY/DISCOVERY_HEAD entran también: ahora que un barrido bloqueado NO
+  // consume la cadencia del objetivo (ver registerTargetFailure), el scheduler lo
+  // vuelve a encolar cada 15 min mientras el problema dure. Sin deduplicar, una
+  // caída larga del proxy dejaría cientos de barridos idénticos apilados que se
+  // ejecutarían todos de golpe al recuperarse.
+  const DEDUPED_QUEUES = new Set([QUEUES.DETAIL, QUEUES.MEDIA_SYNC, QUEUES.DISCOVERY, QUEUES.DISCOVERY_HEAD])
   for (const queueName of Object.values(QUEUES)) {
     const policy = DEDUPED_QUEUES.has(queueName) ? 'short' : 'standard'
     await boss.createQueue(queueName, { name: queueName, policy })
@@ -377,8 +392,15 @@ async function main() {
   // `priority: 100` — el discovery SOLO encola anuncios que aún no están en la
   // base, así que siempre deben ir por delante de los jobs viejos que se limitan
   // a refrescar lo ya guardado (ver prioritizeMissingDetailJobsCl).
+  // retryLimit/retryDelay/retryBackoff: handleDetailJob lanza cuando el fallo es
+  // de red/proxy (ver allí). Con los reintentos por defecto (inmediatos) un
+  // problema de proxy se comería los intentos en un segundo; con backoff desde
+  // 2 min la ficha sobrevive a una caída de horas.
   const enqueueDetail = (externalId, sourceUrl) =>
-    boss.send(QUEUES.DETAIL, { externalId, sourceUrl }, { singletonKey: String(externalId), priority: 100 })
+    boss.send(QUEUES.DETAIL, { externalId, sourceUrl }, {
+      singletonKey: String(externalId), priority: 100,
+      retryLimit: 6, retryDelay: 120, retryBackoff: true,
+    })
 
   // Si no hay S3 no hay worker de media-sync registrado (ver más abajo): encolar
   // ahí sería tirar jobs a un pozo sin fondo — se habían apilado 70.524. Se
@@ -441,7 +463,7 @@ async function main() {
 
   await boss.work(QUEUES.DISCOVERY_SCHEDULER, async () => {
     await handleDiscoverySchedulerJob(dbClient, {
-      enqueueDiscovery: (target) => boss.send(QUEUES.DISCOVERY, { target }),
+      enqueueDiscovery: (target) => boss.send(QUEUES.DISCOVERY, { target }, { singletonKey: String(target.id) }),
     })
   })
   await boss.schedule(QUEUES.DISCOVERY_SCHEDULER, '*/15 * * * *')
@@ -456,7 +478,7 @@ async function main() {
   })
   await boss.work(QUEUES.DISCOVERY_HEAD_SCHEDULER, async () => {
     await handleDiscoveryHeadSchedulerJob(dbClient, {
-      enqueueHead: (target) => boss.send(QUEUES.DISCOVERY_HEAD, { target }),
+      enqueueHead: (target) => boss.send(QUEUES.DISCOVERY_HEAD, { target }, { singletonKey: String(target.id) }),
     })
   })
   await boss.schedule(QUEUES.DISCOVERY_HEAD_SCHEDULER, '*/30 * * * *')

@@ -14,9 +14,11 @@
 //      cerrada cae a `other` y el valor original queda anotado en `metadata`.
 //   3. Los campos del EQUIPO (propietario, dirección real, comuna, rol, notas,
 //      etapa, asignación) se mandan pero SmartBC solo los escribe si están
-//      vacíos. No usamos `options.overwrite_manual_fields` jamás: si una
-//      captadora consiguió el teléfono real del dueño, nuestra sincronización
-//      no puede borrarlo.
+//      vacíos. `options.force_fields` no se usa NUNCA en la sincronización
+//      automática: si una captadora consiguió el teléfono real del dueño,
+//      nuestra sincronización no puede borrarlo. Su única vía es el botón
+//      manual de la ficha, campo a campo, y solo para `notes`/`owner.contact`
+//      (texto que siempre generamos nosotros) — ver FORCEABLE_TEAM_FIELDS.
 //
 // La distinción que más importa está en `owner.confirmed` — ver CONFIRMED_NOTE.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +103,7 @@ export function mapPropertyType(raw) {
 export function mapContactType(relacion) {
   if (!relacion) return 'other'
   const r = String(relacion).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  if (/conyuge|esposo|esposa|marido|pareja/.test(r)) return 'spouse'
+  if (/conyuge|esposo|esposa|marido|pareja|convivient/.test(r)) return 'spouse'
   if (/hij|madre|padre|mama|papa|herman|abuel|niet|tio|tia|sobrin|primo|prima|suegr|cunad|yerno|nuera|familiar/.test(r)) return 'family'
   return 'other'
 }
@@ -513,6 +515,18 @@ export function pruneNulls(obj) {
 }
 
 /**
+ * Únicos campos que el botón "forzar actualización" puede pisar. Nunca se
+ * amplía a `owner.phone`, `owner.name` ni `owner.rut`: esos sí pueden llevar
+ * una corrección real de la captadora tras hablar con el dueño, y machacarlos
+ * perdería trabajo humano. `notes` y `owner.contact` en cambio los escribe
+ * SIEMPRE nuestro propio texto derivado (ver `buildProvenanceNote` y
+ * `ownerContact` más abajo) — forzarlos solo reemplaza texto nuestro viejo por
+ * texto nuestro nuevo (p. ej. limpiar menciones a "DealerNet"/"casafari-mio"
+ * en fichas ya sincronizadas antes de que se dejara de incluirlas).
+ */
+export const FORCEABLE_TEAM_FIELDS = ['notes', 'owner.contact']
+
+/**
  * Payload completo de una captación.
  *
  * @param {object} bundle  { captacion, comuna, property, listings }
@@ -520,11 +534,17 @@ export function pruneNulls(obj) {
  * @param {string|null} [options.stage]      etapa inicial (solo se aplica al crear)
  * @param {boolean} [options.includeNotes]   línea de procedencia en `notes`
  * @param {object} [options.normalizer]      catálogo de SmartBC (smartbc-catalogo-cl.mjs)
+ * @param {string[]} [options.forceFields]   subconjunto de FORCEABLE_TEAM_FIELDS a
+ *   sobrescribir aunque el equipo ya haya escrito algo en SmartBC (`options.force_fields`
+ *   del contrato). Vacío por defecto: la regla general sigue siendo no pisar nunca
+ *   campos del equipo — esto es la excepción explícita, un clic a la vez, para
+ *   limpiar fichas que ya se sincronizaron con el texto viejo.
  */
 export function buildCaptacionPayload(bundle, {
   stage = 'assigned',
   includeNotes = true,
   normalizer = PASSTHROUGH,
+  forceFields = [],
 } = {}) {
   const cap = bundle.captacion
   const comuna = bundle.comuna ?? {}
@@ -561,7 +581,7 @@ export function buildCaptacionPayload(bundle, {
   const bestPhone = contacts[0]?.phone ?? null
   const ownerContact = [
     cap.owner_rut ? `RUT ${cap.owner_rut}` : null,
-    phones.length ? `${phones.length} teléfono${phones.length > 1 ? 's' : ''} vía DealerNet` : null,
+    phones.length ? `${phones.length} teléfono${phones.length > 1 ? 's' : ''}` : null,
     emails.length ? `${emails.length} email${emails.length > 1 ? 's' : ''}` : null,
   ].filter(Boolean).join(' · ') || null
 
@@ -646,6 +666,14 @@ export function buildCaptacionPayload(bundle, {
     // `assigned_to_email` no se envía: SmartBC reparte automáticamente y a quién
     // le toca cada captación es decisión suya.
 
+    // Vacío en toda sincronización automática (nocturna o desde "Agregar a
+    // Smart" sin marcar la casilla de forzar): es la única vía por la que
+    // `force_fields` puede viajar, y solo con valores de FORCEABLE_TEAM_FIELDS.
+    options: (() => {
+      const validos = [...new Set(forceFields)].filter((f) => FORCEABLE_TEAM_FIELDS.includes(f))
+      return validos.length ? { force_fields: validos } : null
+    })(),
+
     metadata: pruneNulls({
       origen: 'casafari-mio',
       captacion_id: cap.id,
@@ -675,7 +703,12 @@ export function buildCaptacionPayload(bundle, {
   return payload
 }
 
-/** Línea de procedencia para `notes` (campo del equipo: solo se escribe si está vacío). */
+/**
+ * Línea de procedencia para `notes` (campo del equipo: solo se escribe si está
+ * vacío). Solo datos que le sirven a quien va a llamar — nada de los nombres
+ * internos de nuestro pipeline (ni "DealerNet" ni "casafari-mio"): esos viven
+ * en `metadata`, que es la pista de auditoría, no la ficha visible.
+ */
 export function buildProvenanceNote(cap) {
   const partes = []
   if (cap.sii_rol) partes.push(`Rol SII ${cap.sii_rol}`)
@@ -683,7 +716,6 @@ export function buildProvenanceNote(cap) {
   if (score != null) partes.push(`match ${score.toFixed(2)}`)
   if (cap.match_verified === true) partes.push('verificado con certificado TGR')
   if (cap.owner_name && cap.tgr_status === 'ok') partes.push('dueño según TGR')
-  partes.push('origen casafari-mio')
   return partes.join(' · ')
 }
 

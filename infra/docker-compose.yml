@@ -138,6 +138,16 @@ services:
     mem_limit: 512m
     env_file:
       - ../.env
+    # Bind-mount ADEMÁS del env_file, por el mismo motivo que en `app`: las
+    # credenciales de proxy se guardan desde la UI de Configuración, que reescribe
+    # este .env en caliente. `env_file` se resuelve UNA vez, al crear el
+    # contenedor, así que el worker se quedaba con las credenciales viejas para
+    # siempre: guardar unas nuevas decía "Guardadas y activas" y el barrido seguía
+    # fallando igual hasta el siguiente deploy. Con el archivo montado, fetch.mjs
+    # lo relee en caliente (ver lib/env-vivo.mjs) y el cambio surte efecto en la
+    # siguiente petición.
+    volumes:
+      - ../.env:/app/.env:ro
     environment:
       DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
     depends_on:

@@ -28,7 +28,7 @@ import {
   planItem,
   recordResult,
 } from '@/lib/smartbc/sync.mjs'
-import { externalIdFor } from '@/lib/smartbc/mapper.mjs'
+import { externalIdFor, FORCEABLE_TEAM_FIELDS } from '@/lib/smartbc/mapper.mjs'
 
 export const runtime = 'nodejs'
 
@@ -65,6 +65,24 @@ type Seleccion = {
   has_whatsapp?: boolean | null
   label?: string | null
   is_owner?: boolean
+}
+
+/**
+ * Valida `force_fields`: solo lo que el equipo pueda pedir desde el botón
+ * "Forzar notas y contacto" — ver FORCEABLE_TEAM_FIELDS en mapper.mjs. Un
+ * valor fuera de la whitelist (p. ej. `owner.phone`) es un 400, no un valor
+ * que se descarta en silencio: si alguien lo pide es porque espera que pase
+ * algo, y lo último que queremos es que crea que forzó un campo y no pasó.
+ */
+function parseForceFields(raw: unknown): string[] {
+  if (raw == null) return []
+  if (!Array.isArray(raw)) throw new Error('force_fields debe ser una lista')
+  for (const f of raw) {
+    if (!FORCEABLE_TEAM_FIELDS.includes(f)) {
+      throw new Error(`force_fields: "${f}" no es forzable (solo ${FORCEABLE_TEAM_FIELDS.join(', ')})`)
+    }
+  }
+  return raw
 }
 
 /** Valida la selección que manda la UI. Un teléfono es obligatorio; el resto, opcional. */
@@ -129,10 +147,17 @@ export async function PUT(request: NextRequest) {
 
 /**
  * POST — envía la captación al CRM.
- * Body: { id, contactos?, dry_run?, stage?, by? }
+ * Body: { id, contactos?, dry_run?, stage?, by?, force_fields? }
  *
  * Si vienen `contactos`, se guardan antes de enviar: el botón hace las dos
  * cosas de una vez, que es como lo usa el equipo (elijo teléfonos → Agregar).
+ *
+ * `force_fields` es la excepción explícita a "SmartBC solo escribe campos
+ * vacíos": solo acepta los de FORCEABLE_TEAM_FIELDS (notes, owner.contact),
+ * que siempre llevan texto NUESTRO derivado — nunca algo que la captadora
+ * haya escrito a mano en SmartBC. Sirve para limpiar fichas que ya se
+ * sincronizaron con texto viejo (p. ej. antes de dejar de mencionar
+ * "DealerNet"/"casafari-mio" en notes y owner.contact).
  */
 export async function POST(request: NextRequest) {
   let body: Record<string, unknown>
@@ -142,11 +167,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'JSON inválido' }, { status: 400 })
   }
 
-  const { id, contactos, dry_run: dryRun, stage, by } = body as {
+  const { id, contactos, dry_run: dryRun, stage, by, force_fields: forceFieldsRaw } = body as {
     id?: string; contactos?: unknown; dry_run?: boolean; stage?: string | null; by?: string
+    force_fields?: unknown
   }
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
+  }
+  let forceFields: string[]
+  try {
+    forceFields = parseForceFields(forceFieldsRaw)
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : 'force_fields inválido' },
+      { status: 400 },
+    )
   }
   if (!process.env.SMARTBC_API_KEY) {
     return NextResponse.json(
@@ -213,6 +248,7 @@ export async function POST(request: NextRequest) {
     const plan = planItem(cap, listings, {
       stage: stage === undefined ? 'assigned' : stage,
       normalizer,
+      forceFields,
     })
 
     // Desde el botón, "no ha cambiado nada" no debe ser un no-op silencioso: la

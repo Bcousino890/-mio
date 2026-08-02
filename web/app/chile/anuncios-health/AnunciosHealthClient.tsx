@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Activity, Building2, Home, Store, Images, RefreshCw, CheckCircle2, AlertTriangle, XCircle, Clock,
+  Activity, Building2, Home, Store, Images, RefreshCw, CheckCircle2, AlertTriangle, XCircle, Clock, Stethoscope,
 } from 'lucide-react'
 
 type Totals = {
@@ -16,8 +16,18 @@ type Target = {
   last_run_at: string | null; last_success_at: string | null
   last_listing_count: number | null; portal_reported_count: number | null
   notes: string | null
+  last_failure_at: string | null; consecutive_failures: number
   live_portal_total: number | null; live_probed_at: string | null
   cadencia: string
+}
+type Via = {
+  via: 'directo' | 'evomi'; ok: boolean; http_status?: number; elapsed_ms: number
+  has_nordic_blob?: boolean; portal_total?: number | null; error?: string; veredicto: string
+}
+type Diagnostico = {
+  success: boolean; proxy_configurado: boolean
+  proxy_host: string | null; proxy_user: string | null
+  vias: Via[]; veredicto: string
 }
 type Pulse = { change_type: string; count: number }
 type Health = {
@@ -60,6 +70,10 @@ const CHANGE_CLS: Record<string, string> = {
 const CAD: Record<string, { t: string; cls: string; icon: React.ReactNode }> = {
   'al-dia': { t: 'al día', cls: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30', icon: <CheckCircle2 size={12} /> },
   'atrasado': { t: 'atrasado', cls: 'text-amber-300 bg-amber-500/15 border-amber-500/30', icon: <AlertTriangle size={12} /> },
+  // Un objetivo que no consigue ni leer una página. Antes este caso se pintaba
+  // "al día" en verde (el intento fallido actualizaba last_run_at), que era el
+  // peor de los mundos: el panel tranquilizaba justo cuando había que mirar.
+  'fallando': { t: 'fallando', cls: 'text-rose-300 bg-rose-500/15 border-rose-500/30', icon: <XCircle size={12} /> },
   'nunca': { t: 'sin correr', cls: 'text-slate-400 bg-slate-600/30 border-slate-600/40', icon: <Clock size={12} /> },
 }
 
@@ -82,6 +96,8 @@ export default function AnunciosHealthClient() {
   const [error, setError] = useState<string | null>(null)
   const [rerunning, setRerunning] = useState(false)
   const [rerunMsg, setRerunMsg] = useState<string | null>(null)
+  const [diag, setDiag] = useState<Diagnostico | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
 
   // `withProbe=false` = lectura barata (solo BD). Conserva el último total del
   // portal conocido por objetivo, para que la columna "Portal declara" no
@@ -118,6 +134,20 @@ export default function AnunciosHealthClient() {
       .catch(e => setRerunMsg(e instanceof Error ? e.message : 'Error'))
       .finally(() => { setRerunning(false); load() })
   }, [load])
+
+  // Sonda a Portal Inmobiliario por las dos vías (directa y Evomi). Es la que
+  // responde "¿por qué no entra nada?" sin entrar por SSH al VPS.
+  const diagnosticar = useCallback(() => {
+    setDiagLoading(true); setDiag(null)
+    fetch('/api/chile/anuncios-health/probe')
+      .then(r => r.json())
+      .then(setDiag)
+      .catch(e => setDiag({
+        success: false, proxy_configurado: false, proxy_host: null, proxy_user: null, vias: [],
+        veredicto: e instanceof Error ? e.message : 'Error',
+      }))
+      .finally(() => setDiagLoading(false))
+  }, [])
 
   useEffect(() => {
     load(true)
@@ -164,6 +194,11 @@ export default function AnunciosHealthClient() {
               className="inline-flex items-center gap-1.5 text-xs text-white bg-amber-600 border border-amber-600 px-3 py-2 rounded-lg hover:bg-amber-500 disabled:opacity-50">
               <RefreshCw size={13} className={rerunning ? 'animate-spin' : ''} /> Re-scrapear todo
             </button>
+            <button onClick={diagnosticar} disabled={diagLoading}
+              title="Pide una página real a Portal Inmobiliario por las dos vías (directa y proxy Evomi) y dice cuál falla"
+              className="inline-flex items-center gap-1.5 text-xs text-slate-200 bg-slate-800 border border-slate-600 px-3 py-2 rounded-lg hover:border-slate-500 disabled:opacity-50">
+              <Stethoscope size={13} className={diagLoading ? 'animate-pulse' : ''} /> {diagLoading ? 'Probando…' : 'Diagnosticar red'}
+            </button>
             <button onClick={() => load(true)} title="Vuelve a consultar el total real en Portal Inmobiliario ahora mismo"
               className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg hover:border-slate-600">
               <RefreshCw size={13} /> Refrescar
@@ -172,20 +207,78 @@ export default function AnunciosHealthClient() {
         </div>
         {rerunMsg && <div className="text-xs text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 rounded-lg px-3 py-2 mb-3">{rerunMsg}</div>}
 
+        {diag && (() => {
+          const evomi = diag.vias.find(v => v.via === 'evomi')
+          const cls = evomi?.ok
+            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+            : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+          return (
+            <div className={`rounded-xl border px-4 py-3 mb-3 text-sm ${cls}`}>
+              <div className="flex items-start gap-2">
+                <Stethoscope size={16} className="mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-semibold mb-1">Diagnóstico de red</div>
+                  <div className="text-[13px] mb-2">{diag.veredicto}</div>
+                  <div className="space-y-1">
+                    {diag.vias.map(v => (
+                      <div key={v.via} className="text-[11px] font-mono text-slate-300 break-words">
+                        <span className={v.ok ? 'text-emerald-400' : 'text-rose-400'}>{v.ok ? '✓' : '✗'}</span>{' '}
+                        <span className="uppercase">{v.via === 'evomi' ? 'evomi (lo que usa el barrido)' : 'directo desde la VPS'}</span>{' '}
+                        · {v.veredicto}
+                        {v.http_status ? ` · HTTP ${v.http_status}` : ''}
+                        {v.portal_total != null ? ` · total ${v.portal_total.toLocaleString('es-CL')}` : ''}
+                        {` · ${v.elapsed_ms} ms`}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-2">
+                    Proxy: {diag.proxy_configurado ? `${diag.proxy_host} · usuario ${diag.proxy_user}` : 'sin credenciales en el VPS'}
+                    {' — '}se configura en Configuración → Proxy (Evomi CL).
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {error && <div className="text-red-300 bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-sm mb-4">{error}</div>}
         {loading && !data && <div className="text-slate-400 p-8 text-center">Cargando…</div>}
 
         {t && (
           <>
-            {/* Semáforo general */}
-            <div className={`rounded-xl border px-4 py-3 mb-4 flex items-center gap-3 text-sm ${
-              scraping ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
-              {scraping ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-              <div>
-                <span className="font-semibold">{scraping ? 'El pipeline tiene datos' : 'Aún sin anuncios ingresados'}</span>
-                <span className="text-slate-400"> · último anuncio visto {fresh} · {t.corredoras_total} corredoras · {t.property_cl_total} propiedades canónicas</span>
-              </div>
-            </div>
+            {/* Semáforo general. "Tiene datos" mira el histórico acumulado, así
+                que se queda verde para siempre aunque el barrido lleve días
+                parado — por eso manda lo que está BLOQUEADO ahora mismo. */}
+            {(() => {
+              const bloqueados = data.targets.filter(x => (x.consecutive_failures ?? 0) > 0)
+              if (bloqueados.length > 0) {
+                return (
+                  <div className="rounded-xl border px-4 py-3 mb-4 flex items-start gap-3 text-sm bg-rose-500/10 border-rose-500/30 text-rose-200">
+                    <XCircle size={18} className="mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold">
+                        El barrido está bloqueado en {bloqueados.length} de {data.targets.length} objetivos
+                      </span>
+                      <span className="text-slate-400"> · no consiguen leer ni una página · último anuncio visto {fresh}</span>
+                      <div className="text-[12px] text-rose-200/80 mt-1">
+                        No consumen cadencia: se reintentan solos cada 15 min hasta destrabarse.
+                        Pulsa <span className="font-semibold">Diagnosticar red</span> para ver si el problema es el proxy o el portal.
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+              return (
+                <div className={`rounded-xl border px-4 py-3 mb-4 flex items-center gap-3 text-sm ${
+                  scraping ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+                  {scraping ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                  <div>
+                    <span className="font-semibold">{scraping ? 'El pipeline tiene datos' : 'Aún sin anuncios ingresados'}</span>
+                    <span className="text-slate-400"> · último anuncio visto {fresh} · {t.corredoras_total} corredoras · {t.property_cl_total} propiedades canónicas</span>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Tiles */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
@@ -246,8 +339,13 @@ export default function AnunciosHealthClient() {
                           <td className="px-3 py-2.5 text-slate-400">
                             {ago(tg.last_run_at)}
                             {tg.notes && (
-                              <div className="text-[10px] text-amber-400/90 mt-0.5 max-w-[22rem] truncate" title={tg.notes}>
+                              <div className={`text-[10px] mt-0.5 max-w-[22rem] truncate ${(tg.consecutive_failures ?? 0) > 0 ? 'text-rose-400/90' : 'text-amber-400/90'}`} title={tg.notes}>
                                 {tg.notes}
+                              </div>
+                            )}
+                            {(tg.consecutive_failures ?? 0) > 0 && (
+                              <div className="text-[10px] text-rose-300/80 mt-0.5">
+                                {tg.consecutive_failures} intento{tg.consecutive_failures === 1 ? '' : 's'} bloqueado{tg.consecutive_failures === 1 ? '' : 's'} · último {ago(tg.last_failure_at)}
                               </div>
                             )}
                           </td>

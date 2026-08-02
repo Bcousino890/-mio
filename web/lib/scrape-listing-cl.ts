@@ -13,13 +13,12 @@ import { parsePortalListingDetail } from '@/lib/parse-portalinmobiliario-cl'
 import { fetchTodasLasFotos } from '@/lib/fetch-portalinmobiliario-gallery'
 import { getUfRateCl } from '@/lib/uf-rate-cl'
 import { linkSingleListingToPropertyCl } from '@/lib/dedup-cl'
+import { parsePropertyCodeQuery } from '@/lib/property-code-query'
 
-/** Extrae el MLC-id normalizado (con guión, ej. "MLC-2009525691") de un
- * código suelto o de una URL completa de portalinmobiliario.com. */
-export function extractMlcId(input: string): string | null {
-  const m = input.match(/MLC-?(\d+)/i)
-  return m ? `MLC-${m[1]}` : null
-}
+// El MLC-id se extrae con el mismo parser que usa el buscador (ver
+// property-code-query.ts): así "2107783039" a secas, "MLC-2107783039" y la URL
+// larga con slug del navegador se resuelven todos al mismo anuncio.
+export { extractMlcId } from '@/lib/property-code-query'
 
 const MONEDAS_SOPORTADAS = new Set(['CLP', 'UF'])
 
@@ -45,13 +44,13 @@ export type ScrapeResult =
  * mismo código actualiza la misma fila en vez de duplicarla.
  */
 export async function scrapeAndUpsertListingCl(query: string): Promise<ScrapeResult> {
-  const externalId = extractMlcId(query)
+  const consulta = parsePropertyCodeQuery(query)
+  const externalId = consulta.mlcId
   if (!externalId) return { ok: false, error: 'No es un código ni una URL de Portal Inmobiliario reconocible' }
 
-  const trimmed = query.trim()
-  const url = /^https?:\/\//i.test(trimmed) || trimmed.includes('portalinmobiliario.com')
-    ? trimmed.split('#')[0].split('?')[0]
-    : `https://www.portalinmobiliario.com/${externalId}`
+  // Si pegaron la URL del navegador se usa esa (ya sin `?`/`#`); si escribieron
+  // solo el código, se arma la URL canónica del anuncio.
+  const url = consulta.listingUrl ?? `https://www.portalinmobiliario.com/${externalId}`
 
   let html: string
   try {
