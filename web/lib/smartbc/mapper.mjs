@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto'
 import { PASSTHROUGH } from './catalogo.mjs'
 // Los parentescos viven aparte porque también los usa la ficha de Captación en
 // el navegador, y este módulo importa node:crypto (ver relaciones.mjs).
-import { splitRelaciones, rutDeRelacionado } from './relaciones.mjs'
+import { splitRelaciones, rutDeRelacionado, esRelacionTitular } from './relaciones.mjs'
 import { formatRolCl } from '../rol-format.mjs'
 export { splitRelaciones }
 
@@ -63,7 +63,6 @@ export const LIMITS = {
   externalReference: 120,
   publicationNumber: 80,
   notes: 5_000,
-  ownerContact: 500,
   relationship: 120,
   rut: 30,
   phone: 40,
@@ -102,6 +101,9 @@ export function mapPropertyType(raw) {
  */
 export function mapContactType(relacion) {
   if (!relacion) return 'other'
+  // DealerNet a veces etiqueta el propio número del dueño "Titular" en vez de
+  // dejarlo vacío: sigue siendo el dueño, no "otro" contacto.
+  if (esRelacionTitular(relacion)) return 'owner'
   const r = String(relacion).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   if (/conyuge|esposo|esposa|marido|pareja|convivient/.test(r)) return 'spouse'
   if (/hij|madre|padre|mama|papa|herman|abuel|niet|tio|tia|sobrin|primo|prima|suegr|cunad|yerno|nuera|familiar/.test(r)) return 'family'
@@ -158,12 +160,15 @@ export function pickPrice({ price, price_uf: priceUf, currency }) {
   const cur = currency == null ? null : String(currency).toLowerCase()
   if (cur === 'uf') {
     const uf = numOrNull(priceUf)
-    if (uf != null) return { price: uf, currency: 'uf' }
+    // Truthy, no `!= null`: un `0` no es un precio real (ninguna propiedad se
+    // publica gratis), es un dato que no se pudo extraer y quedó en 0 en vez
+    // de null. Mandarlo tal cual es lo que hacía llegar "$0.0M" a la ficha.
+    if (uf) return { price: uf, currency: 'uf' }
   }
   const clp = numOrNull(price)
-  if (clp != null) return { price: clp, currency: 'clp' }
+  if (clp) return { price: clp, currency: 'clp' }
   const uf = numOrNull(priceUf)
-  if (uf != null) return { price: uf, currency: 'uf' }
+  if (uf) return { price: uf, currency: 'uf' }
   return { price: null, currency: null }
 }
 
@@ -236,9 +241,18 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
   })
 
   const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+  const ownerRutNorm = ownerRut ? String(ownerRut).replace(/\./g, '').trim().toUpperCase() : null
   const seen = new Set()
   for (const rel of relacionados) {
     if (contacts.length >= LIMITS.contacts) break
+    // El titular puede figurar tambien como su propia fila de "relacionados"
+    // (DealerNet la trae con relacion "Titular"): ya viaja arriba como el
+    // contacto dedicado, asi que aca se salta -- si no, aparece dos veces.
+    const relRutTitular = rutDeRelacionado(rel)
+    const esElTitular = esRelacionTitular(rel?.relacion)
+      || (ownerRutNorm != null && relRutTitular != null
+          && relRutTitular.replace(/\./g, '').trim().toUpperCase() === ownerRutNorm)
+    if (esElTitular) continue
     // Un teléfono puede pertenecer a varias personas a la vez ("Conyuge, Hija,
     // Suegra"): cuenta como suyo si su relación aparece en esa lista, no solo
     // si la cadena entera coincide.
@@ -285,10 +299,24 @@ export function buildContacts({ captacionId, ownerName, ownerRut, phones, emails
  * `extra_phones` suyos, no como contactos repetidos.
  */
 function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion }) {
+  const ownerRutNorm = ownerRut ? String(ownerRut).replace(/\./g, '').trim().toUpperCase() : null
+  // No se confia solo en `is_owner`/`contact_type` -- selecciones guardadas
+  // antes de este fix los traen mal (calculados con "sin parentesco = titular",
+  // que no cubre el numero que DealerNet etiqueta explicitamente "Titular").
+  // El RUT contra el del dueno resuelto, o la relacion elegida en el picker,
+  // identifican al titular igual sin depender de lo que se guardo en su momento.
+  const esSeleccionDelTitular = (sel) => {
+    if (sel.is_owner === true || sel.contact_type === 'owner') return true
+    if (esRelacionTitular(sel.relationship)) return true
+    if (ownerRutNorm != null && sel.rut) {
+      return String(sel.rut).replace(/\./g, '').trim().toUpperCase() === ownerRutNorm
+    }
+    return false
+  }
   const porPersona = new Map()
   for (const sel of seleccion) {
     if (!sel?.phone) continue
-    const esTitular = sel.is_owner === true || sel.contact_type === 'owner'
+    const esTitular = esSeleccionDelTitular(sel)
     // Clave de agrupación: el RUT si lo hay, si no el nombre, y si tampoco,
     // el propio teléfono (un número suelto es su propio contacto).
     const clave = esTitular
@@ -518,11 +546,15 @@ export function pruneNulls(obj) {
  * Únicos campos que el botón "forzar actualización" puede pisar. Nunca se
  * amplía a `owner.phone`, `owner.name` ni `owner.rut`: esos sí pueden llevar
  * una corrección real de la captadora tras hablar con el dueño, y machacarlos
- * perdería trabajo humano. `notes` y `owner.contact` en cambio los escribe
- * SIEMPRE nuestro propio texto derivado (ver `buildProvenanceNote` y
- * `ownerContact` más abajo) — forzarlos solo reemplaza texto nuestro viejo por
- * texto nuestro nuevo (p. ej. limpiar menciones a "DealerNet"/"casafari-mio"
- * en fichas ya sincronizadas antes de que se dejara de incluirlas).
+ * perdería trabajo humano. `notes` en cambio lo escribe SIEMPRE nuestro propio
+ * texto derivado (ver `buildProvenanceNote`) — forzarlo solo reemplaza texto
+ * nuestro viejo por texto nuestro nuevo.
+ *
+ * `owner.contact` ya no se genera (era un resumen tipo "RUT X · N teléfonos ·
+ * M emails" que quedaba redundante y con pinta de bot junto a `contacts[]`,
+ * que trae lo mismo con nombre y estructura). Sigue en esta lista para que el
+ * botón "forzar" pueda limpiarlo de las fichas que se sincronizaron con ese
+ * texto antes de este cambio — al no generarse más, forzarlo lo deja vacío.
  */
 export const FORCEABLE_TEAM_FIELDS = ['notes', 'owner.contact']
 
@@ -549,6 +581,7 @@ export function buildCaptacionPayload(bundle, {
   const cap = bundle.captacion
   const comuna = bundle.comuna ?? {}
   const property = bundle.property ?? {}
+  const catastro = bundle.catastro ?? {}
   const listings = bundle.listings ?? []
   const raw = asObject(cap.raw_extracted)
   const phones = asArray(cap.phones)
@@ -579,13 +612,10 @@ export function buildCaptacionPayload(bundle, {
   const photoItems = buildPhotos({ photos, storedPhotos, selectedPhotoUrls: selected })
 
   const bestPhone = contacts[0]?.phone ?? null
-  const ownerContact = [
-    cap.owner_rut ? `RUT ${cap.owner_rut}` : null,
-    phones.length ? `${phones.length} teléfono${phones.length > 1 ? 's' : ''}` : null,
-    emails.length ? `${emails.length} email${emails.length > 1 ? 's' : ''}` : null,
-  ].filter(Boolean).join(' · ') || null
 
-  const notes = includeNotes ? buildProvenanceNote(cap) : null
+  const notes = includeNotes
+    ? buildNotes(cap, { catastroSuperficie: catastro.superficie_terreno_m2, listings })
+    : null
 
   const payload = pruneNulls({
     external_id: externalIdFor(cap.id),
@@ -629,8 +659,12 @@ export function buildCaptacionPayload(bundle, {
     // Solo se afirma "verificada" cuando la dirección del certificado TGR
     // coincide con la del SII (confirmación documental), nunca por el score.
     address_verified: cap.match_verified === true ? true : null,
-    latitude: numOrNull(cap.latitude),
-    longitude: numOrNull(cap.longitude),
+    // Pin corregido a mano en Propiedades manda sobre la coordenada del
+    // anuncio, igual que address_real manda sobre address_scraped: es la
+    // ubicación que alguien del equipo confirmó mirando el catastro, no la
+    // que declaró el aviso.
+    latitude: numOrNull(property.manual_latitude) ?? numOrNull(cap.latitude),
+    longitude: numOrNull(property.manual_longitude) ?? numOrNull(cap.longitude),
     // En formato OFICIAL (manzana y predio a cinco dígitos, "03810-00021"), no
     // en el canónico interno. La base guarda el rol sin ceros a la izquierda
     // porque es el formato de sii_roles_cl y con él se cruzan ficha, catastro y
@@ -641,10 +675,12 @@ export function buildCaptacionPayload(bundle, {
 
     // ── Propietario ─────────────────────────────────────────────────────────
     // `confirmed` ausente a propósito: ver CONFIRMED_NOTE.
+    // `contact` ya no se envía: era un resumen derivado ("RUT X · N teléfonos
+    // · M emails") redundante con `contacts[]`, que ya trae lo mismo con
+    // nombre y estructura — y con pinta de bot junto a las fichas de contacto.
     owner: pruneNulls({
       name: trunc(cap.owner_name, 200),
       phone: trunc(bestPhone, LIMITS.phone),
-      contact: trunc(ownerContact, LIMITS.ownerContact),
     }),
     notes: trunc(notes, LIMITS.notes),
 
@@ -717,6 +753,70 @@ export function buildProvenanceNote(cap) {
   if (cap.match_verified === true) partes.push('verificado con certificado TGR')
   if (cap.owner_name && cap.tgr_status === 'ok') partes.push('dueño según TGR')
   return partes.join(' · ')
+}
+
+/** A partir de qué diferencia relativa se avisa una discrepancia en `notes`. */
+export const SURFACE_DISCREPANCY_THRESHOLD = 0.05
+export const PRICE_DISCREPANCY_THRESHOLD = 0.05
+
+/** Diferencia relativa entre dos magnitudes positivas (0.12 = 12%), o `null` si falta alguna. */
+function discrepanciaRelativa(a, b) {
+  if (!(a > 0) || !(b > 0)) return null
+  return Math.abs(a - b) / Math.min(a, b)
+}
+
+/**
+ * Nota de discrepancia de superficie: el anuncio declara una y el catastro
+ * SII, otra. Quien va a llamar necesita saber cuál es la real ANTES de
+ * hablar con el dueño, no enterarse después de haber citado el número del
+ * portal. Solo avisa si la diferencia supera el margen — un par de metros de
+ * redondeo entre "superficie útil" y "superficie total" no es una alerta.
+ */
+export function buildSurfaceDiscrepancyNote(sqmAnuncio, sqmCatastro, umbral = SURFACE_DISCREPANCY_THRESHOLD) {
+  const anuncio = numOrNull(sqmAnuncio)
+  const catastro = numOrNull(sqmCatastro)
+  const diff = discrepanciaRelativa(anuncio, catastro)
+  if (diff == null || diff <= umbral) return null
+  return `Terreno real (catastro SII): ${catastro} m² — el anuncio declara ${anuncio} m²`
+}
+
+/**
+ * Nota de discrepancia de precio: dos o más corredoras publicando el mismo
+ * inmueble a precios distintos es justo el tipo de cosa que hay que saber
+ * antes de llamar, no descubrir a mitad de la conversación con el dueño.
+ *
+ * Compara `listings_cl.price`, que siempre queda en CLP al guardarse (el
+ * anuncio puede haberse publicado en UF; el scraper la convirtió ese día) —
+ * así corredoras que publican en monedas distintas igual se comparan sobre
+ * la misma base, sin necesitar la tasa UF de cada una por separado.
+ */
+export function buildPriceDiscrepancyNote(listings, umbral = PRICE_DISCREPANCY_THRESHOLD) {
+  const conPrecio = (listings ?? [])
+    .filter((l) => l?.status !== 'gone')
+    .map((l) => ({ precio: numOrNull(l?.price), corredora: l?.corredora_name ?? l?.advertiser_name ?? null }))
+    .filter((x) => x.precio > 0)
+  if (conPrecio.length < 2) return null
+  const min = conPrecio.reduce((a, b) => (b.precio < a.precio ? b : a))
+  const max = conPrecio.reduce((a, b) => (b.precio > a.precio ? b : a))
+  const diff = discrepanciaRelativa(min.precio, max.precio)
+  if (diff == null || diff <= umbral) return null
+  const fmt = (n) => `$${Math.round(n).toLocaleString('es-CL')}`
+  return `Precio distinto entre corredoras: ${fmt(min.precio)}${min.corredora ? ` (${min.corredora})` : ''}`
+    + ` vs ${fmt(max.precio)}${max.corredora ? ` (${max.corredora})` : ''}`
+}
+
+/**
+ * `notes` completo: procedencia + las discrepancias que valga la pena avisar.
+ * Sigue siendo UN campo del equipo (solo se escribe si está vacío en
+ * SmartBC): todas las líneas se juntan acá para que se escriban de una vez o
+ * ninguna, nunca a medias.
+ */
+export function buildNotes(cap, { catastroSuperficie = null, listings = [] } = {}) {
+  return [
+    buildProvenanceNote(cap),
+    buildSurfaceDiscrepancyNote(cap.sqm, catastroSuperficie),
+    buildPriceDiscrepancyNote(listings),
+  ].filter(Boolean).join(' · ')
 }
 
 // ─── Diff e idempotencia ─────────────────────────────────────────────────────

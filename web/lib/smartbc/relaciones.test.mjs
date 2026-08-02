@@ -17,6 +17,7 @@ import {
   rutDeRelacionado,
   numeroDeRut,
   edadAproximada,
+  esRelacionTitular,
 } from './relaciones.mjs'
 
 // Recorte real de la ficha de Lo Barnechea (nombres y RUT tal como los
@@ -218,4 +219,16 @@ test('el correlativo se extrae de un RUT formateado, con o sin puntos', () => {
   assert.equal(numeroDeRut('4187271-3'), 4187271)
   assert.equal(numeroDeRut(null), null)
   assert.equal(numeroDeRut('sin rut'), null)
+})
+
+// ─── ¿Es el titular? ─────────────────────────────────────────────────────────
+
+test('"Titular" se reconoce sola o compartiendo el número con otra relación', () => {
+  assert.equal(esRelacionTitular('Titular'), true)
+  assert.equal(esRelacionTitular('titular'), true, 'sin mayúscula también')
+  assert.equal(esRelacionTitular('Titular, Sociedad'), true, 'número compartido con la empresa')
+  assert.equal(esRelacionTitular('Relación directa con Titular, Sociedad'), true)
+  assert.equal(esRelacionTitular('Hijo'), false)
+  assert.equal(esRelacionTitular(null), false)
+  assert.equal(esRelacionTitular(''), false)
 })

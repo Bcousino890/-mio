@@ -18,7 +18,11 @@ import {
   buildContacts,
   buildFeatures,
   buildListings,
+  buildNotes,
   buildPhotos,
+  buildPriceDiscrepancyNote,
+  buildProvenanceNote,
+  buildSurfaceDiscrepancyNote,
   diffPayload,
   externalIdFor,
   FORCEABLE_TEAM_FIELDS,
@@ -174,6 +178,14 @@ test('parentesco → contact_type', () => {
   assert.equal(mapContactType(null), 'other')
 })
 
+test('"Titular" es el dueño, no "otro" contacto', () => {
+  // DealerNet no siempre deja el campo vacío para el número del propio
+  // dueño: a veces lo etiqueta "Titular" (o "Titular, Sociedad"). Antes esto
+  // caía a `other` y en la ficha de SmartBC se veía "OTRO" junto al dueño.
+  assert.equal(mapContactType('Titular'), 'owner')
+  assert.equal(mapContactType('Titular, Sociedad'), 'owner')
+})
+
 // ─── Precio ──────────────────────────────────────────────────────────────────
 
 test('precio en UF viaja como UF, no como su conversión a CLP', () => {
@@ -192,6 +204,16 @@ test('precio en CLP viaja como CLP', () => {
 
 test('sin precio no se inventa un cero', () => {
   assert.deepEqual(pickPrice({ price: null, price_uf: null, currency: null }), { price: null, currency: null })
+})
+
+test('un precio guardado como 0 se trata como si no hubiera precio', () => {
+  // Caso real: el precio llegó a la ficha de SmartBC como "$0.0M". Ninguna
+  // propiedad se publica gratis -- un 0 es un dato que no se pudo extraer, no
+  // un precio real, así que no debe viajar tal cual.
+  assert.deepEqual(pickPrice({ price: 0, price_uf: null, currency: 'CLP' }), { price: null, currency: null })
+  assert.deepEqual(pickPrice({ price: 0, price_uf: 0, currency: 'UF' }), { price: null, currency: null })
+  // Con un valor real en la otra moneda, ese sí viaja.
+  assert.deepEqual(pickPrice({ price: 0, price_uf: 12000, currency: 'UF' }), { price: 12000, currency: 'uf' })
 })
 
 test('UF sin valor UF cae al CLP disponible en vez de mandar null', () => {
@@ -243,6 +265,29 @@ test('un relacionado CON teléfono se envía; uno SIN teléfono no', () => {
   assert.equal(conyuge.phone, '+56911112222')
   assert.equal(conyuge.relationship, 'Cónyuge', 'el parentesco original se conserva')
   assert.equal(conyuge.rut, '9876543-2')
+})
+
+test('el titular no se duplica cuando DealerNet lo lista también como "relacionado"', () => {
+  // Caso real: la tabla de relacionados trae una fila "Titular" (mismo RUT
+  // que ownerRut) y un teléfono etiquetado "Titular, Sociedad" en vez de venir
+  // sin parentesco. Antes esto generaba UN contacto de más -- el mismo dueño,
+  // dos veces, la segunda como `other`.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56999990000', categoria: 'probable', calidad: 9, relacion: 'Titular, Sociedad' },
+    ],
+    emails: [],
+    relacionados: [
+      { rut: '12345678', dv: '9', nombre: 'María Pérez', relacion: 'Titular' },
+      { rut: '76000000', dv: '1', nombre: 'Inversiones X Spa', relacion: 'Sociedad' },
+    ],
+  })
+  const deLaTitular = contacts.filter((c) => c.rut === '12345678-9')
+  assert.equal(deLaTitular.length, 1, 'María Pérez aparece una sola vez')
+  assert.equal(deLaTitular[0].contact_type, 'owner')
 })
 
 test('el teléfono de un relacionado no se le atribuye al titular', () => {
@@ -319,6 +364,29 @@ test('con selección manual viajan SOLO los teléfonos elegidos', () => {
   assert.equal(contacts[0].phone, '+56912345678')
   assert.equal(contacts[0].contact_type, 'owner')
   assert.equal(contacts[0].rut, '12345678-9')
+})
+
+test('una selección elegida ANTES de este fix igual reconoce al titular', () => {
+  // `is_owner` se calculaba antes como "el teléfono no trae parentesco" — no
+  // cubría el caso real de un número que DealerNet etiqueta "Titular"
+  // explícitamente. Las selecciones YA GUARDADAS con ese cálculo viejo no
+  // tienen `is_owner: true` para ese número: el mapper debe reconocer al
+  // titular igual, por su RUT o por la relación elegida en el picker, sin
+  // depender de haber vuelto a guardar la selección.
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: CAPTACION.phones,
+    emails: [],
+    relacionados: [],
+    seleccion: [
+      // Ni is_owner ni contact_type: así quedó guardado antes del fix.
+      { phone: '+56912345678', name: 'María Pérez', relationship: 'Titular', rut: '12345678-9' },
+    ],
+  })
+  assert.equal(contacts[0].contact_type, 'owner')
+  assert.equal(contacts[0].relationship, null, 'el titular no lleva "relationship": es el dueño, no un pariente')
 })
 
 test('el nombre elegido a mano gana al que devuelve TGR', () => {
@@ -558,6 +626,32 @@ test('address_verified solo se afirma cuando el match está verificado con TGR',
   assert.equal(payload.address_verified, undefined, 'un match sin verificar no afirma nada')
 })
 
+test('el pin corregido a mano manda sobre la coordenada del anuncio', () => {
+  const conPinCorregido = buildCaptacionPayload({
+    ...BUNDLE,
+    property: { ...BUNDLE.property, manual_latitude: -33.35018, manual_longitude: -70.53194 },
+  })
+  assert.equal(conPinCorregido.latitude, -33.35018)
+  assert.equal(conPinCorregido.longitude, -70.53194)
+})
+
+test('sin pin corregido se usa la coordenada del anuncio, como antes', () => {
+  const payload = buildCaptacionPayload(BUNDLE)
+  assert.equal(payload.latitude, CAPTACION.latitude)
+  assert.equal(payload.longitude, CAPTACION.longitude)
+})
+
+test('owner.contact nunca se envía: es redundante con contacts[]', () => {
+  // Antes era "RUT 12345678-9 · 3 teléfonos · 1 email" -- lo mismo que ya
+  // muestran las tarjetas de `contacts[]`, con pinta de resumen automático.
+  const payload = buildCaptacionPayload(BUNDLE)
+  assert.equal(payload.owner.contact, undefined)
+  assert.ok(!('contact' in payload.owner))
+  // name y phone SIGUEN viajando: son los datos reales, no un derivado.
+  assert.equal(payload.owner.name, 'María Pérez')
+  assert.ok(payload.owner.phone)
+})
+
 test('attempts nunca se envía: el origen no registra llamadas al propietario', () => {
   const payload = buildCaptacionPayload(BUNDLE)
   assert.equal(payload.attempts, undefined)
@@ -633,6 +727,91 @@ test('sin listings el payload sigue siendo válido (captación de URL suelta)', 
 test('la línea de procedencia se puede desactivar', () => {
   assert.ok(buildCaptacionPayload(BUNDLE).notes.includes('795-198'))
   assert.equal(buildCaptacionPayload(BUNDLE, { includeNotes: false }).notes, undefined)
+})
+
+// ─── Discrepancias en notes ──────────────────────────────────────────────────
+
+test('superficie: más de 5% de diferencia con el catastro SII avisa, con las dos cifras', () => {
+  // El anuncio dice 320 m², el catastro 260 m² -- 23% de diferencia.
+  const nota = buildSurfaceDiscrepancyNote(320, 260)
+  assert.match(nota, /260 m²/, 'lleva la cifra del catastro')
+  assert.match(nota, /320 m²/, 'y la que declaró el anuncio')
+  assert.match(nota, /catastro SII/i)
+})
+
+test('superficie: dentro del margen no avisa nada', () => {
+  assert.equal(buildSurfaceDiscrepancyNote(320, 310), null, '3% de diferencia, por debajo del 5%')
+  assert.equal(buildSurfaceDiscrepancyNote(320, 320), null, 'idénticas')
+})
+
+test('superficie: sin dato de catastro (o de anuncio) no hay nada que comparar', () => {
+  assert.equal(buildSurfaceDiscrepancyNote(320, null), null)
+  assert.equal(buildSurfaceDiscrepancyNote(null, 260), null)
+  assert.equal(buildSurfaceDiscrepancyNote(null, null), null)
+})
+
+test('precio: corredoras con más de 5% de diferencia avisan, con ambas cifras y nombres', () => {
+  const nota = buildPriceDiscrepancyNote([
+    { status: 'active', price: 450_000_000, corredora_name: 'Corredora A' },
+    { status: 'active', price: 520_000_000, corredora_name: 'Corredora B' },
+  ])
+  assert.match(nota, /Corredora A/)
+  assert.match(nota, /Corredora B/)
+  assert.match(nota, /\$450\.000\.000/)
+  assert.match(nota, /\$520\.000\.000/)
+})
+
+test('precio: dentro del margen, o con un solo aviso, no hay nada que comparar', () => {
+  assert.equal(
+    buildPriceDiscrepancyNote([
+      { status: 'active', price: 450_000_000, corredora_name: 'A' },
+      { status: 'active', price: 460_000_000, corredora_name: 'B' },
+    ]),
+    null,
+    '2% de diferencia',
+  )
+  assert.equal(buildPriceDiscrepancyNote([{ status: 'active', price: 450_000_000, corredora_name: 'A' }]), null)
+  assert.equal(buildPriceDiscrepancyNote([]), null)
+})
+
+test('precio: un aviso dado de baja (gone) no cuenta para la comparación', () => {
+  // Es un precio viejo del último rastreo antes de que el aviso se cayera —
+  // compararlo con uno activo avisaría de una diferencia que ya no existe.
+  const nota = buildPriceDiscrepancyNote([
+    { status: 'active', price: 450_000_000, corredora_name: 'A' },
+    { status: 'gone', price: 300_000_000, corredora_name: 'B (de baja)' },
+  ])
+  assert.equal(nota, null)
+})
+
+test('buildNotes junta procedencia + discrepancias en una sola línea', () => {
+  const notes = buildNotes(CAPTACION, {
+    catastroSuperficie: 260,
+    listings: [
+      { status: 'active', price: 450_000_000, corredora_name: 'A' },
+      { status: 'active', price: 520_000_000, corredora_name: 'B' },
+    ],
+  })
+  assert.match(notes, /Rol SII 795-198/, 'la procedencia sigue yendo primero')
+  assert.match(notes, /catastro SII/i)
+  assert.match(notes, /Precio distinto/)
+})
+
+test('buildNotes sin discrepancias es exactamente igual a la línea de procedencia de siempre', () => {
+  assert.equal(buildNotes(CAPTACION), buildProvenanceNote(CAPTACION))
+})
+
+test('la discrepancia de superficie y de precio llegan hasta notes en el payload completo', () => {
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    catastro: { superficie_terreno_m2: 260 },
+    listings: [
+      LISTING_PORTAL,
+      { ...LISTING_PORTAL, id: 'aaaaaaaa-0000-0000-0000-000000000002', price: 520_000_000, corredora_name: 'Corredora B', source_url: 'https://otraweb.cl/aviso-2' },
+    ],
+  })
+  assert.match(payload.notes, /catastro SII/i)
+  assert.match(payload.notes, /Precio distinto/)
 })
 
 test('la etapa inicial es configurable y puede omitirse', () => {
