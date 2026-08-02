@@ -14,7 +14,10 @@ import {
   Copy, Check, Users, UserRound, ChevronDown,
 } from 'lucide-react'
 // Misma definición de parentescos que usa el envío al CRM.
-import { candidatosDeNombre, foldRelacion, splitRelaciones } from '@/lib/smartbc/relaciones.mjs'
+import { candidatosDeNombre, foldRelacion, splitRelaciones, edadAproximada } from '@/lib/smartbc/relaciones.mjs'
+
+/** Tooltip común de la edad estimada — misma frase donde sea que se muestre. */
+const EDAD_APROX_TITLE = 'Edad aproximada, estimada a partir del correlativo del RUT (no es un dato verificado) — fvillena/rut-a-edad'
 
 export interface Phone {
   phone_e164: string
@@ -162,6 +165,8 @@ export interface PersonaOpcion {
   nombre: string
   relacion: string | null
   rut: string | null
+  /** Edad aproximada estimada por RUT (ver `edadAproximada`). `null` en RUT de empresa o sin RUT. */
+  edad: number | null
 }
 
 /**
@@ -272,7 +277,13 @@ export function NamePicker({
       <Check size={10} className={`shrink-0 ${esElegida(o) ? 'text-emerald-400' : 'text-transparent'}`} />
       <span className="text-[11px] text-slate-100 truncate flex-1">{o.nombre}</span>
       {o.relacion && <span className="text-[9px] text-amber-400/90 shrink-0">{o.relacion}</span>}
-      {o.rut && <span className="text-[9px] font-mono text-slate-500 shrink-0">{o.rut}</span>}
+      {/* RUT + edad juntos: son el mismo dato de identidad, y es lo que
+          distingue a los tres "Hijo" cuando el nombre solo no alcanza. */}
+      {(o.rut || o.edad != null) && (
+        <span className="text-[9px] font-mono text-slate-500 shrink-0" title={o.edad != null ? EDAD_APROX_TITLE : undefined}>
+          {o.rut}{o.rut && o.edad != null ? ' · ' : ''}{o.edad != null ? `~${o.edad}a` : ''}
+        </span>
+      )}
     </button>
   )
 
@@ -312,12 +323,12 @@ export function NamePicker({
       </div>
 
       {/* Quién quedó elegido: el parentesco solo no basta para saber cuál de los
-          tres hijos es, el RUT sí. */}
-      {elegida && (elegida.relacion || elegida.rut) && (
-        <p className="text-[9px] text-slate-500 mt-0.5 truncate">
-          {elegida.relacion}
-          {elegida.relacion && elegida.rut ? ' · ' : ''}
-          {elegida.rut && <span className="font-mono">{elegida.rut}</span>}
+          tres hijos es, el RUT y la edad aproximada sí. */}
+      {elegida && (elegida.relacion || elegida.rut || elegida.edad != null) && (
+        <p className="text-[9px] text-slate-500 mt-0.5 truncate" title={elegida.edad != null ? EDAD_APROX_TITLE : undefined}>
+          {[elegida.relacion, elegida.rut, elegida.edad != null ? `~${elegida.edad} años` : null]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
       )}
 
@@ -475,12 +486,14 @@ export function RelacionadosTable({ relacionados, onLookupRut }: { relacionados:
               <th className="px-2 py-1.5 font-semibold">RUT</th>
               <th className="px-2 py-1.5 font-semibold">Nombre</th>
               <th className="px-2 py-1.5 font-semibold">Relación</th>
+              <th className="px-2 py-1.5 font-semibold" title={EDAD_APROX_TITLE}>Edad aprox.</th>
               <th className="px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
             {relacionados.map((r, i) => {
               const rutStr = r.rut != null && r.dv ? `${r.rut}-${r.dv}` : null
+              const edad = edadAproximada(r.rut)
               return (
                 <tr key={i} className="border-t border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] transition-colors">
                   <td className="px-2 py-1.5 font-mono text-slate-300 whitespace-nowrap">
@@ -508,6 +521,7 @@ export function RelacionadosTable({ relacionados, onLookupRut }: { relacionados:
                     </span>
                   </td>
                   <td className="px-2 py-1.5 text-amber-400/90 whitespace-nowrap">{r.relacion ?? '—'}</td>
+                  <td className="px-2 py-1.5 text-slate-400 whitespace-nowrap">{edad != null ? `~${edad}` : '—'}</td>
                   <td className="px-2 py-1.5 text-right whitespace-nowrap">
                     {rutStr && onLookupRut && (
                       <button

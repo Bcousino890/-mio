@@ -15,6 +15,8 @@ import {
   personasDeLaFicha,
   candidatosDeNombre,
   rutDeRelacionado,
+  numeroDeRut,
+  edadAproximada,
 } from './relaciones.mjs'
 
 // Recorte real de la ficha de Lo Barnechea (nombres y RUT tal como los
@@ -43,6 +45,7 @@ test('las personas de la ficha salen de los relacionados, con su RUT armado', ()
   assert.equal(personas.length, RELACIONADOS.length)
   assert.deepEqual(personas[3], {
     nombre: 'Alejandro Danus Chirighin', relacion: 'Hijo', rut: '9250701-7',
+    edad: edadAproximada(9250701),
   })
 })
 
@@ -55,6 +58,7 @@ test('el titular del certificado TGR se suma si DealerNet no lo trae', () => {
   const titular = personas.at(-1)
   assert.deepEqual(titular, {
     nombre: 'Sucesion Krunoslav Chirighin', relacion: 'Titular', rut: '4187271-3',
+    edad: edadAproximada(4187271),
   })
 })
 
@@ -147,22 +151,63 @@ test('un parentesco que no calza con nadie deja igual toda la lista a mano', () 
 test('el dueño de un teléfono viaja con su RUT', () => {
   const dueno = duenoDeTelefono('Hijo', { relacionados: RELACIONADOS })
   assert.deepEqual(dueno, {
-    name: 'Alejandro Danus Chirighin', relationship: 'Hijo', rut: '9250701-7', esTitular: false,
+    name: 'Alejandro Danus Chirighin', relationship: 'Hijo', rut: '9250701-7',
+    edad: edadAproximada(9250701), esTitular: false,
   })
 })
 
 test('un número sin parentesco es del titular, con el RUT del certificado', () => {
   const dueno = duenoDeTelefono(null, { ownerName: 'María Pérez', ownerRut: '12345678-9' })
   assert.deepEqual(dueno, {
-    name: 'María Pérez', relationship: null, rut: '12345678-9', esTitular: true,
+    name: 'María Pérez', relationship: null, rut: '12345678-9',
+    edad: edadAproximada(12345678), esTitular: true,
   })
 })
 
 test('un parentesco sin nadie detrás no inventa nombre ni RUT', () => {
   const dueno = duenoDeTelefono('Suegra', { ownerName: 'María Pérez', relacionados: RELACIONADOS })
-  assert.deepEqual(dueno, { name: '', relationship: 'Suegra', rut: null, esTitular: false })
+  assert.deepEqual(dueno, { name: '', relationship: 'Suegra', rut: null, edad: null, esTitular: false })
 })
 
 test('el texto "Relación directa con" del anuncio no cuenta como parentesco', () => {
   assert.deepEqual(splitRelaciones('Relación directa con Hijo, Nuera'), ['Hijo', 'Nuera'])
+})
+
+// ─── Edad aproximada por RUT (fvillena/rut-a-edad) ──────────────────────────
+
+test('reproduce el ejemplo publicado del modelo: RUT 5126663 → 69 años (2018)', () => {
+  // https://github.com/fvillena/rut-a-edad — "El individuo tiene 69 años y
+  // nació en abril de 1949". Ancla el cálculo contra un resultado ya conocido,
+  // no solo contra la fórmula reescrita.
+  assert.equal(edadAproximada(5126663, new Date('2018-06-15')), 69)
+})
+
+test('la edad crece con el correlativo — más antiguo el RUT, mayor la edad', () => {
+  const hoy = new Date('2026-01-01')
+  const mayor = edadAproximada(2000000, hoy)
+  const menor = edadAproximada(20000000, hoy)
+  assert.ok(mayor > menor, 'un RUT más bajo (asignado antes) da una persona de más edad')
+})
+
+test('un RUT de empresa no da una edad — la fórmula lo delata sola', () => {
+  // Sin necesitar el campo `clasificacion` (P/E) de DealerNet, que esta tabla
+  // de relacionados nunca capturó: 76 millones "nacería" el año 2185.
+  assert.equal(edadAproximada(76073333), null, 'Inmobiliaria Tamara Spa')
+  assert.equal(edadAproximada(96517970), null, 'Inversiones Daco S A')
+})
+
+test('un correlativo inválido no revienta, da null', () => {
+  assert.equal(edadAproximada(0), null)
+  assert.equal(edadAproximada(-9250701), null)
+  assert.equal(edadAproximada(null), null)
+  assert.equal(edadAproximada(undefined), null)
+  assert.equal(edadAproximada('no es un rut'), null)
+})
+
+test('el correlativo se extrae de un RUT formateado, con o sin puntos', () => {
+  assert.equal(numeroDeRut('9.250.701-7'), 9250701)
+  assert.equal(numeroDeRut('9250701-7'), 9250701)
+  assert.equal(numeroDeRut('4187271-3'), 4187271)
+  assert.equal(numeroDeRut(null), null)
+  assert.equal(numeroDeRut('sin rut'), null)
 })

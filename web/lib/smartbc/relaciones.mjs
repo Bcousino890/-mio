@@ -42,12 +42,59 @@ export function foldRelacion(s) {
  * @property {string} nombre
  * @property {string | null} relacion
  * @property {string | null} rut RUT ya formateado ("9250701-7"), si se conoce.
+ * @property {number | null} edad Edad aproximada estimada por RUT (ver `edadAproximada`). `null` en RUT de empresa o sin RUT.
  */
 
 /** RUT de un relacionado, que DealerNet entrega partido en número y dígito. */
 export function rutDeRelacionado(rel) {
   if (rel?.rut == null || rel.rut === '') return null
   return `${rel.rut}${rel.dv ? `-${rel.dv}` : ''}`
+}
+
+// ─── Edad aproximada por RUT ────────────────────────────────────────────────
+// En Chile el RUT se asigna de forma correlativa al nacer (Registro Civil), así
+// que el número por sí solo predice el año de nacimiento con bastante
+// precisión. Regresión lineal de fvillena/rut-a-edad — 1175 RUT con fecha de
+// nacimiento conocida, R²=0.9574: https://github.com/fvillena/rut-a-edad
+const RUT_EDAD_PENDIENTE = 3.3364e-6
+const RUT_EDAD_INTERCEPTO = 1932.26
+
+/**
+ * Correlativo numérico de un RUT formateado ("9.250.701-7" → 9250701).
+ * Asume el separador `-` antes del dígito verificador, que es como lo
+ * formatea todo este pipeline (ver `rutDeRelacionado` y `captar-pipeline.ts`).
+ */
+export function numeroDeRut(rutTexto) {
+  if (rutTexto == null) return null
+  const [numStr] = String(rutTexto).trim().split('-')
+  const digits = numStr.replace(/\D/g, '')
+  if (!digits) return null
+  const n = parseInt(digits, 10)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/**
+ * Edad aproximada de una persona natural a partir del correlativo de su RUT.
+ *
+ * `null` si el número no da una edad de persona viva — RUT de empresa (nunca
+ * fue asignado al nacer) o correlativo corrupto. No hace falta distinguirlos
+ * a mano: la fórmula misma los delata, porque les da un año de nacimiento
+ * fuera de cualquier vida humana posible (una Sociedad con RUT 76.xxx.xxx
+ * "nacería" el año 2185).
+ *
+ * Es una ESTIMACIÓN para distinguir entre varios relacionados con el mismo
+ * parentesco ("Hijo" x3) — no un dato verificado, no se envía al CRM.
+ *
+ * @param {number | string | null | undefined} rutNumerico Correlativo SIN dígito verificador.
+ * @param {Date} [hoy]
+ * @returns {number | null}
+ */
+export function edadAproximada(rutNumerico, hoy = new Date()) {
+  const n = Number(rutNumerico)
+  if (!Number.isFinite(n) || n <= 0) return null
+  const anioNacimiento = n * RUT_EDAD_PENDIENTE + RUT_EDAD_INTERCEPTO
+  const edad = hoy.getFullYear() - Math.trunc(anioNacimiento)
+  return edad >= 0 && edad <= 110 ? edad : null
 }
 
 /**
@@ -63,16 +110,24 @@ export function rutDeRelacionado(rel) {
  *
  * @param {string | null | undefined} relacion
  * @param {{ ownerName?: string | null, ownerRut?: string | null, relacionados?: Array<{ rut?: number | string | null, dv?: string | null, nombre?: string | null, relacion?: string | null }> }} [opts]
- * @returns {{ name: string, relationship: string | null, rut: string | null, esTitular: boolean }}
+ * @returns {{ name: string, relationship: string | null, rut: string | null, edad: number | null, esTitular: boolean }}
  */
 export function duenoDeTelefono(relacion, { ownerName = null, ownerRut = null, relacionados = [] } = {}) {
   const relaciones = splitRelaciones(relacion)
-  if (!relaciones.length) return { name: ownerName ?? '', relationship: null, rut: ownerRut, esTitular: true }
+  if (!relaciones.length) {
+    return {
+      name: ownerName ?? '', relationship: null, rut: ownerRut,
+      edad: edadAproximada(numeroDeRut(ownerRut)), esTitular: true,
+    }
+  }
   for (const r of relaciones) {
     const hit = relacionados.find((x) => foldRelacion(x?.relacion) === foldRelacion(r))
-    if (hit?.nombre) return { name: hit.nombre, relationship: r, rut: rutDeRelacionado(hit), esTitular: false }
+    if (hit?.nombre) {
+      const rut = rutDeRelacionado(hit)
+      return { name: hit.nombre, relationship: r, rut, edad: edadAproximada(numeroDeRut(rut)), esTitular: false }
+    }
   }
-  return { name: '', relationship: relaciones[0], rut: null, esTitular: false }
+  return { name: '', relationship: relaciones[0], rut: null, edad: null, esTitular: false }
 }
 
 /**
@@ -102,7 +157,9 @@ export function personasDeLaFicha({ relacionados = [], ownerName = null, ownerRu
     const clave = rut ?? foldRelacion(nombre)
     if (vistos.has(clave)) continue
     vistos.add(clave)
-    personas.push({ nombre, relacion: rel?.relacion ?? null, rut })
+    // El correlativo crudo (`rel.rut`) todavía está a mano acá — no hace
+    // falta reconstruirlo desde el `rut` ya formateado.
+    personas.push({ nombre, relacion: rel?.relacion ?? null, rut, edad: edadAproximada(rel?.rut) })
   }
   const titular = String(ownerName ?? '').trim()
   // Por NOMBRE, no por RUT: el RUT del certificado TGR y el que respondió
@@ -110,7 +167,10 @@ export function personasDeLaFicha({ relacionados = [], ownerName = null, ownerRu
   // dos RUT distintos es peor que no ofrecerla dos veces.
   const nombres = new Set(personas.map((p) => foldRelacion(p.nombre)))
   if (titular && !nombres.has(foldRelacion(titular))) {
-    personas.push({ nombre: titular, relacion: 'Titular', rut: ownerRut ?? null })
+    personas.push({
+      nombre: titular, relacion: 'Titular', rut: ownerRut ?? null,
+      edad: edadAproximada(numeroDeRut(ownerRut)),
+    })
   }
   return personas
 }
