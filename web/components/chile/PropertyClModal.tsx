@@ -20,7 +20,7 @@ import {
   Landmark, BadgeCheck, AlertTriangle, Save,
 } from 'lucide-react'
 import { toLatLng } from '@/lib/coords'
-import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+import { PhoneRow, RelacionadosTable, useCopy, VerificarSeleccionButton } from '@/components/chile/DealerFicha'
 import { DuenosRolPicker, type RutCandidato } from '@/components/chile/DuenosRolPicker'
 // Mismo selector de nombre (y misma selección guardada) que usa la ficha de Captación.
 import { duenoDeTelefono, personasDeLaFicha } from '@/lib/smartbc/relaciones.mjs'
@@ -471,6 +471,16 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
           },
     }))
   }, [duenoDelTelefono])
+
+  // Quita de la selección los números que la verificación dejó como "sin
+  // WhatsApp": tras verificar quedan marcados SOLO los contactables, que es
+  // exactamente lo que se guarda y lo que después viaja al CRM.
+  const descartarSeleccionados = useCallback((numeros: string[]) => {
+    const fuera = new Set(numeros.map((n) => n.replace(/\D/g, '')))
+    setSeleccion((prev) => Object.fromEntries(
+      Object.entries(prev).filter(([numero]) => !fuera.has(numero.replace(/\D/g, '')))
+    ))
+  }, [])
 
   const [guardandoSeleccion, setGuardandoSeleccion] = useState(false)
   const [seleccionMsg, setSeleccionMsg] = useState<string | null>(null)
@@ -1180,6 +1190,12 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                     más allá. Enviar al CRM sigue siendo cosa de esa ficha. */}
                                 {crmPhones.length > 0 && (
                                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                    {/* Verificar ANTES de guardar/enviar: los
+                                        que estén de baja se desmarcan solos. */}
+                                    <VerificarSeleccionButton
+                                      phones={Object.keys(seleccion)}
+                                      onDescartar={descartarSeleccionados}
+                                    />
                                     <button
                                       onClick={guardarSeleccion}
                                       disabled={guardandoSeleccion || nSeleccionados === 0}

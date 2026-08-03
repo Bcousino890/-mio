@@ -1099,3 +1099,39 @@ test('si la selección entera queda de baja, no se manda una ficha sin dueño', 
   assert.equal(contacts[0].contact_type, 'owner')
   assert.equal(contacts[0].phone, null)
 })
+
+test('la foto que viaja al CRM es la verificada en WhatsApp, no la copia de DealerNet', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    baseUrl: 'https://crm.cremme.es',
+    verificacionesWhatsapp: {
+      '+56912345678': { tiene_whatsapp: true, tiene_foto: true, verificado_at: '2026-08-01T10:00:00Z' },
+    },
+  })
+  // Con sello de fecha: SmartBC re-aloja las fotos al recibirlas, y con una
+  // URL fija se quedaría con la primera para siempre aunque el contacto la cambie.
+  assert.equal(
+    contacts[0].photo_url,
+    'https://crm.cremme.es/api/chile/whatsapp-foto?phone=%2B56912345678&v=2026-08-01T10%3A00%3A00Z'
+  )
+})
+
+test('si la foto de WhatsApp no es visible, viaja la de DealerNet', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    baseUrl: 'https://crm.cremme.es',
+    // Está en WhatsApp, pero su foto es privada (o aún no se pudo bajar).
+    verificacionesWhatsapp: { '+56912345678': { tiene_whatsapp: true, tiene_foto: false } },
+  })
+  assert.equal(contacts[0].photo_url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
+})

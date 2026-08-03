@@ -84,22 +84,23 @@ inmediatamente.
    docker compose -p casafari --env-file ../.env --profile whatsapp up -d whatsapp-verify
    ```
 
-5. **Vincular**: el worker publica el QR en `whatsapp_verificador_cl.qr` y en
-   el log. Para escanearlo:
+5. **Escanear el QR en `Configuración` → panel “Verificador de WhatsApp”**
+   (`/settings`). Ahí sale el código, ya renderizado, y se refresca solo cada
+   4 s mientras espera — el QR caduca en ~60 s y el worker emite uno nuevo.
+
+   En el teléfono del número verificador: WhatsApp → Ajustes → Dispositivos
+   vinculados → Vincular un dispositivo → apuntar a la pantalla.
+
+   El mismo panel muestra después el estado, el número vinculado, las
+   verificaciones de hoy y cuántos números quedan por verificar.
+
+   Si hiciera falta desde consola, el QR crudo está en la base:
 
    ```sql
-   SELECT qr FROM whatsapp_verificador_cl;
+   SELECT estado, numero_e164, checks_dia, ultimo_error, qr FROM whatsapp_verificador_cl;
    ```
    ```bash
    npx qrcode-terminal "<contenido del campo qr>"
-   ```
-
-   El QR caduca en ~60 s; el worker emite uno nuevo automáticamente.
-
-6. Comprobar el estado:
-
-   ```sql
-   SELECT estado, numero_e164, checks_dia, ultimo_error FROM whatsapp_verificador_cl;
    ```
 
 **Antes de vincular, el sistema entero funciona igual que antes**: la ficha
@@ -122,6 +123,25 @@ al CRM queda inerte (ver más abajo).
   encola el número al principio de la cola del worker. El ritmo no puede
   depender de cuántas veces alguien haga clic.
 
+**Verificar antes de enviar al CRM.** En la ficha de Captación y en el modal
+de Propiedades, junto a los botones de envío, está **“Verificar WhatsApp (N)”**:
+
+1. se marcan los teléfonos que interesan (casillas de siempre);
+2. se pulsa el botón: esos números pasan al principio de la cola del worker y
+   el botón espera, mostrando el avance (`3/6`);
+3. al terminar, los que **no** están en WhatsApp **se desmarcan solos** y queda
+   un resumen (`✓ 4 con WhatsApp · 2 descartado(s)`);
+4. se envía a SmartBC lo que quedó marcado.
+
+La espera es real y tiene tope: el worker consulta a ~15 números/minuto (unos
+4 s cada uno), que es el ritmo que protege al número verificador. Para los 3-6
+teléfonos de una ficha son segundos. Si alguno no alcanza a resolverse, el
+botón lo dice (`2 aún en cola`) en vez de dar por buena una verificación que no
+ocurrió; su badge se actualiza cuando el worker pase.
+
+Un número ya verificado sin WhatsApp no se puede volver a marcar: la casilla
+queda deshabilitada.
+
 **Envío a SmartBC.** Ningún número que sepamos de baja llega al CRM. La regla
 es deliberadamente asimétrica (`filtrarPhonesConWhatsapp`, `web/lib/smartbc/mapper.mjs`):
 
@@ -141,6 +161,12 @@ queda sin dueño, y tampoco lleva un número al que nadie va a contestar.
 
 `has_whatsapp` en el payload del CRM lo manda la verificación cuando existe; la
 bandera de DealerNet es solo el respaldo.
+
+**La foto también viaja al CRM.** `contacts[].photo_url` apunta a la foto
+verificada (`/api/chile/whatsapp-foto`) cuando la hay, y solo si no la hay a la
+copia de DealerNet. La URL lleva la fecha del último check (`&v=`) porque
+SmartBC re-aloja las fotos al recibirlas: con una URL fija se quedaría con la
+primera para siempre aunque el contacto cambie la suya.
 
 ## Límites conocidos
 
@@ -167,4 +193,6 @@ bandera de DealerNet es solo el respaldo.
 | `web/app/api/chile/whatsapp-verificacion/route.ts` | Lectura + "verificar ahora" |
 | `web/app/api/chile/whatsapp-foto/route.ts` | Sirve la foto verificada |
 | `web/lib/whatsapp-verificacion-client.ts` | Cliente con batching para la ficha |
-| `web/lib/smartbc/mapper.mjs` | `filtrarPhonesConWhatsapp` — el filtro del envío al CRM |
+| `web/lib/smartbc/mapper.mjs` | `filtrarPhonesConWhatsapp` y `contactPhotoUrl` — filtro y foto del envío al CRM |
+| `web/components/admin/WhatsappVerificadorPanel.tsx` | Panel de Configuración: **el QR se escanea aquí** |
+| `web/app/api/admin/whatsapp-verificador/route.ts` | Estado + QR renderizado a PNG |

@@ -11,14 +11,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Phone, Mail, MapPin, CheckCircle2, MessageCircle,
-  Copy, Check, Users, UserRound, ChevronDown, RefreshCw,
+  Copy, Check, Users, UserRound, ChevronDown, RefreshCw, Loader2,
 } from 'lucide-react'
 // Misma definición de parentescos que usa el envío al CRM.
 import { candidatosDeNombre, foldRelacion, splitRelaciones, edadAproximada } from '@/lib/smartbc/relaciones.mjs'
 // Verificación en vivo de WhatsApp (migración 0095): confirma contra WhatsApp
 // si el número sigue activo y trae su foto ACTUAL. El dato de DealerNet
 // (`ind_whatsapp`, `idimagen`) es de su base y no tiene fecha.
-import { useVerificacionWhatsapp } from '@/lib/whatsapp-verificacion-client'
+import { useVerificacionWhatsapp, verificarLote } from '@/lib/whatsapp-verificacion-client'
 
 /**
  * Tooltip común de la edad estimada — misma frase donde sea que se muestre.
@@ -563,6 +563,81 @@ export function PhoneRow({
       <VerificarWhatsappButton phone={p.phone_e164} />
       <CopyButton copied={copied} onClick={onCopy} title="Copiar número" />
     </div>
+  )
+}
+
+/**
+ * "Verificar seleccionados": el paso previo a mandar contactos al CRM.
+ *
+ * Se eligen los teléfonos de la ficha, se pulsa esto, y cuando termina quedan
+ * marcados SOLO los que están en WhatsApp — los de baja se desmarcan solos
+ * (`onDescartar`). Así lo que viaja al CRM es lo que de verdad se puede
+ * contactar, y se ve antes de enviarlo, no después.
+ *
+ * La espera es real: quien consulta es el worker, a ~15 números/minuto (unos
+ * 4 s cada uno), que es el ritmo que evita que Meta banee el número
+ * verificador. Para los 3-6 números de una ficha son segundos.
+ */
+export function VerificarSeleccionButton({
+  phones, onDescartar, className = '',
+}: {
+  phones: string[]
+  /** Números verificados SIN WhatsApp — el padre los desmarca. */
+  onDescartar: (sinWhatsapp: string[]) => void
+  className?: string
+}) {
+  const [estado, setEstado] = useState<'idle' | 'verificando'>('idle')
+  const [progreso, setProgreso] = useState<{ hechos: number; total: number } | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const { verificador, disponible } = useVerificacionWhatsapp(phones[0] ?? null)
+
+  if (!disponible) return null
+
+  const sinVerificador = !verificador || verificador.estado !== 'conectado'
+
+  async function verificar() {
+    setEstado('verificando')
+    setMsg(null)
+    setProgreso({ hechos: 0, total: phones.length })
+    const res = await verificarLote(phones, {
+      onProgreso: (hechos, total) => setProgreso({ hechos, total }),
+    })
+    if (res.sinWhatsapp.length > 0) onDescartar(res.sinWhatsapp)
+    setEstado('idle')
+    setProgreso(null)
+
+    const partes = [`${res.conWhatsapp.length} con WhatsApp`]
+    if (res.sinWhatsapp.length) partes.push(`${res.sinWhatsapp.length} descartado(s)`)
+    if (res.pendientes.length) {
+      // No se miente con un "listo" cuando el worker no llegó a atenderlos:
+      // esos números siguen en cola y su badge se actualizará cuando pase.
+      partes.push(res.verificador?.estado === 'conectado'
+        ? `${res.pendientes.length} aún en cola`
+        : `${res.pendientes.length} sin verificar (verificador ${res.verificador?.estado ?? 'sin vincular'})`)
+    }
+    setMsg(`${res.pendientes.length === 0 ? '✓ ' : ''}${partes.join(' · ')}`)
+  }
+
+  return (
+    <>
+      <button
+        onClick={verificar}
+        disabled={estado === 'verificando' || phones.length === 0}
+        title={phones.length === 0
+          ? 'Marca los teléfonos que te interesan y verifícalos antes de enviarlos'
+          : sinVerificador
+            ? `Verificador ${verificador?.estado ?? 'sin vincular'}: los números quedan encolados, pero no habrá resultado hasta vincularlo (Configuración)`
+            : `Verificar en WhatsApp los ${phones.length} teléfono(s) marcados y desmarcar los que estén de baja`}
+        className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-green-800/60 text-green-300 hover:bg-green-950/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${className}`}
+      >
+        {estado === 'verificando'
+          ? <><Loader2 size={11} className="animate-spin" /> Verificando {progreso ? `${progreso.hechos}/${progreso.total}` : ''}…</>
+          : <><MessageCircle size={11} /> Verificar WhatsApp ({phones.length})</>}
+      </button>
+      {msg && (
+        <span className={`text-[10px] ${msg.startsWith('✓') ? 'text-emerald-400' : 'text-amber-400'}`}>{msg}</span>
+      )}
+    </>
   )
 }
 

@@ -100,6 +100,93 @@ export async function solicitarVerificacion(phone: string) {
   await consultar(true, [clave])
 }
 
+export interface ResultadoVerificacionLote {
+  conWhatsapp: string[]
+  sinWhatsapp: string[]
+  /** Los que el worker no alcanzó a atender dentro del tiempo de espera. */
+  pendientes: string[]
+  verificador: EstadoVerificador | null
+  /** true si se agotó la espera con números todavía en cola. */
+  timeout: boolean
+}
+
+/**
+ * Verifica AHORA un lote de números y espera el resultado — el paso previo a
+ * mandar contactos al CRM: se eligen los teléfonos, se verifican, y se quedan
+ * marcados solo los que están en WhatsApp.
+ *
+ * "Ahora" tiene un límite físico: quien consulta a WhatsApp es el worker, a
+ * ~15 números por minuto (unos 4 s cada uno). Ese ritmo es lo que evita que
+ * Meta banee el número verificador, así que un botón no puede saltárselo. Lo
+ * que hace este método es poner el lote al principio de la cola y esperar:
+ * para los 3-6 números de una ficha son segundos, no minutos.
+ *
+ * Un número se considera resuelto cuando el worker limpia su `revalidar_pedido`
+ * — es la señal de que ya pasó por él, tenga o no WhatsApp.
+ */
+export async function verificarLote(
+  phones: string[],
+  { onProgreso, timeoutMs = 180_000, intervaloMs = 3_000 }: {
+    onProgreso?: (resueltos: number, total: number) => void
+    timeoutMs?: number
+    intervaloMs?: number
+  } = {}
+): Promise<ResultadoVerificacionLote> {
+  const claves = Array.from(new Set(phones.map(normalizarTelefono).filter(Boolean)))
+  const vacio: ResultadoVerificacionLote = {
+    conWhatsapp: [], sinWhatsapp: [], pendientes: claves, verificador, timeout: false,
+  }
+  if (claves.length === 0 || !disponible) return vacio
+
+  const pedir = async (solicitar: boolean) => {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phones: claves, solicitar }),
+    })
+    const data = await res.json()
+    if (!data?.success) throw new Error(data?.error ?? 'sin respuesta')
+    verificador = data.verificador ?? null
+    for (const p of claves) cache.set(p, data.verificaciones?.[p] ?? null)
+    avisar()   // los badges de la ficha se actualizan solos según llegan
+    return data
+  }
+
+  const clasificar = () => {
+    const conWhatsapp: string[] = []
+    const sinWhatsapp: string[] = []
+    const pendientes: string[] = []
+    for (const p of claves) {
+      const v = cache.get(p)
+      // Resuelto = el worker ya lo atendió (limpió el pedido) y dio un veredicto.
+      if (!v || v.revalidar_pedido || v.estado !== 'ok' || v.tiene_whatsapp == null) pendientes.push(p)
+      else if (v.tiene_whatsapp) conWhatsapp.push(p)
+      else sinWhatsapp.push(p)
+    }
+    return { conWhatsapp, sinWhatsapp, pendientes }
+  }
+
+  try {
+    await pedir(true)
+  } catch {
+    disponible = false
+    avisar()
+    return vacio
+  }
+
+  const hasta = Date.now() + timeoutMs
+  for (;;) {
+    const estado = clasificar()
+    onProgreso?.(claves.length - estado.pendientes.length, claves.length)
+    if (estado.pendientes.length === 0) return { ...estado, verificador, timeout: false }
+    if (Date.now() >= hasta) return { ...estado, verificador, timeout: true }
+    await new Promise((r) => setTimeout(r, intervaloMs))
+    // `solicitar: false`: el pedido ya está puesto; repetirlo solo reordenaría
+    // la cola una y otra vez.
+    try { await pedir(false) } catch { return { ...clasificar(), verificador, timeout: true } }
+  }
+}
+
 /**
  * Verificación de UN número. Devuelve también el estado del verificador para
  * que la UI distinga "todavía no verificado" de "no hay verificador vinculado"

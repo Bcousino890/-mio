@@ -166,6 +166,29 @@ export function dealernetImageUrl(idimagen, { baseUrl = null, size = 200 } = {})
 }
 
 /**
+ * Foto del contacto que viaja al CRM. Hay dos y no valen lo mismo:
+ *
+ *   · la verificada en vivo — la que el número tiene HOY en WhatsApp, guardada
+ *     en whatsapp_verificaciones_cl con su fecha;
+ *   · la de DealerNet — la copia que capturaron en su día, sin fecha.
+ *
+ * Se prefiere siempre la verificada. `v=` lleva la fecha del último check para
+ * que SmartBC (que re-aloja las fotos al recibirlas) vuelva a descargarla
+ * cuando el contacto cambia su foto: con una URL fija se quedaría con la
+ * primera para siempre.
+ */
+export function contactPhotoUrl(numero, idimagen, { baseUrl = null, verificaciones = null, size = 200 } = {}) {
+  if (!baseUrl) return null
+  const base = String(baseUrl).replace(/\/+$/, '')
+  const v = verificaciones?.[claveTelefono(numero)]
+  if (v?.tiene_foto) {
+    const sello = v.verificado_at ? `&v=${encodeURIComponent(String(v.verificado_at))}` : ''
+    return `${base}/api/chile/whatsapp-foto?phone=${encodeURIComponent(claveTelefono(numero))}${sello}`
+  }
+  return dealernetImageUrl(idimagen, { baseUrl, size })
+}
+
+/**
  * Moneda dual UF/CLP. El origen guarda AMBOS valores (el publicado y su
  * conversión), pero SmartBC guarda un precio y una moneda: hay que elegir, y se
  * elige el precio TAL CUAL LO PUBLICÓ el aviso. Mandar el CLP convertido con
@@ -324,7 +347,7 @@ export function buildContacts({
     has_whatsapp: whatsappDe(firstOwnerPhone?.numero, verificacionesWhatsapp, firstOwnerPhone?.whatsapp),
     relationship: null,
     rut: trunc(ownerRut, LIMITS.rut),
-    photo_url: dealernetImageUrl(firstOwnerPhone?.idimagen, { baseUrl }),
+    photo_url: contactPhotoUrl(firstOwnerPhone?.numero, firstOwnerPhone?.idimagen, { baseUrl, verificaciones: verificacionesWhatsapp }),
     extra_phones: ownerExtras.length
       ? ownerExtras.map((p) => ({
           phone: trunc(p.numero, LIMITS.phone),
@@ -367,7 +390,7 @@ export function buildContacts({
       has_whatsapp: whatsappDe(principal.numero, verificacionesWhatsapp, principal.whatsapp),
       relationship: trunc(rel?.relacion, LIMITS.relationship),
       rut: trunc(rut, LIMITS.rut),
-      photo_url: dealernetImageUrl(principal.idimagen, { baseUrl }),
+      photo_url: contactPhotoUrl(principal.numero, principal.idimagen, { baseUrl, verificaciones: verificacionesWhatsapp }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.numero, LIMITS.phone),
@@ -446,7 +469,7 @@ function buildContactsFromSeleccion({
       has_whatsapp: whatsappDe(principal.phone, verificacionesWhatsapp, principal.has_whatsapp),
       relationship: esTitular ? null : trunc(principal.relationship, LIMITS.relationship),
       rut: trunc(principal.rut ?? (esTitular ? ownerRut : null), LIMITS.rut),
-      photo_url: dealernetImageUrl(idimagenPorNumero.get(principal.phone), { baseUrl }),
+      photo_url: contactPhotoUrl(principal.phone, idimagenPorNumero.get(principal.phone), { baseUrl, verificaciones: verificacionesWhatsapp }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.phone, LIMITS.phone),

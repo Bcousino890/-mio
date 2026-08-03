@@ -98,7 +98,13 @@ SELECT cap.*,
   LEFT JOIN LATERAL (
     SELECT jsonb_object_agg(
              v.phone_e164,
-             jsonb_build_object('tiene_whatsapp', v.tiene_whatsapp, 'verificado_at', v.verificado_at)
+             jsonb_build_object(
+               'tiene_whatsapp', v.tiene_whatsapp,
+               -- tiene_foto decide si al CRM va la foto verificada (la de
+               -- hoy) o la copia de DealerNet (sin fecha).
+               'tiene_foto', v.tiene_foto,
+               'verificado_at', v.verificado_at
+             )
            ) AS map
       FROM whatsapp_verificaciones_cl v
      WHERE v.estado = 'ok'
