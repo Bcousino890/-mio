@@ -103,6 +103,28 @@ inmediatamente.
    npx qrcode-terminal "<contenido del campo qr>"
    ```
 
+### ¿Cada cuánto hay que re-escanear el QR?
+
+**Una sola vez.** La sesión se guarda en el volumen `wa-auth` y sobrevive a
+reinicios del contenedor, deploys y reinicios del VPS.
+
+Solo hay que volver a vincular si:
+
+| Situación | ¿Re-escanear? |
+|---|---|
+| Reinicio del contenedor, deploy, reinicio del VPS | No |
+| Se cierra la sesión desde el teléfono (Dispositivos vinculados) | Sí |
+| Se borra el volumen `wa-auth` (p. ej. `docker compose down -v`) | Sí |
+| El teléfono verificador pasa **~14 días sin conectarse** | Sí — WhatsApp desvincula los dispositivos |
+| Meta banea el número | Sí, y con otro número |
+
+El que muerde en la práctica es el del teléfono: si la SIM verificadora queda
+en un cajón, a las dos semanas WhatsApp corta la sesión y el worker deja de
+verificar. Ese teléfono tiene que encenderse y conectarse cada tanto.
+
+No hay que vigilarlo a mano: el panel de Configuración muestra el estado, y si
+deja de estar `conectado` y aparece un QR es que toca re-vincular.
+
 **Antes de vincular, el sistema entero funciona igual que antes**: la ficha
 sigue mostrando el dato de DealerNet, rotulado como suyo, y el filtro de envío
 al CRM queda inerte (ver más abajo).
