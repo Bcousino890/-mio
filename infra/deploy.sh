@@ -111,6 +111,22 @@ bash "$REPO_DIR/infra/post-deploy.sh" || true
 echo "▶ [6/6] Construyendo y levantando worker-cl (Anuncios CL)..."
 $COMPOSE build worker-cl && $COMPOSE up -d --no-deps worker-cl || echo "⚠ worker-cl no se pudo levantar (revisar logs: docker compose -p casafari logs worker-cl)"
 
+# Verificador de WhatsApp: solo si está habilitado A PROPÓSITO en el .env del
+# VPS (WA_VERIFY_ENABLED=1). No se levanta por defecto porque vincula un número
+# REAL de WhatsApp que Meta puede banear — ver docs/WHATSAPP-VERIFICACION.md.
+# Con el flag puesto, cada deploy lo reconstruye y lo mantiene vivo (la sesión
+# vive en el volumen wa-auth, así que NO hay que re-escanear el QR en cada
+# deploy). Sin el flag, ni se construye.
+if grep -qE '^WA_VERIFY_ENABLED=1' "$REPO_DIR/.env" 2>/dev/null; then
+  echo "▶ Verificador de WhatsApp habilitado — construyendo y levantando..."
+  $COMPOSE --profile whatsapp build whatsapp-verify \
+    && $COMPOSE --profile whatsapp up -d --no-deps whatsapp-verify \
+    || echo "⚠ whatsapp-verify no se pudo levantar (logs: docker compose -p casafari logs whatsapp-verify)"
+  echo "  → Si aún no hay número vinculado, el QR sale en Configuración → Verificador de WhatsApp"
+else
+  echo "▶ Verificador de WhatsApp desactivado (pon WA_VERIFY_ENABLED=1 en .env para activarlo)"
+fi
+
 # Watchdog + ingesta de SII mapasui: antes era un workflow de GitHub Actions
 # con cron cada 30 min que entraba por SSH solo para correr esto mismo en el
 # VPS, gastando minutos de Actions de más. Ahora vive en el propio crontab

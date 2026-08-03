@@ -24,6 +24,8 @@ interface EstadoVerificador {
   ultimo_error?: string | null
   conectado_at?: string | null
   checks_hoy?: number
+  /** El worker dio señales de vida hace menos de 3 min. */
+  latido?: boolean
   qr_data_url?: string | null
   pendientes?: number | null
   verificados?: { con_whatsapp: number; sin_whatsapp: number; con_foto: number } | null
@@ -117,12 +119,27 @@ export default function WhatsappVerificadorPanel() {
         </div>
       )}
 
-      {data?.estado === 'desvinculado' && !data?.qr_data_url && (
-        <p className="text-[11px] text-slate-400 mb-3">
-          El worker no está publicando ningún QR. Levantarlo con{' '}
-          <code className="text-slate-300">docker compose -p casafari --profile whatsapp up -d whatsapp-verify</code>{' '}
-          y volver a esta pantalla.
-        </p>
+      {/* Sin QR: la causa nº 1 es que el contenedor no está corriendo. El
+          latido lo distingue de "está levantado y aún no emitió el código",
+          que es cuestión de segundos. */}
+      {!data?.qr_data_url && data?.success && data.estado !== 'conectado' && (
+        data.latido ? (
+          <p className="text-[11px] text-amber-400 mb-3 inline-flex items-center gap-1.5">
+            <Loader2 size={12} className="animate-spin" />
+            Worker activo, esperando que WhatsApp emita el código…
+          </p>
+        ) : (
+          <div className="text-[11px] text-slate-400 mb-3 space-y-1">
+            <p>El worker no está corriendo — por eso no hay QR. Para levantarlo en el VPS:</p>
+            <code className="block text-slate-300 bg-slate-900/60 border border-slate-700 rounded px-2 py-1 overflow-x-auto">
+              docker compose -p casafari --env-file ../.env --profile whatsapp up -d whatsapp-verify
+            </code>
+            <p>
+              O deja <code className="text-slate-300">WA_VERIFY_ENABLED=1</code> en el{' '}
+              <code className="text-slate-300">.env</code> del VPS y cada deploy lo mantendrá vivo.
+            </p>
+          </div>
+        )
       )}
 
       {data?.estado === 'baneado' && (

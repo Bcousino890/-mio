@@ -20,7 +20,12 @@ export async function GET() {
     const { rows } = await pool.query(
       `SELECT estado, numero_e164, qr, ultimo_error, conectado_at,
               CASE WHEN checks_dia_fecha = CURRENT_DATE THEN checks_dia ELSE 0 END AS checks_hoy,
-              updated_at
+              updated_at,
+              -- Latido: el worker toca esta fila al emitir cada QR (~60 s) y
+              -- en cada verificación. Sin latido reciente, el contenedor está
+              -- apagado — que es la causa nº 1 de "no aparece el QR", y el
+              -- panel tiene que poder decirlo en vez de dejar esperando.
+              updated_at > now() - interval '3 minutes' AS latido
          FROM whatsapp_verificador_cl WHERE id = true`
     )
     const v = rows[0]
@@ -59,6 +64,7 @@ export async function GET() {
       ultimo_error: v.ultimo_error,
       conectado_at: v.conectado_at,
       checks_hoy: v.checks_hoy,
+      latido: v.latido,
       actualizado_at: v.updated_at,
       qr_data_url: qrDataUrl,
       pendientes: cola?.pendientes ?? 0,
