@@ -120,7 +120,15 @@ SELECT cap.*,
         OR (cap.sii_comuna_code IS NULL AND c.name = cap.comuna_label)
      LIMIT 1
   ) com ON true
- WHERE s.captacion_id IS NULL
+ WHERE $2::boolean
+    -- Reenvío deliberado ($2 = true): trae también las captaciones que no han
+    -- cambiado desde su último envío. Hace falta cuando lo que cambia es el
+    -- MAPEO y no el dato — un campo nuevo del contrato, o un fix como el de
+    -- "notes"/precio UF de esta misma pasada: sin esto, una ficha que ya
+    -- nadie toca no volvería a reenviarse nunca y se quedaría con el payload
+    -- viejo para siempre. No es un "manda todo": el hash de planItem sigue
+    -- decidiendo, y lo idéntico se resuelve como "unchanged" sin gastar cuota.
+    OR s.captacion_id IS NULL
     OR s.synced_at IS NULL
     OR cap.updated_at > s.synced_at
     -- Un fallo se reintenta solo si tiene sentido reintentarlo. Un
@@ -155,8 +163,8 @@ SELECT l.id, l.portal, l.source_type, l.external_id, l.source_url, l.operation,
  ORDER BY l.first_seen_at
 `
 
-export async function selectPendingCaptaciones(client, { limit = BATCH_SIZE } = {}) {
-  const { rows } = await client.query(PENDING_SQL, [limit])
+export async function selectPendingCaptaciones(client, { limit = BATCH_SIZE, force = false } = {}) {
+  const { rows } = await client.query(PENDING_SQL, [limit, force === true])
   return rows
 }
 
@@ -391,9 +399,11 @@ export async function syncOnce({ client, smartbc }, opts = {}) {
     // (contacts[].photo_url) — sync.mjs no lee process.env directamente,
     // igual que el mapper; lo trae quien orquesta (el CLI).
     baseUrl = null,
+    // Reenvío deliberado: revisa también lo que no ha cambiado. Ver PENDING_SQL.
+    force = false,
   } = opts
 
-  const captaciones = await selectPendingCaptaciones(client, { limit })
+  const captaciones = await selectPendingCaptaciones(client, { limit, force })
   const summary = {
     total: captaciones.length, created: 0, updated: 0, unchanged: 0, failed: 0,
     requestIds: [], faltantesCatalogo: [],

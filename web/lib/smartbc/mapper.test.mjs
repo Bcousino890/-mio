@@ -222,6 +222,51 @@ test('UF sin valor UF cae al CLP disponible en vez de mandar null', () => {
   assert.deepEqual(pickPrice({ price: 9000, price_uf: null, currency: 'UF' }), { price: 9000, currency: 'clp' })
 })
 
+// ─── Precio de la captación en el payload completo ──────────────────────────
+//
+// Bug real visto en producción, DISTINTO del de "precio 0" de arriba: una
+// captación de "captar desde URL" en UF llegaba a SmartBC como "$0,0M".
+// Causa: `captar-pipeline.ts` guarda `cap.price_raw` como el número TAL CUAL
+// SE EXTRAJO —en UF cuando la moneda es UF, no siempre en CLP— pero nunca
+// rellena `listings_cl.price_uf` (esa columna solo la llena el scraper
+// automático). El payload pasaba `price: cap.price_raw` a pickPrice sin mirar
+// la moneda, así que un aviso de 14.000 UF (un número real, no cero — por eso
+// el fix de precio-0 no lo cubre) viajaba como "$14.000 CLP".
+
+test('un aviso en UF capturado a mano (sin listings_cl.price_uf) manda el precio en UF, no en CLP', () => {
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    captacion: { ...CAPTACION, price_raw: 14000, currency: 'UF' },
+    listings: [{ ...LISTING_PORTAL, price: null, price_uf: null, currency: null }],
+  })
+  assert.deepEqual(
+    { price: payload.price, currency: payload.currency },
+    { price: 14000, currency: 'uf' },
+    'el bug mandaba { price: 14000, currency: "clp" } — $14.000 CLP, "$0,0M" en la ficha',
+  )
+})
+
+test('un aviso en UF ingresado por el scraper automático sigue funcionando igual que antes', () => {
+  // Camino normal (worker-cl.mjs / to-listing.mjs): SÍ rellena price_uf en el
+  // listing, y la captación puede no traer price_raw propio. No debe
+  // romperse por el fix del caso de arriba.
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    captacion: { ...CAPTACION, price_raw: null, currency: null },
+    listings: [{ ...LISTING_PORTAL, price: null, price_uf: 12000, currency: 'UF' }],
+  })
+  assert.deepEqual({ price: payload.price, currency: payload.currency }, { price: 12000, currency: 'uf' })
+})
+
+test('un aviso en CLP capturado a mano sigue mandando CLP (el fix no lo toca)', () => {
+  const payload = buildCaptacionPayload({
+    ...BUNDLE,
+    captacion: { ...CAPTACION, price_raw: 450000000, currency: 'CLP' },
+    listings: [{ ...LISTING_PORTAL, price: null, price_uf: null, currency: null }],
+  })
+  assert.deepEqual({ price: payload.price, currency: payload.currency }, { price: 450000000, currency: 'clp' })
+})
+
 // ─── Foto de contacto (contacts[].photo_url) ─────────────────────────────────
 
 test('la URL de la foto es absoluta, con el dominio propio', () => {
@@ -789,7 +834,9 @@ test('un tipo desconocido cae a other y deja el original en metadata', () => {
 
 test('metadata lleva la auditoría del match que SmartBC no tiene dónde guardar', () => {
   const { metadata } = buildCaptacionPayload(BUNDLE)
-  assert.equal(metadata.origen, 'casafari-mio')
+  // Nada de lo que se envía debe nombrar el sistema de origen (ni "casafari"
+  // ni "mio", en ningún campo): captacion_id ya es la pista de auditoría.
+  assert.ok(!JSON.stringify(metadata).toLowerCase().includes('casafari'))
   assert.equal(metadata.captacion_id, CAP_ID)
   // metadata es la pista de auditoría: lleva el rol interno, el que permite
   // volver a nuestra base. El que se lee en la ficha es `rol_propiedad`.
@@ -823,8 +870,22 @@ test('sin listings el payload sigue siendo válido (captación de URL suelta)', 
 })
 
 test('la línea de procedencia se puede desactivar', () => {
-  assert.ok(buildCaptacionPayload(BUNDLE).notes.includes('795-198'))
+  assert.ok(buildCaptacionPayload(BUNDLE).notes.includes('verificado con certificado TGR'))
   assert.equal(buildCaptacionPayload(BUNDLE, { includeNotes: false }).notes, undefined)
+})
+
+test('la nota YA NO repite el rol ni el score de match (reportado en producción)', () => {
+  // "Rol SII 3858-10 · match 1.00" sonaba a log de depuración pegado en el
+  // campo de notas del equipo: el rol ya viaja en `rol_propiedad` y se ve en
+  // la ubicación de la ficha, y el match es un número interno sin significado
+  // para quien va a llamar.
+  const nota = buildProvenanceNote({
+    sii_rol: '3858-10', match_score: 1, match_verified: true,
+    owner_name: 'María Pérez', tgr_status: 'ok',
+  })
+  assert.ok(!nota.includes('Rol SII'), `sigue mandando el rol: "${nota}"`)
+  assert.ok(!nota.includes('match'), `sigue mandando el score: "${nota}"`)
+  assert.equal(nota, 'verificado con certificado TGR · dueño según TGR')
 })
 
 // ─── Discrepancias en notes ──────────────────────────────────────────────────
@@ -890,7 +951,7 @@ test('buildNotes junta procedencia + discrepancias en una sola línea', () => {
       { status: 'active', price: 520_000_000, corredora_name: 'B' },
     ],
   })
-  assert.match(notes, /Rol SII 795-198/, 'la procedencia sigue yendo primero')
+  assert.match(notes, /verificado con certificado TGR/, 'la procedencia sigue yendo primero')
   assert.match(notes, /catastro SII/i)
   assert.match(notes, /Precio distinto/)
 })

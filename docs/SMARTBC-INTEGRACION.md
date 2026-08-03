@@ -14,11 +14,16 @@ producción** — esta sesión no tiene acceso a `DATABASE_URL`.
 | Mapeo campo a campo (funciones puras) | `web/lib/smartbc/mapper.mjs` |
 | Normalización geográfica contra su catálogo | `web/lib/smartbc/catalogo.mjs` |
 | Sincronizador (consulta, lotes, diffs, log) | `web/lib/smartbc/sync.mjs` |
-| CLI (sincronización periódica) | `scraper/sync-smartbc-cl.mjs` |
+| CLI (sincronización periódica, `--force` para reenviar lo ya subido) | `scraper/sync-smartbc-cl.mjs` |
 | Botón "Agregar a Smart" (envío puntual) | `web/app/api/chile/smartbc/route.ts` |
 | Selección manual de contactos | `db/migrations/0092_smartbc_seleccion_cl.sql` |
 | Log de sincronización | `db/migrations/0091_smartbc_sync_cl.sql` |
-| Tests (100, sin red ni BD) | `web/lib/smartbc/*.test.mjs` |
+| **Propagación en vivo** (bandeja + triggers) | `db/migrations/0098_smartbc_outbox_cl.sql` |
+| Drenaje de la bandeja (retiro de contactos incluido) | `web/lib/smartbc/realtime.mjs` |
+| Escucha y ritmo (dentro del worker 24/7) | `scraper/lib/smartbc-vivo-cl.mjs` |
+| **Dirección inversa** (su panel → -mio) | `db/migrations/0099_smartbc_panel_cl.sql` · `web/lib/smartbc/panel.mjs` |
+| Espejo del panel en la ficha de Captación (solo lectura) | `web/components/chile/CaptacionDetail.tsx` |
+| Tests (185, sin red ni BD) | `web/lib/smartbc/*.test.mjs` |
 
 ---
 
@@ -146,7 +151,7 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 | `title` | `cap.title` | truncar a 500 |
 | `description` | `l.description` | truncar a 20 000 |
 | `operation` | `cap.operation` | `sale`→`venta`, `rent`→`arriendo` |
-| `price` + `currency` | `cap.price_raw`, `cap.currency`, `l.price_uf` | Moneda dual: si el aviso se publicó en UF → `price = l.price_uf`, `currency = "uf"`; si no → `price = cap.price_raw` (CLP), `currency = "clp"`. Nunca se envía el CLP convertido junto a `currency: "uf"` |
+| `price` + `currency` | `cap.price_raw`, `cap.currency`, `l.price` / `l.price_uf` | Moneda dual, decidida por `cap.currency` (no por qué campo llegó con valor): si es `"UF"` → `price = cap.price_raw` (o `l.price_uf` si la captación no trae el suyo), `currency = "uf"`; si no → `price = cap.price_raw` (o `l.price`), `currency = "clp"`. Nunca se envía el CLP convertido junto a `currency: "uf"`. **Bug real cerrado** (distinto del de precio-0 de §7): `cap.price_raw` es el número TAL CUAL SE EXTRAJO —en la moneda que diga `cap.currency`, no siempre CLP— y la captura manual por URL (`captar-pipeline.ts`) nunca rellena `l.price_uf`. Antes del fix, un aviso en UF capturado a mano mandaba su número de UF directo al slot de CLP: 14.000 UF viajaba como "$14.000 CLP" → "$0,0M" en la ficha |
 | `bedrooms`, `bathrooms` | `cap.bedrooms`, `cap.bathrooms` | directo |
 | `square_meters` | `cap.sqm` | superficie total / terreno |
 | `useful_square_meters` | `cap.raw_extracted->>'sqm_construida'` | superficie construida |
@@ -182,7 +187,7 @@ Origen: `captaciones_cl` (`cap`), su `listings_cl` principal (`l`), su `property
 | `owner.phone` | mejor teléfono de `cap.phones[]` | orden: `calidad` → `ranking` → móvil con WhatsApp primero |
 | `owner.contact` | — | **ya no se envía**. Era un resumen derivado (`"RUT 12.345.678-9 · 4 teléfonos · 2 emails"`) redundante con `contacts[]`, que trae lo mismo con nombre y estructura — en la ficha de SmartBC se veía como un bloque de "datos heredados" con pinta de bot, duplicando lo que ya muestran las tarjetas de contacto. Sigue en `FORCEABLE_TEAM_FIELDS` para poder limpiarlo de fichas que se sincronizaron con ese texto antes de este cambio |
 | `owner.confirmed` | — | **nunca se envía** (§3) |
-| `notes` | derivado: procedencia + discrepancias (`buildNotes`) | Procedencia: `"Rol SII 795-198 · match 0.97 verificado con TGR"`. Se le suman, si aplican, una línea de superficie (`"Terreno real (catastro SII): 260 m² — el anuncio declara 320 m²"`, umbral `SURFACE_DISCREPANCY_THRESHOLD = 5%`) y una de precio entre corredoras (`"Precio distinto entre corredoras: $450.000.000 (A) vs $520.000.000 (B)"`, umbral `PRICE_DISCREPANCY_THRESHOLD = 5%`, comparando `listings_cl.price` — siempre en CLP — de los avisos activos). Campo del equipo: si ya escribieron algo, no se pisa |
+| `notes` | derivado: procedencia + discrepancias (`buildNotes`) | Procedencia: `"verificado con certificado TGR · dueño según TGR"`. **Ya no lleva el rol ni el match score** (reportado en producción: `"Rol SII 3858-10 · match 1.00"` sonaba a log de depuración — el rol ya viaja en `rol_propiedad` y se ve en la ubicación, y el match es un número interno sin significado para quien va a llamar). Se le suman, si aplican, una línea de superficie (`"Terreno real (catastro SII): 260 m² — el anuncio declara 320 m²"`, umbral `SURFACE_DISCREPANCY_THRESHOLD = 5%`) y una de precio entre corredoras (`"Precio distinto entre corredoras: $450.000.000 (A) vs $520.000.000 (B)"`, umbral `PRICE_DISCREPANCY_THRESHOLD = 5%`, comparando `listings_cl.price` — siempre en CLP — de los avisos activos). Campo del equipo: si ya escribieron algo, no se pisa |
 | `revision_notes`, `next_action_at`, `next_action_note` | — | no se envían: son del trabajo comercial del equipo |
 
 ### 4.4 `contacts[]` (máx. 20)
@@ -265,7 +270,7 @@ literalmente "la misma propiedad publicada por otras corredoras". Deduplicados p
 | `stage` | **a decidir** — ver §6 |
 | `assigned_to_email` | no se envía: SmartBC reparte automáticamente y la asignación es suya |
 | `options` | no se envía en la sincronización automática. Excepción manual: el botón "Forzar notas y contacto" de la ficha puede mandar `{ force_fields: ['notes'] }` y/o `{ force_fields: ['owner.contact'] }` — nunca `overwrite_manual_fields` (todos los campos) ni ningún otro campo de la whitelist `FORCEABLE_TEAM_FIELDS` en `mapper.mjs`, porque esos dos son los únicos que siempre escribimos nosotros (texto derivado), nunca la captadora a mano |
-| `metadata` | `{ origen: "casafari-mio", captacion_id, property_cl_id, listing_cl_id, sii_rol, sii_comuna_code, match_score, match_confidence, match_verified, tgr_status, dealernet_status, relacionados_total, relacionados_enviados, property_type_origen }` |
+| `metadata` | `{ captacion_id, property_cl_id, listing_cl_id, sii_rol, sii_comuna_code, match_score, match_confidence, match_verified, tgr_status, dealernet_status, relacionados_total, relacionados_enviados, property_type_origen }` — sin `origen`: no se nombra el sistema de origen en nada de lo que se envía (reportado en producción) |
 
 ---
 
@@ -300,7 +305,8 @@ Se implementaron con el valor recomendado; ninguna está enterrada en el código
 |---|---|---|
 | Condición de envío | `contact_found` + sin revisión + dueño + teléfono (§3) | `PENDING_SQL` en `smartbc-sync-cl.mjs` |
 | Etapa inicial | `assigned` ("Para llamar"): la ficha llega con dueño y teléfono verificados, así que entra directa en la cola de llamadas | `--stage preliminary_data`, o `--stage ''` para no opinar |
-| `notes` de procedencia | Sí, una línea con rol, score y si está verificado con TGR | `--no-notes` |
+| `notes` de procedencia | Sí — pero **sin rol ni match score** (reportado en producción: sonaba a log de depuración pegado en el campo de notas del equipo). Solo lo legible: verificación TGR + discrepancias | `--no-notes` |
+| Reenviar lo ya sincronizado | No, salvo que se pida | `--force` — para cuando cambia el MAPEO y no el dato (un campo nuevo del contrato, o un fix como el de esta misma pasada); el hash de `planItem` sigue decidiendo, así que lo idéntico no gasta cuota |
 | Umbral de aviso: superficie vs. catastro SII | 5% de diferencia relativa | `SURFACE_DISCREPANCY_THRESHOLD` en `mapper.mjs` |
 | Umbral de aviso: precio entre corredoras | 5% de diferencia relativa | `PRICE_DISCREPANCY_THRESHOLD` en `mapper.mjs` |
 | Precio en 0 | Se trata como "sin dato" (no se envía), nunca como precio real | `pickPrice()` en `mapper.mjs` — ninguna propiedad se publica gratis; un 0 es un valor que no se pudo extraer |
@@ -372,6 +378,58 @@ SMARTBC_API_KEY=sbc_live_… node scraper/sync-smartbc-cl.mjs --limit 100
 
 ---
 
+## 8bis. Propagación en vivo (0098) y dirección inversa (0099)
+
+El sincronizador contesta "¿qué ha cambiado hoy?". Entre quitar un contacto que
+no era y que el CRM lo reflejara cabía una noche entera, y quien llamaba en ese
+hueco llamaba con la ficha vieja.
+
+**El disparo viene de la base de datos, no de la aplicación.** Una captación se
+toca desde la ficha, desde `captar-url`, desde el worker de anuncios, desde un
+backfill y desde `psql` a mano: poner el aviso en cada camino es garantizar que
+el próximo se olvide. Tres triggers (`captaciones_cl`, `listings_cl`,
+`property_cl` — este último también en el pin manual, no solo en `localidad`)
+escriben **una fila por captación** en `smartbc_outbox_cl`: diez ediciones
+seguidas son una pendiente, y lo que viaja es el estado final.
+
+**Por qué una tabla y no solo `NOTIFY`.** Un aviso emitido mientras el worker
+está caído no lo recibe nadie nunca más. La fila queda. El worker
+(`scraper/lib/smartbc-vivo-cl.mjs`, arrancado dentro de `worker-cl.mjs`) escucha
+`smartbc_dirty_cl` para despertar en el acto (~2 s de *debounce*) y barre la
+bandeja cada minuto por si perdió un aviso. Perder un aviso cuesta latencia, no
+datos. Reintentos: 30 s → 2 min → 8 min → 32 min → 2 h (tope).
+
+**Retiro de contactos.** `contacts[]` es un upsert, no un `sync`: un contacto
+que dejamos de mandar se queda en su ficha para siempre. `realtime.mjs` lo
+retira con `GET .../contactos` + `DELETE .../contactos/{id}`, y **solo borra lo
+que empieza por `mio-`** — un contacto que el equipo de SmartBC creó a mano no
+se toca jamás, aunque no esté en nuestro payload. El borrado va después del
+alta y solo si fue bien.
+
+**La dirección inversa** (`web/lib/smartbc/panel.mjs`, sondeada cada 5 min
+desde el worker) trae lo que el equipo comercial hizo en SU panel: etapa,
+`owner_confirmed`, datos del propietario, contactos que añadió una persona
+(`source: "panel"`). Se sondea con `changed_by=panel`, que filtra por
+`updated_by_user_at` — una marca que **no avanza con nuestros propios envíos**
+(si avanzara con `updated_at`, cada push nuestro volvería como "cambio suyo" y
+nos devolveríamos el eco).
+
+Es un **espejo**, no una fusión: se guarda en `smartbc_panel_cl`, nunca en
+`captaciones_cl`. Dos razones: (1) los triggers de la 0098 marcan sucia la fila
+ante cualquier cambio — escribir ahí lo importado dispararía un envío de vuelta
+con nuestra copia de su propio dato (verificado contra PostgreSQL real: guardar
+y actualizar el espejo deja la bandeja en 0 pendientes); (2) `owner_name` de
+allí es el que escribieron tras llamar, el nuestro es el del certificado de la
+Tesorería — dos hechos distintos, los dos ciertos. Se muestran los dos en la
+ficha de Captación (bloque "En el CRM comercial", solo lectura).
+
+La bandeja y el espejo empiezan **vacíos** a propósito: desplegar las
+migraciones no dispara un reenvío masivo ni trae el histórico entero
+(`updated_by_user_at` es `NULL` en todo lo anterior a la marca). Para propagar
+un cambio de mapeo a lo ya sincronizado está `--force` (§6).
+
+---
+
 ## 9. Hallazgo abierto: un `PATCH` parcial pisa `source_site`
 
 Detectado en la prueba de contrato con escrituras reales. Un `PATCH` que no
@@ -404,7 +462,7 @@ debería aplicar el valor por defecto de un campo que no viene en el cuerpo.
 
 ## 10. Qué falta por verificar
 
-Los 93 tests cubren cliente, mapeo, catálogo y orquestación sin red ni BD. Además
+Los 185 tests cubren cliente, mapeo, catálogo y orquestación sin red ni BD. Además
 se corrió una **prueba de contrato con escrituras reales** contra el CRM
 (`external_id: mio-test-contrato-20260731`, archivada al terminar):
 
@@ -422,3 +480,11 @@ Lo único que sigue sin comprobarse es el punto 7 y la corrida contra captacione
 reales, porque exigen conexión a la base de datos. El primer paso en un entorno
 con `DATABASE_URL` es `--dry-run` y revisar que ninguna respuesta traiga
 `warnings`.
+
+**Propagación en vivo y dirección inversa (§8bis), sin probar contra la API
+real.** Las migraciones 0098/0099 se verificaron contra un PostgreSQL 16 real
+(los diez comportamientos de los triggers, y sobre todo que el espejo del panel
+no dispare la bandeja — la propiedad de la que depende todo el diseño). Lo que
+falta, porque exige `SMARTBC_API_KEY` y `DATABASE_URL` de producción: confirmar
+`GET .../contactos` con `source`, `GET /captaciones?changed_by=panel`, y que
+`DELETE .../contactos/{id}` de verdad retira solo lo nuestro en su CRM.

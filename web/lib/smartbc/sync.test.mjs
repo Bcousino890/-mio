@@ -428,3 +428,42 @@ test('sin pendientes no se llama a la API', async () => {
   assert.equal(summary.total, 0)
   assert.equal(smartbc.calls.length, 0)
 })
+
+test('--force llega al SQL como parámetro, no como otra consulta', async () => {
+  // El reenvío deliberado existe para cuando cambia el MAPEO y no el dato:
+  // sin él, una ficha que ya nadie toca se queda con el payload viejo para
+  // siempre. Va como parámetro de la misma consulta a propósito — dos SQL
+  // con criterios distintos de "qué está pendiente" acabarían divergiendo.
+  const vistos = []
+  const db = {
+    async query(sql, params = []) {
+      if (sql.includes('FROM captaciones_cl')) { vistos.push(params); return { rows: [] } }
+      return { rows: [] }
+    },
+  }
+  const smartbc = makeSmartbc(okBatch())
+
+  await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH })
+  assert.deepEqual(vistos[0], [100, false], 'por defecto NO reenvía lo que no cambió')
+
+  await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH, force: true })
+  assert.deepEqual(vistos[1], [100, true])
+})
+
+test('reenviar en force lo que no cambió sigue sin gastar cuota', async () => {
+  // force amplía lo que se REVISA, no lo que se envía: el hash sigue mandando.
+  const payload = buildCaptacionPayload({
+    captacion: CAP,
+    comuna: { name: CAP.comuna_name, region: CAP.comuna_region },
+    property: { localidad: CAP.property_localidad },
+    listings: [LISTING],
+  }, { normalizer: PASSTHROUGH })
+  const db = makeDb({
+    captaciones: [{ ...CAP, payload_hash: payloadHash(payload), last_payload: payload, synced_at: new Date() }],
+  })
+  const smartbc = makeSmartbc(okBatch())
+  const summary = await syncOnce({ client: db, smartbc }, { normalizer: PASSTHROUGH, force: true })
+
+  assert.equal(summary.unchanged, 1)
+  assert.equal(smartbc.calls.length, 0, 'nada que mandar es nada que mandar, aunque se fuerce')
+})

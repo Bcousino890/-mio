@@ -57,6 +57,9 @@ import { runMatchFeederCl } from './lib/match-feeder-cl.mjs'
 import { crawlCorredoraWebTarget, selectDueWebTargets } from './lib/crawl-corredora-web-cl.mjs'
 import { getUfRateCl } from './lib/uf-rate-cl.mjs'
 import { getUsdRateCl } from './lib/usd-rate-cl.mjs'
+import { startSmartbcVivo } from './lib/smartbc-vivo-cl.mjs'
+import { clientFromEnv } from '../web/lib/smartbc/client.mjs'
+import { pollPanel } from '../web/lib/smartbc/panel.mjs'
 
 export const QUEUES = {
   DETAIL: 'detail-cl',
@@ -70,6 +73,8 @@ export const QUEUES = {
   DISCOVERY_HEAD_SCHEDULER: 'discovery-head-scheduler-cl',
   CORREDORA_WEB: 'corredora-web-crawl-cl',
   CORREDORA_WEB_SCHEDULER: 'corredora-web-scheduler-cl',
+  // La dirección inversa: qué ha tocado a mano el equipo comercial en su panel.
+  SMARTBC_PANEL: 'smartbc-panel-cl',
 }
 
 /**
@@ -503,7 +508,43 @@ async function main() {
   // Cada hora basta: la cadencia real la pone interval_hours de cada target (24h).
   await boss.schedule(QUEUES.CORREDORA_WEB_SCHEDULER, '7 * * * *')
 
+  // ── Sondeo del panel comercial (SmartBC → -mio) ────────────────────────────
+  // Va como cola periódica y no pegado a la propagación en vivo porque es la
+  // dirección contraria y tiene otro ritmo: aquí no hay nada que avise (no
+  // tienen webhooks), así que se pregunta cada 5 minutos. Es una petición por
+  // vuelta cuando no ha cambiado nada.
+  await boss.work(QUEUES.SMARTBC_PANEL, async () => {
+    if (!process.env.SMARTBC_API_KEY) return
+    await pollPanel({ client: dbClient, smartbc: clientFromEnv() }, {
+      log: (m) => console.log(`[smartbc-panel] ${m}`),
+    })
+  })
+  await boss.schedule(QUEUES.SMARTBC_PANEL, '*/5 * * * *')
+
   console.log(`[worker-cl] arrancado. Colas: ${Object.values(QUEUES).join(', ')}`)
+
+  // ── Propagación en vivo al CRM comercial ───────────────────────────────────
+  // No es una cola de pg-boss: el disparo viene de la base de datos (0098), no
+  // de que alguien encole. Se apunta a la bandeja y drena en cuanto se ensucia
+  // algo. Sin SMARTBC_API_KEY no arranca — no es un fallo, es que esa
+  // integración no está configurada en este entorno.
+  let smartbcVivo = null
+  if (process.env.SMARTBC_API_KEY) {
+    try {
+      smartbcVivo = startSmartbcVivo({
+        databaseUrl,
+        smartbc: clientFromEnv(),
+        baseUrl: process.env.APP_BASE_URL ?? null,
+      })
+      await smartbcVivo.start()
+    } catch (e) {
+      // Que la propagación en vivo no arranque no puede tumbar el scraping.
+      console.error('[smartbc-vivo] no arrancó:', e.message)
+      smartbcVivo = null
+    }
+  } else {
+    console.log('[smartbc-vivo] apagado: falta SMARTBC_API_KEY')
+  }
 
   // Correcciones de datos puntuales (una sola vez, marcadas en data_fixes_cl):
   // des-fusionar property_cl agrupados de más (falso positivo del dedup ya
@@ -514,6 +555,7 @@ async function main() {
 
   const shutdown = async () => {
     console.log('[worker-cl] apagando...')
+    if (smartbcVivo) await smartbcVivo.stop()
     await boss.stop()
     await dbClient.end()
     process.exit(0)

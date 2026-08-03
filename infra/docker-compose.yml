@@ -130,8 +130,10 @@ services:
   # el CX33 es compartido y cualquier proceso 24/7 nuevo necesita un techo duro.
   worker-cl:
     build:
-      context: ../scraper
-      dockerfile: Dockerfile
+      # Raíz del repo: el worker necesita también web/lib/smartbc (el contrato
+      # con el CRM comercial, compartido con la web y el CLI). Ver Dockerfile.
+      context: ..
+      dockerfile: scraper/Dockerfile
     image: casafari-worker-cl:latest
     container_name: casafari-worker-cl
     restart: unless-stopped

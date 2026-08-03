@@ -281,6 +281,46 @@ export class SmartbcClient {
   getCaptacion(externalId) {
     return this.request('GET', `/api/v1/captaciones/${encodeURIComponent(externalId)}`)
   }
+
+  /**
+   * Contactos que SmartBC tiene hoy para una captación. `data` es SIEMPRE un
+   * array directo. Cada uno trae `source`: `panel` si lo puso una persona de
+   * su equipo (suele ser mejor dato — sale de haber hablado con el
+   * propietario), `api` si lo enviamos nosotros. Lo usa la dirección
+   * inversa (panel.mjs) para traerse lo que escribió su equipo.
+   */
+  getContactos(externalId) {
+    return this.request('GET', `/api/v1/captaciones/${encodeURIComponent(externalId)}/contactos`)
+  }
+
+  /**
+   * Borra UN contacto por su id. Lo usa la propagación en vivo (realtime.mjs)
+   * para retirar los contactos nuestros que ya no van en la ficha: `contacts[]`
+   * es un upsert, no un `sync`, así que un contacto que dejamos de mandar se
+   * queda en su CRM para siempre si nadie lo borra explícitamente.
+   */
+  deleteContacto(externalId, contactId, { dryRun } = {}) {
+    return this.request(
+      'DELETE',
+      `/api/v1/captaciones/${encodeURIComponent(externalId)}/contactos/${encodeURIComponent(contactId)}`,
+      { dryRun },
+    )
+  }
+
+  /**
+   * Listado de captaciones. `data` es un array de `CaptacionGuardada`.
+   *
+   * `changedBy: 'panel'` es el parámetro que hace posible la dirección
+   * inversa: devuelve SOLO lo que ha tocado una persona del equipo, y aplica
+   * `updatedSince` y el cursor sobre `updated_by_user_at` —que no avanza con
+   * nuestros propios envíos— en vez de sobre `updated_at`, que sí. Sin él,
+   * cada push nuestro volvería en el sondeo como "cambio en SmartBC".
+   */
+  listCaptaciones({ changedBy, updatedSince, cursor, limit = 100, stage } = {}) {
+    return this.request('GET', '/api/v1/captaciones', {
+      query: { changed_by: changedBy, updated_since: updatedSince, cursor, limit, stage },
+    })
+  }
 }
 
 /** Construye el cliente desde el entorno. La clave NUNCA vive en el repo. */
