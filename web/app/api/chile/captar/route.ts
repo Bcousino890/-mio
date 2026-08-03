@@ -70,9 +70,26 @@ export async function GET(request: NextRequest) {
     const { rows } = await pool.query(
       `SELECT cap.*,
               pc.ref_code     AS property_ref_code,
-              pc.smart_crm_at AS property_smart_crm_at
+              pc.smart_crm_at AS property_smart_crm_at,
+              -- Lo que el equipo comercial ha hecho con la ficha en SU panel
+              -- (0099). Va como objeto y no desplegado en columnas sueltas
+              -- para que se lea de un vistazo qué es nuestro y qué es suyo:
+              -- aquí el dueño lo dice un certificado, allí lo dice una
+              -- llamada. Es lectura pura — nada de esto pisa cap.*.
+              CASE WHEN sp.captacion_id IS NOT NULL THEN jsonb_build_object(
+                'stage_key', sp.stage_key,
+                'stage_label', sp.stage_label,
+                'stage_type', sp.stage_type,
+                'owner_confirmed', sp.owner_confirmed,
+                'owner_name', sp.owner_name,
+                'owner_phone', sp.owner_phone,
+                'address_real', sp.address_real,
+                'contactos', sp.contactos,
+                'updated_by_user_at', sp.updated_by_user_at
+              ) END AS panel
          FROM captaciones_cl cap
          LEFT JOIN property_cl pc ON pc.id = cap.property_cl_id
+         LEFT JOIN smartbc_panel_cl sp ON sp.captacion_id = cap.id
          ${where}
         ORDER BY cap.updated_at DESC
         LIMIT ${limit}`,

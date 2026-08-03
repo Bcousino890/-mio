@@ -16,6 +16,13 @@
 //   --stage KEY        etapa inicial al crear (por defecto 'assigned' = "Para
 //                      llamar"); --stage '' para no opinar y dejar su default
 //   --no-notes         no enviar la línea de procedencia en `notes`
+//   --force            revisa TAMBIÉN lo ya sincronizado que no ha cambiado.
+//                      Para cuando lo que cambia es el MAPEO y no el dato (un
+//                      campo nuevo del contrato, o un fix como el de esta
+//                      misma pasada): sin esto, una ficha que ya nadie toca
+//                      no volvería a reenviarse nunca. No manda todo a
+//                      ciegas — el hash del payload sigue decidiendo, y lo
+//                      idéntico se resuelve como `unchanged`.
 //   --ping             solo comprueba credenciales y sale
 //
 // SIEMPRE se empieza en --dry-run: hasta que ninguna respuesta traiga
@@ -28,13 +35,14 @@ import { clientFromEnv } from '../web/lib/smartbc/client.mjs'
 import { syncOnce } from '../web/lib/smartbc/sync.mjs'
 
 function parseArgs(argv) {
-  const args = { dryRun: false, limit: 100, stage: 'assigned', includeNotes: true, ping: false }
+  const args = { dryRun: false, limit: 100, stage: 'assigned', includeNotes: true, force: false, ping: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--dry-run') args.dryRun = true
     else if (a === '--limit') args.limit = Number(argv[++i])
     else if (a === '--stage') args.stage = argv[++i] || null
     else if (a === '--no-notes') args.includeNotes = false
+    else if (a === '--force') args.force = true
     else if (a === '--ping') args.ping = true
     else if (a === '--help' || a === '-h') args.help = true
   }
@@ -44,7 +52,7 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
-    console.error('Uso: node scraper/sync-smartbc-cl.mjs [--dry-run] [--limit N] [--stage KEY] [--no-notes] [--ping]')
+    console.error('Uso: node scraper/sync-smartbc-cl.mjs [--dry-run] [--limit N] [--stage KEY] [--no-notes] [--force] [--ping]')
     process.exit(0)
   }
   if (!process.env.SMARTBC_API_KEY) {
@@ -84,6 +92,7 @@ async function main() {
       dryRun: args.dryRun,
       stage: args.stage,
       includeNotes: args.includeNotes,
+      force: args.force,
       log: (msg) => console.error(`  ${msg}`),
       // Dominio público propio, para las fotos de contacto (contacts[].photo_url).
       baseUrl: process.env.APP_BASE_URL ?? null,

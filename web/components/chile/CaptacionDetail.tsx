@@ -92,6 +92,23 @@ export interface Captacion {
     phone: string; name?: string | null; rut?: string | null; relationship?: string | null
   }> | null
   smartbc_contactos_at?: string | null
+  /**
+   * Espejo de lo que el equipo comercial ha hecho con la ficha en SU panel
+   * (migración 0099). Es lectura: nada de esto pisa nuestros datos. Aquí el
+   * dueño lo dice un certificado de la Tesorería; ahí lo dice una llamada.
+   * Los dos son ciertos y son cosas distintas.
+   */
+  panel?: {
+    stage_key?: string | null
+    stage_label?: string | null
+    stage_type?: string | null
+    owner_confirmed?: boolean | null
+    owner_name?: string | null
+    owner_phone?: string | null
+    address_real?: string | null
+    contactos?: Array<{ contact_name?: string | null; phone?: string | null; relationship?: string | null }> | null
+    updated_by_user_at?: string | null
+  } | null
   dealernet_error: string | null
   stage: string
   needs_review: boolean
@@ -681,6 +698,82 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
             <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
               <RefreshCw size={11} className="animate-spin" /> Consultando…
             </span>
+          )}
+        </div>
+      )}
+
+      {/* ── Qué ha hecho el equipo comercial con esta ficha ──
+          Antes esto no se sabía: mandábamos la captación y lo que pasaba
+          después —que la rechazaran, que el dueño confirmara que quiere
+          vender, que corrigieran un teléfono tras hablar con él— se quedaba en
+          su panel. Se seguía trabajando lo que ellos ya habían descartado.
+          Es LECTURA: nada de aquí pisa los datos de arriba. Nuestro dueño lo
+          dice un certificado; el suyo, una llamada. */}
+      {captacion.panel && (
+        <div className={`rounded-2xl border p-4 ${
+          captacion.panel.stage_type === 'lost'
+            ? 'border-rose-900/50 bg-rose-950/10'
+            : captacion.panel.owner_confirmed
+              ? 'border-emerald-800/60 bg-emerald-950/20'
+              : 'border-[var(--c-border-strong)] bg-[var(--c-hover)]'
+        }`}>
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <p className="text-[11px] uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+              <Store size={13} /> En el CRM comercial
+            </p>
+            {captacion.panel.updated_by_user_at && (
+              <span className="text-[10px] text-slate-500">
+                lo tocaron el {new Date(captacion.panel.updated_by_user_at).toLocaleDateString('es-CL')}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            {captacion.panel.stage_label && (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                captacion.panel.stage_type === 'lost'
+                  ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                  : captacion.panel.stage_type === 'won'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    : 'bg-slate-600/30 text-slate-300 border-slate-600/40'
+              }`}>
+                {captacion.panel.stage_label}
+              </span>
+            )}
+            {/* La decisión que solo puede tomar quien habló con el propietario,
+                y que por eso nunca enviamos nosotros (ver CONFIRMED_NOTE). */}
+            {captacion.panel.owner_confirmed === true && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                ✓ el dueño quiere vender
+              </span>
+            )}
+          </div>
+
+          {(captacion.panel.owner_name || captacion.panel.owner_phone) && (
+            <p className="text-xs text-slate-300">
+              Según su equipo: <span className="text-slate-100">{captacion.panel.owner_name ?? '—'}</span>
+              {captacion.panel.owner_phone && <span className="text-slate-400"> · {captacion.panel.owner_phone}</span>}
+            </p>
+          )}
+
+          {/* Contactos que escribió una PERSONA de su equipo. Suelen ser mejor
+              dato que los nuestros: salen de haber hablado con el propietario,
+              no de un registro. */}
+          {(captacion.panel.contactos?.length ?? 0) > 0 && (
+            <div className="mt-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                Contactos que añadió su equipo ({captacion.panel.contactos!.length})
+              </p>
+              <div className="space-y-0.5">
+                {captacion.panel.contactos!.map((c, i) => (
+                  <p key={i} className="text-xs text-slate-300">
+                    <span className="text-slate-100">{c.contact_name ?? '—'}</span>
+                    {c.phone && <span className="font-mono text-slate-400"> · {c.phone}</span>}
+                    {c.relationship && <span className="text-amber-400/90"> · {c.relationship}</span>}
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}

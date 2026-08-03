@@ -27,11 +27,25 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+# El contexto de build es la RAÍZ del repo, no scraper/, y la imagen reproduce
+# el árbol del repositorio (/app/scraper + /app/web/lib). No es un capricho de
+# estructura: worker-cl.mjs importa el contrato con SmartBC desde
+# ../../web/lib/smartbc/ —una sola definición en todo el repo, la misma que usan
+# la web y el CLI (sync-smartbc-cl.mjs)— y con el contexto en scraper/ esos
+# ficheros quedaban fuera del build. El worker arrancaba y moría con
+# MODULE_NOT_FOUND, llevándose por delante todo el scraping, que no tiene nada
+# que ver con el CRM.
+WORKDIR /app/scraper
+COPY scraper/package*.json ./
 RUN npm ci --omit=dev
 
-COPY lib ./lib
-COPY worker-cl.mjs ./
-COPY backfill-anuncios-cl.mjs ./
+COPY scraper/lib ./lib
+COPY scraper/worker-cl.mjs ./
+COPY scraper/backfill-anuncios-cl.mjs ./
+
+# Solo los .mjs que el worker necesita — `web/lib` entero arrastraría el
+# TypeScript del CRM y sus imports con alias (@/lib/db), que aquí no resuelven.
+COPY web/lib/smartbc/*.mjs /app/web/lib/smartbc/
+COPY web/lib/rol-format.mjs /app/web/lib/
 
 CMD ["node", "worker-cl.mjs"]

@@ -726,9 +726,17 @@ export function buildCaptacionPayload(bundle, {
   const principal = listings.find((l) => l.id === cap.listing_cl_id) ?? listings[0] ?? {}
   const storedPhotos = asArray(principal.stored_photos)
 
+  // `cap.price_raw` es el número TAL CUAL SE EXTRAJO, en la moneda que dice
+  // `cap.currency` — no siempre CLP. La captura manual por URL
+  // (captar-pipeline.ts) nunca rellena `listings_cl.price_uf`, así que para un
+  // aviso en UF `principal.price_uf` queda null y ese número (p.ej. 14.000) se
+  // colaba en el slot de CLP: SmartBC mostraba "$14.000" → "$0,0M" (bug real,
+  // distinto del de precio-0 ya arreglado en pickPrice). El slot correcto lo
+  // decide `cap.currency`, no la posición del parámetro.
+  const capCurrency = cap.currency == null ? null : String(cap.currency).toLowerCase()
   const { price, currency } = pickPrice({
-    price: cap.price_raw,
-    price_uf: principal.price_uf,
+    price: capCurrency === 'uf' ? principal.price : (cap.price_raw ?? principal.price),
+    price_uf: capCurrency === 'uf' ? (cap.price_raw ?? principal.price_uf) : principal.price_uf,
     currency: cap.currency ?? principal.currency,
   })
 
@@ -848,7 +856,10 @@ export function buildCaptacionPayload(bundle, {
     })(),
 
     metadata: pruneNulls({
-      origen: 'casafari-mio',
+      // Sin nombrar el sistema de origen: nada de lo que se envía debe llevar
+      // "casafari" ni "mio" en ningún campo (reportado en producción).
+      // `captacion_id` ya es la pista de auditoría que hace falta para volver
+      // a nuestra base.
       captacion_id: cap.id,
       property_cl_id: cap.property_cl_id ?? null,
       listing_cl_id: cap.listing_cl_id ?? null,
@@ -883,10 +894,12 @@ export function buildCaptacionPayload(bundle, {
  * en `metadata`, que es la pista de auditoría, no la ficha visible.
  */
 export function buildProvenanceNote(cap) {
+  // El rol y el score de match SE QUITARON de aquí (reportado en producción,
+  // captación de Lo Barnechea): el rol ya viaja en `rol_propiedad` y se ve en
+  // la ubicación de la ficha, y "match 1.00" es un número interno sin
+  // significado para quien va a llamar — sonaba a log de depuración pegado en
+  // el campo de notas del equipo. Lo que queda es una afirmación legible.
   const partes = []
-  if (cap.sii_rol) partes.push(`Rol SII ${cap.sii_rol}`)
-  const score = numOrNull(cap.match_score)
-  if (score != null) partes.push(`match ${score.toFixed(2)}`)
   if (cap.match_verified === true) partes.push('verificado con certificado TGR')
   if (cap.owner_name && cap.tgr_status === 'ok') partes.push('dueño según TGR')
   return partes.join(' · ')
