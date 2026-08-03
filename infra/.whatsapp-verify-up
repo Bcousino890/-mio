@@ -5,3 +5,4 @@
 # Levantarlo NO vincula ningún número: publica un QR y espera a que alguien lo
 # escanee desde Configuración → Verificador de WhatsApp.
 2026-08-03 · primer arranque
+2026-08-03 · re-lanzado tras arreglar el stdin del heredoc

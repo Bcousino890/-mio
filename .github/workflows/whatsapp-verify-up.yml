@@ -34,6 +34,11 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
+      # OJO con el stdin: el script viaja POR stdin (`bash -s << EOF`), así que
+      # cualquier comando que también lea stdin se come el resto del script y
+      # el job termina "con éxito" a medias. Ya pasó: un `docker exec -i` cortó
+      # la ejecución justo después de las migraciones. De ahí el `</dev/null`
+      # en todo lo que toca docker.
       - name: Construir y levantar whatsapp-verify
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
@@ -54,25 +59,25 @@ jobs:
 
             echo "── Migraciones de la verificación (0095/0096) ────────"
             for m in 0095_whatsapp_verificacion_cl 0096_whatsapp_historial_cl; do
-              docker exec -i casafari-pg psql -U casafari -d casafari -q \
-                -f "/migrations/$m.sql" >/dev/null 2>&1 \
+              docker exec casafari-pg psql -U casafari -d casafari -q \
+                -f "/migrations/$m.sql" >/dev/null 2>&1 </dev/null \
                 && echo "  ✅ $m" || echo "  ⚠ $m (ya aplicada o error — ver panel)"
             done
 
             echo ""
             echo "── Construyendo imagen ───────────────────────────────"
-            $COMPOSE build whatsapp-verify
+            $COMPOSE build whatsapp-verify </dev/null
 
             echo ""
             echo "── Levantando ───────────────────────────────────────"
-            $COMPOSE up -d --no-deps whatsapp-verify
+            $COMPOSE up -d --no-deps whatsapp-verify </dev/null
 
             echo ""
             echo "── Esperando a que publique el QR ───────────────────"
             for i in $(seq 1 12); do
               sleep 5
-              estado=$(docker exec -i casafari-pg psql -U casafari -d casafari -tAc \
-                "SELECT estado || '|' || (qr IS NOT NULL) FROM whatsapp_verificador_cl WHERE id = true" 2>/dev/null || echo "?")
+              estado=$(docker exec casafari-pg psql -U casafari -d casafari -tAc \
+                "SELECT estado || '|' || (qr IS NOT NULL) FROM whatsapp_verificador_cl WHERE id = true" 2>/dev/null </dev/null || echo "?")
               echo "  [$i] $estado"
               case "$estado" in *"|t") echo "  ✅ QR publicado"; break;; esac
               case "$estado" in conectado*) echo "  ✅ Ya vinculado"; break;; esac
@@ -80,7 +85,7 @@ jobs:
 
             echo ""
             echo "── Últimos logs del worker ──────────────────────────"
-            docker logs --tail 25 casafari-whatsapp-verify 2>&1 || true
+            docker logs --tail 25 casafari-whatsapp-verify 2>&1 </dev/null || true
 
             echo ""
             echo "👉 Ahora: Configuración → Verificador de WhatsApp → \"Ver QR\" y escanear"
