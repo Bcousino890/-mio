@@ -58,7 +58,7 @@ jobs:
             COMPOSE="docker compose -p casafari --env-file /opt/casafari/.env -f /opt/casafari/infra/docker-compose.yml --profile whatsapp"
 
             echo "── Migraciones de la verificación (0095/0096) ────────"
-            for m in 0095_whatsapp_verificacion_cl 0096_whatsapp_historial_cl; do
+            for m in 0095_whatsapp_verificacion_cl 0096_whatsapp_historial_cl 0097_whatsapp_modo_cl; do
               docker exec casafari-pg psql -U casafari -d casafari -q \
                 -f "/migrations/$m.sql" >/dev/null 2>&1 </dev/null \
                 && echo "  ✅ $m" || echo "  ⚠ $m (ya aplicada o error — ver panel)"
