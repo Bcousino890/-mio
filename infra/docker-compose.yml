@@ -155,7 +155,49 @@ services:
         condition: service_healthy
     # Sin `ports:` — es un worker de fondo, no expone HTTP.
 
+  # ── Verificador de WhatsApp (migración 0095) ─────────────────────────────────
+  # Confirma contra WhatsApp EN VIVO si los teléfonos de DealerNet siguen
+  # activos y cuál es su foto de perfil actual (DealerNet entrega ambos datos
+  # de su propia base, sin fecha).
+  #
+  # ⚠️ Arranca DESVINCULADO: sin escanear el QR no verifica nada (publica el QR
+  # en whatsapp_verificador_cl.qr y espera). Leer docs/WHATSAPP-VERIFICACION.md
+  # antes de vincular un número — esto viola los ToS de WhatsApp y el número
+  # puede ser baneado, así que va SIEMPRE un número sacrificable.
+  #
+  # `profiles: [whatsapp]`: NO arranca con un `up -d` normal. Hay que pedirlo
+  # explícitamente (`docker compose --profile whatsapp up -d whatsapp-verify`),
+  # para que nadie encienda por accidente un proceso que arriesga un número.
+  whatsapp-verify:
+    profiles: ["whatsapp"]
+    build:
+      context: ../scraper
+      dockerfile: Dockerfile.whatsapp
+    image: casafari-whatsapp-verify:latest
+    container_name: casafari-whatsapp-verify
+    restart: unless-stopped
+    mem_limit: 384m
+    env_file:
+      - ../.env
+    volumes:
+      # La sesión vinculada. Si este volumen se pierde hay que re-escanear el
+      # QR, y cada re-vinculación es un evento más en el historial del número.
+      - wa-auth:/app/wa-auth
+    environment:
+      DATABASE_URL: postgres://casafari:${POSTGRES_PASSWORD}@casafari-pg:5432/casafari
+      # Ritmo conservador por defecto (ver RITMO_POR_DEFECTO en
+      # lib/whatsapp-verify-cl.mjs). Subir solo si el número aguanta semanas
+      # limpio, y de a poco.
+      WA_VERIFY_POR_MINUTO: ${WA_VERIFY_POR_MINUTO:-15}
+      WA_VERIFY_TOPE_DIARIO: ${WA_VERIFY_TOPE_DIARIO:-800}
+      WA_VERIFY_TTL_DIAS: ${WA_VERIFY_TTL_DIAS:-30}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Sin `ports:` — worker de fondo.
+
 volumes:
   pgdata:
   redisdata:
   nominatimdata:
+  wa-auth:

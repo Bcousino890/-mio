@@ -10,6 +10,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1092.0",
     "axios": "^1.18.1",
+    "baileys": "^6.7.24",
     "cheerio": "^1.2.0",
     "graphology": "^0.25.4",
     "graphology-components": "^1.0.0",
