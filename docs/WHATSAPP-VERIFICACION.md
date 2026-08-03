@@ -197,6 +197,26 @@ copia de DealerNet. La URL lleva la fecha del último check (`&v=`) porque
 SmartBC re-aloja las fotos al recibirlas: con una URL fija se quedaría con la
 primera para siempre aunque el contacto cambie la suya.
 
+## Qué verifica: solo lo que pidas (por defecto)
+
+El worker **no barre la base por su cuenta**. El modo se elige en Configuración
+→ Verificador de WhatsApp y vive en `whatsapp_verificador_cl.modo`
+(migración 0097); el worker lo relee en cada pasada, así que el cambio surte
+efecto en segundos sin reiniciar nada.
+
+| Modo | Qué hace |
+|---|---|
+| **`solicitados`** (por defecto) | Solo los teléfonos que se piden desde las fichas: el botón “Verificar WhatsApp (N)” y el ↻ de cada número. El resto de la base queda quieta. |
+| `barrido` | Además, va completando los números sin verificar por antigüedad, y re-verifica los que superan el TTL. |
+
+El defecto es `solicitados` porque el presupuesto del verificador es real y
+limitado: 800 checks al día y, sobre todo, el riesgo de que Meta banee el
+número. Gastarlo barriendo teléfonos que a nadie le interesan hoy es el peor
+uso posible de ese presupuesto.
+
+En modo `solicitados` el worker sondea cada 3 s (en vez de cada 5 min), para
+que pulsar “Verificar WhatsApp” en una ficha arranque casi al instante.
+
 ## El historial: quién tenía WhatsApp y foto, y desde cuándo no
 
 `whatsapp_verificaciones_cl` guarda el estado ACTUAL — cada pasada del worker
@@ -255,6 +275,7 @@ SELECT DISTINCT phone_e164 FROM whatsapp_verificaciones_hist_cl
 |---|---|
 | `db/migrations/0095_whatsapp_verificacion_cl.sql` | Tablas `whatsapp_verificaciones_cl` y `whatsapp_verificador_cl` |
 | `db/migrations/0096_whatsapp_historial_cl.sql` | `whatsapp_verificaciones_hist_cl` — el historial de cambios |
+| `db/migrations/0097_whatsapp_modo_cl.sql` | `modo`: solo lo pedido vs. barrido |
 | `scraper/lib/whatsapp-verify-cl.mjs` | Lógica: cola, ritmo, persistencia, lectura de la foto |
 | `scraper/lib/whatsapp-verify-cl.test.mjs` | Tests (incluido el ritmo) |
 | `scraper/whatsapp-verify-worker.mjs` | Cableado con Baileys y bucle |

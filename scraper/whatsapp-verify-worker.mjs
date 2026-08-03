@@ -49,6 +49,7 @@ import {
   setVerificadorEstadoCl,
   contarCheckDiaCl,
   checksDeHoyCl,
+  leerModoCl,
 } from './lib/whatsapp-verify-cl.mjs'
 
 const AUTH_DIR = process.env.WA_VERIFY_AUTH_DIR ?? './wa-auth'
@@ -61,6 +62,9 @@ const RITMO = {
 }
 // Cuando no queda nada por verificar, dormir en vez de martillar la base.
 const ESPERA_SIN_TRABAJO_MS = 5 * 60_000
+// En modo 'solicitados' el worker está casi siempre esperando: sondea rápido
+// para que pulsar "Verificar WhatsApp" en una ficha no tarde en arrancar.
+const ESPERA_SIN_PEDIDOS_MS = 3_000
 
 const log = (...args) => console.log(new Date().toISOString(), '[wa-verify]', ...args)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -177,11 +181,22 @@ async function barrer() {
       continue
     }
 
+    // El modo se relee en cada pasada: cambiarlo desde Configuración tiene
+    // que surtir efecto en segundos, sin reiniciar nada. Por defecto
+    // 'solicitados' — el worker NO barre la base por su cuenta; verifica lo
+    // que se le pide desde las fichas.
+    const modo = await leerModoCl(pool)
     const pendientes = await selectPendingPhonesCl(pool, {
-      limit: 25, ttlDias: TTL_DIAS, incluirFijos: INCLUIR_FIJOS,
+      limit: 25,
+      ttlDias: TTL_DIAS,
+      incluirFijos: INCLUIR_FIJOS,
+      soloSolicitados: modo === 'solicitados',
     })
     if (pendientes.length === 0) {
-      await sleep(ESPERA_SIN_TRABAJO_MS)
+      // En 'solicitados' esto es lo normal: esperar. Se sondea más seguido
+      // que el barrido para que un "Verificar WhatsApp" desde la ficha no
+      // tarde minutos en arrancar.
+      await sleep(modo === 'solicitados' ? ESPERA_SIN_PEDIDOS_MS : ESPERA_SIN_TRABAJO_MS)
       continue
     }
 
@@ -217,7 +232,11 @@ async function main() {
     console.error('Falta DATABASE_URL')
     process.exit(1)
   }
-  log(`arrancando · ritmo ${RITMO.porMinuto}/min · tope ${RITMO.topeDiario}/día · TTL ${TTL_DIAS} días`)
+  const modoInicial = await leerModoCl(pool).catch(() => 'solicitados')
+  log(`arrancando · modo ${modoInicial} · ritmo ${RITMO.porMinuto}/min · tope ${RITMO.topeDiario}/día · TTL ${TTL_DIAS} días`)
+  if (modoInicial === 'solicitados') {
+    log('modo solicitados: NO se barre la base — solo se verifica lo que se pida desde las fichas')
+  }
 
   for (const señal of ['SIGTERM', 'SIGINT']) {
     process.on(señal, () => {

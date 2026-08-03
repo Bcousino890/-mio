@@ -65,16 +65,22 @@ export function esVerificable(phone, { incluirFijos = false } = {}) {
 /**
  * Cola de trabajo: qué números tocan ahora.
  *
+ * `soloSolicitados` (por defecto true, modo 'solicitados' de la 0097) es la
+ * diferencia entre "verifica lo que te pido" y "barre la base entera": con él
+ * puesto, la cola SOLO trae lo pedido a mano desde las fichas.
+ *
  * Orden (el índice idx_wa_verif_cl_pendientes lo cubre):
  *   1. lo pedido a mano desde la ficha (`revalidar_pedido_at`),
- *   2. lo nunca verificado,
- *   3. lo más viejo que el TTL.
+ *   2. lo nunca verificado,           ← solo en modo 'barrido'
+ *   3. lo más viejo que el TTL.       ← solo en modo 'barrido'
  *
  * Se leen los teléfonos de DealerNet (fuente de verdad de qué existe) y se
  * hace LEFT JOIN con las verificaciones: así un número nuevo entra a la cola
  * sin que nadie tenga que darlo de alta en la tabla de verificaciones.
  */
-export async function selectPendingPhonesCl(client, { limit = 25, ttlDias = 30, incluirFijos = false } = {}) {
+export async function selectPendingPhonesCl(client, {
+  limit = 25, ttlDias = 30, incluirFijos = false, soloSolicitados = true,
+} = {}) {
   const { rows } = await client.query(
     `SELECT DISTINCT ON (p.phone_e164)
             p.phone_e164,
@@ -86,18 +92,35 @@ export async function selectPendingPhonesCl(client, { limit = 25, ttlDias = 30, 
        LEFT JOIN whatsapp_verificaciones_cl v ON v.phone_e164 = p.phone_e164
       WHERE ($3 OR p.clasificacion IS DISTINCT FROM 'F')
         AND (
-          v.phone_e164 IS NULL
-          OR v.verificado_at IS NULL
-          OR v.revalidar_pedido_at IS NOT NULL
-          OR v.verificado_at < now() - ($2 || ' days')::interval
+          v.revalidar_pedido_at IS NOT NULL
+          -- En modo 'solicitados' la cola termina acá: nada entra solo. El
+          -- presupuesto del verificador (800/día, y el riesgo de que Meta
+          -- banee el número) se gasta en lo que alguien pidió, no en barrer.
+          OR (NOT $4 AND (
+                v.phone_e164 IS NULL
+                OR v.verificado_at IS NULL
+                OR v.verificado_at < now() - ($2 || ' days')::interval
+              ))
         )
       ORDER BY p.phone_e164,
                v.revalidar_pedido_at DESC NULLS LAST,
                v.verificado_at ASC NULLS FIRST
       LIMIT $1`,
-    [limit, String(ttlDias), incluirFijos]
+    [limit, String(ttlDias), incluirFijos, soloSolicitados]
   )
   return rows
+}
+
+/**
+ * Modo de trabajo actual (migración 0097). Se relee en CADA pasada del worker
+ * a propósito: cambiarlo desde Configuración tiene que surtir efecto en
+ * segundos, sin reiniciar el contenedor ni redesplegar.
+ */
+export async function leerModoCl(client) {
+  const { rows } = await client.query(
+    `SELECT modo FROM whatsapp_verificador_cl WHERE id = true`
+  )
+  return rows[0]?.modo === 'barrido' ? 'barrido' : 'solicitados'
 }
 
 /**

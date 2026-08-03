@@ -24,6 +24,10 @@ interface EstadoVerificador {
   ultimo_error?: string | null
   conectado_at?: string | null
   checks_hoy?: number
+  /** 'solicitados' = solo verifica lo que se pide desde las fichas. */
+  modo?: 'solicitados' | 'barrido'
+  /** Números pedidos a mano y todavía sin atender. */
+  pedidos?: number
   /** El worker dio señales de vida hace menos de 3 min. */
   latido?: boolean
   qr_data_url?: string | null
@@ -47,6 +51,7 @@ export default function WhatsappVerificadorPanel() {
   // El QR se pide, no se muestra de entrada: vincula un número real y no tiene
   // por qué estar a la vista de cualquiera que abra Configuración.
   const [mostrarQr, setMostrarQr] = useState(false)
+  const [guardandoModo, setGuardandoModo] = useState(false)
 
   const refrescar = useCallback(async () => {
     try {
@@ -60,6 +65,22 @@ export default function WhatsappVerificadorPanel() {
   }, [])
 
   useEffect(() => { void refrescar() }, [refrescar])
+
+  // El worker relee el modo en cada pasada, así que el cambio se nota en
+  // segundos sin reiniciar nada.
+  const cambiarModo = useCallback(async (modo: 'solicitados' | 'barrido') => {
+    setGuardandoModo(true)
+    try {
+      await fetch('/api/admin/whatsapp-verificador', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modo }),
+      })
+      await refrescar()
+    } finally {
+      setGuardandoModo(false)
+    }
+  }, [refrescar])
 
   const conectado = data?.estado === 'conectado'
 
@@ -194,10 +215,44 @@ export default function WhatsappVerificadorPanel() {
         </div>
       )}
 
+      {/* ── Qué verifica: lo que se le pide, o toda la base ── */}
+      {data?.success && (
+        <div className="mb-3 rounded-lg border border-[var(--c-border-strong)] bg-[var(--c-hover)] p-2.5">
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+            Qué verifica
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {([
+              ['solicitados', 'Solo lo que yo pida', 'Nada se verifica solo: el worker atiende únicamente los teléfonos que marques y verifiques desde las fichas.'],
+              ['barrido', 'Barrer toda la base', `Además de lo pedido, va completando los ${(data.pendientes ?? 0).toLocaleString('es-CL')} números sin verificar, por antigüedad.`],
+            ] as const).map(([valor, etiqueta, ayuda]) => (
+              <button
+                key={valor}
+                onClick={() => cambiarModo(valor)}
+                disabled={guardandoModo}
+                title={ayuda}
+                className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-50 ${
+                  (data.modo ?? 'solicitados') === valor
+                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                    : 'border-slate-600 text-slate-300 hover:border-emerald-500'
+                }`}
+              >
+                {etiqueta}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[10px] text-slate-500">
+            {(data.modo ?? 'solicitados') === 'solicitados'
+              ? `El worker está en espera. ${(data.pedidos ?? 0) > 0 ? `${data.pedidos} teléfono(s) pedidos en cola.` : 'Sin nada pedido ahora mismo.'}`
+              : 'El worker completa la base por su cuenta, priorizando siempre lo que pidas desde las fichas.'}
+          </p>
+        </div>
+      )}
+
       {data?.success && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
           {[
-            ['Por verificar', data.pendientes ?? 0, 'text-slate-300'],
+            ['Sin verificar', data.pendientes ?? 0, 'text-slate-300'],
             ['Con WhatsApp', data.verificados?.con_whatsapp ?? 0, 'text-emerald-400'],
             ['Sin WhatsApp', data.verificados?.sin_whatsapp ?? 0, 'text-slate-500'],
             ['Con foto', data.verificados?.con_foto ?? 0, 'text-blue-400'],
