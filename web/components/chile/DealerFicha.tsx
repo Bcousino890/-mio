@@ -11,10 +11,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Phone, Mail, MapPin, CheckCircle2, MessageCircle,
-  Copy, Check, Users, UserRound, ChevronDown,
+  Copy, Check, Users, UserRound, ChevronDown, RefreshCw, Loader2,
 } from 'lucide-react'
 // Misma definición de parentescos que usa el envío al CRM.
 import { candidatosDeNombre, foldRelacion, splitRelaciones, edadAproximada } from '@/lib/smartbc/relaciones.mjs'
+// Verificación en vivo de WhatsApp (migración 0095): confirma contra WhatsApp
+// si el número sigue activo y trae su foto ACTUAL. El dato de DealerNet
+// (`ind_whatsapp`, `idimagen`) es de su base y no tiene fecha.
+import { useVerificacionWhatsapp, verificarLote } from '@/lib/whatsapp-verificacion-client'
 
 /**
  * Tooltip común de la edad estimada — misma frase donde sea que se muestre.
@@ -107,32 +111,59 @@ export function CopyButton({ copied, onClick, title }: { copied: boolean; onClic
   )
 }
 
-// Foto de perfil (WhatsApp) asociada al número. La sirve el proxy
-// /api/chile/dealernet-imagen — si no hay imagen o falla, queda el ícono
-// genérico. Clic en el avatar → lightbox con la foto en grande.
-export function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
-  const [failed, setFailed] = useState(false)
+// Foto de perfil del número. Hay DOS fuentes posibles y no valen lo mismo:
+//
+//   · la verificada en vivo (/api/chile/whatsapp-foto) — la foto que el número
+//     tiene HOY en WhatsApp, con fecha, la trae el worker de verificación;
+//   · la de DealerNet (/api/chile/dealernet-imagen) — la copia que DealerNet
+//     capturó en su día, sin fecha, que es lo único que había hasta ahora.
+//
+// Se prefiere siempre la verificada y se cae a la de DealerNet si no hay (o si
+// falla la descarga). Si no hay ninguna, queda el ícono genérico. Clic en el
+// avatar → lightbox con la foto en grande.
+export function PhoneAvatar({ idimagen, phone }: { idimagen: string | null; phone?: string }) {
+  const { verificacion } = useVerificacionWhatsapp(phone)
+  const [waFallo, setWaFallo] = useState(false)
+  const [dealerFallo, setDealerFallo] = useState(false)
   const [open, setOpen] = useState(false)
-  if (!idimagen || failed) {
+
+  const hayVerificada = Boolean(phone && verificacion?.tiene_foto && !waFallo)
+  const hayDealer = Boolean(idimagen && !dealerFallo)
+
+  if (!hayVerificada && !hayDealer) {
     return (
       <span className="w-8 h-8 rounded-full bg-[var(--c-card)] border border-[var(--c-border-strong)] flex items-center justify-center flex-shrink-0">
         <UserRound size={14} className="text-slate-600" />
       </span>
     )
   }
+
+  // `v=` invalida el cache del navegador cuando el worker vuelve a verificar:
+  // la URL es la misma pero la foto pudo cambiar, que es justo lo que interesa.
+  const src = (size: number) =>
+    hayVerificada
+      ? `/api/chile/whatsapp-foto?phone=${encodeURIComponent(phone!)}&v=${encodeURIComponent(verificacion?.verificado_at ?? '')}`
+      : `/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen!)}&size=${size}`
+  const onError = () => (hayVerificada ? setWaFallo(true) : setDealerFallo(true))
+
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        title="Ver foto en grande"
+        title={hayVerificada
+          ? `Foto verificada en WhatsApp${verificacion?.verificado_at ? ` el ${new Date(verificacion.verificado_at).toLocaleDateString('es-CL')}` : ''}`
+          : 'Foto de la base de DealerNet (sin fecha) — ver en grande'}
         className="flex-shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/60"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}`}
+          src={src(120)}
           alt="Foto de perfil"
-          onError={() => setFailed(true)}
-          className="w-8 h-8 rounded-full object-cover border border-[var(--c-border-strong)] cursor-zoom-in hover:ring-2 hover:ring-blue-500/60 transition-shadow"
+          onError={onError}
+          className={`w-8 h-8 rounded-full object-cover border cursor-zoom-in hover:ring-2 hover:ring-blue-500/60 transition-shadow ${
+            // Anillo verde = la foto es la de WhatsApp de hoy, no la de la base.
+            hayVerificada ? 'border-green-600/70 ring-1 ring-green-700/40' : 'border-[var(--c-border-strong)]'
+          }`}
         />
       </button>
       {open && (
@@ -142,13 +173,81 @@ export function PhoneAvatar({ idimagen }: { idimagen: string | null }) {
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={`/api/chile/dealernet-imagen?id=${encodeURIComponent(idimagen)}&size=480`}
+            src={src(480)}
             alt="Foto de perfil"
             className="max-w-[85vw] max-h-[85vh] w-72 sm:w-96 rounded-2xl border border-slate-600 shadow-2xl object-contain"
           />
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * Badge de WhatsApp de la fila. Muestra lo VERIFICADO cuando existe y cae al
+ * `ind_whatsapp` de DealerNet cuando no, siempre diciendo cuál de los dos es:
+ * "tiene WhatsApp según la base de DealerNet, quizá de hace años" y "estaba en
+ * WhatsApp el martes" son cosas distintas para quien va a llamar.
+ */
+export function WhatsappBadge({ phone, indWhatsapp }: { phone: string; indWhatsapp: boolean | null }) {
+  const { verificacion, verificador, disponible } = useVerificacionWhatsapp(phone)
+  const waLink = `https://wa.me/${phone.replace(/\D/g, '')}`
+  const verificado = verificacion?.estado === 'ok' && verificacion.tiene_whatsapp != null
+  const fecha = verificacion?.verificado_at
+    ? new Date(verificacion.verificado_at).toLocaleDateString('es-CL')
+    : null
+
+  if (verificado && verificacion!.tiene_whatsapp) {
+    return (
+      <a
+        href={waLink}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`Verificado en WhatsApp el ${fecha}${verificacion!.foto_cambiada_at ? ` · foto actualizada el ${new Date(verificacion!.foto_cambiada_at).toLocaleDateString('es-CL')}` : ''}`}
+        className="inline-flex items-center gap-0.5 text-green-500 hover:text-green-400"
+      >
+        <MessageCircle size={11} />
+        <CheckCircle2 size={9} />
+      </a>
+    )
+  }
+
+  if (verificado && !verificacion!.tiene_whatsapp) {
+    // Si alguna vez SÍ lo tuvo, se dice desde cuándo no: para una captación de
+    // hace meses, "el número murió en octubre" y "nunca estuvo en WhatsApp"
+    // llevan a decisiones distintas.
+    const baja = verificacion!.historial?.find((h) => h.cambios?.includes('whatsapp') && h.tiene_whatsapp === false)
+    const tuvo = baja ? ` · lo tuvo hasta el ${new Date(baja.verificado_at).toLocaleDateString('es-CL')}` : ''
+    // Dato caro de conseguir y fácil de perder de vista: DealerNet puede
+    // seguir marcando este número como WhatsApp años después de la baja.
+    return (
+      <span
+        title={`Verificado el ${fecha}: este número NO está en WhatsApp${tuvo}${indWhatsapp ? ' (DealerNet lo marca como que sí — su dato está desactualizado)' : ''}`}
+        className="text-[9px] px-1 py-0.5 rounded bg-slate-900/60 text-slate-500 border border-slate-800"
+      >
+        sin WhatsApp
+      </span>
+    )
+  }
+
+  // Sin verificación todavía: se muestra el dato de DealerNet tal cual estaba
+  // antes, pero rotulado como suyo (y sin fecha, porque no la tiene).
+  if (!indWhatsapp) return null
+  const motivo = !disponible
+    ? 'Verificación no disponible en este entorno'
+    : verificador && verificador.estado !== 'conectado'
+      ? `Verificador ${verificador.estado} — dato sin confirmar`
+      : 'Según DealerNet (sin fecha) — pendiente de verificar'
+  return (
+    <a
+      href={waLink}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Abrir WhatsApp · ${motivo}`}
+      className="text-green-500/60 hover:text-green-400"
+    >
+      <MessageCircle size={11} />
+    </a>
   )
 }
 
@@ -392,6 +491,12 @@ export function PhoneRow({
   nameOptions?: PersonaOpcion[]
 }) {
   const seleccionable = typeof onToggleSelect === 'function'
+  // Un número verificado SIN WhatsApp no se puede mandar al CRM: el equipo
+  // contacta por ahí. El filtro definitivo está en el mapper de SmartBC
+  // (filtrarPhonesConWhatsapp) — acá se bloquea antes, para que nadie lo
+  // elija creyendo que va a viajar.
+  const { verificacion } = useVerificacionWhatsapp(p.phone_e164)
+  const sinWhatsapp = verificacion?.estado === 'ok' && verificacion.tiene_whatsapp === false
   // La lista de nombres se despliega SOBRE las filas de abajo: mientras está
   // abierta, esta fila tiene que pintarse por encima de las siguientes.
   const [listaAbierta, setListaAbierta] = useState(false)
@@ -406,32 +511,27 @@ export function PhoneRow({
       {seleccionable && (
         <button
           onClick={onToggleSelect}
-          title={selected ? 'Quitar del envío al CRM' : 'Incluir en el envío al CRM'}
+          disabled={sinWhatsapp}
+          title={sinWhatsapp
+            ? 'Verificado sin WhatsApp: no se envía al CRM'
+            : selected ? 'Quitar del envío al CRM' : 'Incluir en el envío al CRM'}
           aria-pressed={selected}
           className={`shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-            selected
-              ? 'bg-emerald-600 border-emerald-600 text-white'
-              : 'border-slate-600 text-transparent hover:border-emerald-500'
+            sinWhatsapp
+              ? 'border-slate-800 text-transparent cursor-not-allowed opacity-40'
+              : selected
+                ? 'bg-emerald-600 border-emerald-600 text-white'
+                : 'border-slate-600 text-transparent hover:border-emerald-500'
           }`}
         >
           <Check size={12} />
         </button>
       )}
-      <PhoneAvatar idimagen={p.idimagen} />
+      <PhoneAvatar idimagen={p.idimagen} phone={p.phone_e164} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="font-mono text-xs text-slate-100">{p.phone_e164}</span>
-          {p.ind_whatsapp && (
-            <a
-              href={`https://wa.me/${p.phone_e164.replace(/\D/g, '')}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Abrir WhatsApp"
-              className="text-green-500 hover:text-green-400"
-            >
-              <MessageCircle size={11} />
-            </a>
-          )}
+          <WhatsappBadge phone={p.phone_e164} indWhatsapp={p.ind_whatsapp} />
           <span className={`text-[9px] px-1.5 py-0.5 rounded ${CATEGORIA_BADGE[p.categoria] ?? CATEGORIA_BADGE.alternativo}`}>
             {p.categoria}
           </span>
@@ -465,8 +565,125 @@ export function PhoneRow({
           )
         )}
       </div>
+      <VerificarWhatsappButton phone={p.phone_e164} />
       <CopyButton copied={copied} onClick={onCopy} title="Copiar número" />
     </div>
+  )
+}
+
+/**
+ * "Verificar seleccionados": el paso previo a mandar contactos al CRM.
+ *
+ * Se eligen los teléfonos de la ficha, se pulsa esto, y cuando termina quedan
+ * marcados SOLO los que están en WhatsApp — los de baja se desmarcan solos
+ * (`onDescartar`). Así lo que viaja al CRM es lo que de verdad se puede
+ * contactar, y se ve antes de enviarlo, no después.
+ *
+ * La espera es real: quien consulta es el worker, a ~15 números/minuto (unos
+ * 4 s cada uno), que es el ritmo que evita que Meta banee el número
+ * verificador. Para los 3-6 números de una ficha son segundos.
+ */
+export function VerificarSeleccionButton({
+  phones, onDescartar, className = '',
+}: {
+  phones: string[]
+  /** Números verificados SIN WhatsApp — el padre los desmarca. */
+  onDescartar: (sinWhatsapp: string[]) => void
+  className?: string
+}) {
+  const [estado, setEstado] = useState<'idle' | 'verificando'>('idle')
+  const [progreso, setProgreso] = useState<{ hechos: number; total: number } | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const { verificador, disponible } = useVerificacionWhatsapp(phones[0] ?? null)
+
+  if (!disponible) return null
+
+  const sinVerificador = !verificador || verificador.estado !== 'conectado'
+
+  async function verificar() {
+    setEstado('verificando')
+    setMsg(null)
+    setProgreso({ hechos: 0, total: phones.length })
+    const res = await verificarLote(phones, {
+      onProgreso: (hechos, total) => setProgreso({ hechos, total }),
+    })
+    if (res.sinWhatsapp.length > 0) onDescartar(res.sinWhatsapp)
+    setEstado('idle')
+    setProgreso(null)
+
+    const partes = [`${res.conWhatsapp.length} con WhatsApp`]
+    if (res.sinWhatsapp.length) partes.push(`${res.sinWhatsapp.length} descartado(s)`)
+    if (res.pendientes.length) {
+      // No se miente con un "listo" cuando el worker no llegó a atenderlos:
+      // esos números siguen en cola y su badge se actualizará cuando pase.
+      partes.push(res.verificador?.estado === 'conectado'
+        ? `${res.pendientes.length} aún en cola`
+        : `${res.pendientes.length} sin verificar (verificador ${res.verificador?.estado ?? 'sin vincular'})`)
+    }
+    setMsg(`${res.pendientes.length === 0 ? '✓ ' : ''}${partes.join(' · ')}`)
+  }
+
+  return (
+    <>
+      <button
+        onClick={verificar}
+        disabled={estado === 'verificando' || phones.length === 0}
+        title={phones.length === 0
+          ? 'Marca los teléfonos que te interesan y verifícalos antes de enviarlos'
+          : sinVerificador
+            ? `Verificador ${verificador?.estado ?? 'sin vincular'}: los números quedan encolados, pero no habrá resultado hasta vincularlo (Configuración)`
+            : `Verificar en WhatsApp los ${phones.length} teléfono(s) marcados y desmarcar los que estén de baja`}
+        className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-green-800/60 text-green-300 hover:bg-green-950/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${className}`}
+      >
+        {estado === 'verificando'
+          ? <><Loader2 size={11} className="animate-spin" /> Verificando {progreso ? `${progreso.hechos}/${progreso.total}` : ''}…</>
+          : <><MessageCircle size={11} /> Verificar WhatsApp ({phones.length})</>}
+      </button>
+      {msg && (
+        <span className={`text-[10px] ${msg.startsWith('✓') ? 'text-emerald-400' : 'text-amber-400'}`}>{msg}</span>
+      )}
+    </>
+  )
+}
+
+/**
+ * "Verificar en WhatsApp". No consulta a WhatsApp desde el navegador: deja el
+ * número al principio de la cola del worker. El ritmo del verificador es lo
+ * único que evita que Meta banee el número que lo hace posible, así que no
+ * puede depender de cuántas veces alguien haga clic acá.
+ */
+export function VerificarWhatsappButton({ phone }: { phone: string }) {
+  const { verificacion, verificador, disponible, solicitar } = useVerificacionWhatsapp(phone)
+  // Sin migración/worker en este entorno, el botón simplemente no aparece.
+  if (!disponible) return null
+
+  const pedido = Boolean(verificacion?.revalidar_pedido)
+  const sinVerificador = !verificador || verificador.estado !== 'conectado'
+  const fecha = verificacion?.verificado_at
+    ? new Date(verificacion.verificado_at).toLocaleDateString('es-CL')
+    : null
+
+  const title = sinVerificador
+    ? `Verificador ${verificador?.estado ?? 'sin vincular'} — el pedido queda encolado hasta que se vincule un número`
+    : pedido
+      ? 'Re-verificación pedida — el worker la atiende en su próxima pasada'
+      : fecha
+        ? `Verificado el ${fecha} — pedir verificación de nuevo`
+        : 'Pedir verificación en WhatsApp (número y foto actual)'
+
+  return (
+    <button
+      onClick={solicitar}
+      disabled={pedido}
+      title={title}
+      className={`p-1 rounded transition-colors flex-shrink-0 ${
+        pedido
+          ? 'text-emerald-500/70 cursor-default'
+          : 'text-slate-500 hover:text-slate-200 hover:bg-[var(--c-hover)]'
+      }`}
+    >
+      <RefreshCw size={11} className={pedido ? 'animate-pulse' : ''} />
+    </button>
   )
 }
 

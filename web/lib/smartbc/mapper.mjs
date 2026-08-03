@@ -166,6 +166,29 @@ export function dealernetImageUrl(idimagen, { baseUrl = null, size = 200 } = {})
 }
 
 /**
+ * Foto del contacto que viaja al CRM. Hay dos y no valen lo mismo:
+ *
+ *   · la verificada en vivo — la que el número tiene HOY en WhatsApp, guardada
+ *     en whatsapp_verificaciones_cl con su fecha;
+ *   · la de DealerNet — la copia que capturaron en su día, sin fecha.
+ *
+ * Se prefiere siempre la verificada. `v=` lleva la fecha del último check para
+ * que SmartBC (que re-aloja las fotos al recibirlas) vuelva a descargarla
+ * cuando el contacto cambia su foto: con una URL fija se quedaría con la
+ * primera para siempre.
+ */
+export function contactPhotoUrl(numero, idimagen, { baseUrl = null, verificaciones = null, size = 200 } = {}) {
+  if (!baseUrl) return null
+  const base = String(baseUrl).replace(/\/+$/, '')
+  const v = verificaciones?.[claveTelefono(numero)]
+  if (v?.tiene_foto) {
+    const sello = v.verificado_at ? `&v=${encodeURIComponent(String(v.verificado_at))}` : ''
+    return `${base}/api/chile/whatsapp-foto?phone=${encodeURIComponent(claveTelefono(numero))}${sello}`
+  }
+  return dealernetImageUrl(idimagen, { baseUrl, size })
+}
+
+/**
  * Moneda dual UF/CLP. El origen guarda AMBOS valores (el publicado y su
  * conversión), pero SmartBC guarda un precio y una moneda: hay que elegir, y se
  * elige el precio TAL CUAL LO PUBLICÓ el aviso. Mandar el CLP convertido con
@@ -219,16 +242,91 @@ export function sortPhones(phones) {
  * así que se cuenta en metadata y no se envía. El cruce teléfono↔persona se hace
  * por el parentesco, que es lo único que comparten ambas estructuras.
  */
+/**
+ * Normaliza un teléfono a la clave con la que se guardan las verificaciones
+ * ("+56995429258"), para poder cruzar `phones[].numero` / `seleccion[].phone`
+ * con whatsapp_verificaciones_cl sin depender del formato exacto.
+ */
+function claveTelefono(numero) {
+  const digits = String(numero ?? '').replace(/\D/g, '')
+  return digits ? `+${digits}` : null
+}
+
+/**
+ * Al CRM NO viaja ningún número que sepamos que no está en WhatsApp.
+ *
+ * El equipo comercial contacta por WhatsApp: un número dado de baja hace
+ * perder el intento y ensucia la ficha. DealerNet marca `ind_whatsapp` desde
+ * su propia base y sin fecha, así que ese dato solo dice "alguna vez lo
+ * estuvo". La verificación en vivo (migración 0095) sí tiene fecha, y es la
+ * que manda acá.
+ *
+ * Regla, deliberadamente asimétrica:
+ *   · verificado SIN WhatsApp  → se descarta, siempre.
+ *   · verificado CON WhatsApp  → viaja.
+ *   · sin verificar todavía    → viaja igual.
+ *
+ * Lo último es a propósito: mientras el verificador no haya pasado por un
+ * número (o no esté vinculado), "no sabemos" no puede convertirse en "no
+ * tiene" — eso dejaría al CRM sin contactos justo mientras se pone en marcha
+ * la verificación. Se filtra con lo que sabemos, no con lo que falta por saber.
+ */
+export function filtrarPhonesConWhatsapp(phones, verificaciones) {
+  if (!verificaciones || Object.keys(verificaciones).length === 0) {
+    return { phones, descartados: [] }
+  }
+  const descartados = []
+  const quedan = phones.filter((p) => {
+    const v = verificaciones[claveTelefono(p?.numero ?? p?.phone)]
+    if (v && v.tiene_whatsapp === false) {
+      descartados.push(p?.numero ?? p?.phone)
+      return false
+    }
+    return true
+  })
+  return { phones: quedan, descartados }
+}
+
+/**
+ * `has_whatsapp` que viaja al CRM. Manda la verificación en vivo cuando existe
+ * (tiene fecha) y solo si no la hay se cae a la bandera de DealerNet (que no
+ * la tiene). Es el mismo criterio que aplica la ficha en pantalla.
+ */
+function whatsappDe(numero, verificaciones, fallback) {
+  const v = verificaciones?.[claveTelefono(numero)]
+  if (v && v.tiene_whatsapp != null) return v.tiene_whatsapp
+  return fallback ?? null
+}
+
 export function buildContacts({
   captacionId, ownerName, ownerRut, phones, emails, relacionados, seleccion, baseUrl,
+  verificacionesWhatsapp = null,
 }) {
+  // El filtro se aplica ANTES de decidir qué contacto es cuál: si el número
+  // "probable" del titular está muerto, el titular tiene que viajar con el
+  // siguiente número vivo, no con el muerto.
+  const { phones: phonesVivos } = filtrarPhonesConWhatsapp(phones, verificacionesWhatsapp)
+  phones = phonesVivos
   // Si alguien del equipo eligió a mano qué teléfonos van, manda esa decisión y
   // solo esa. Es lo contrario de "completar con lo que haya": los números que
   // DealerNet descubra después NO se cuelan solos en la ficha del CRM, esperan
   // a que alguien los apruebe. Quien mira la ficha sabe cuál de los 12 números
   // es el del dueño; el volcado automático, no.
   if (Array.isArray(seleccion) && seleccion.length) {
-    return buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion, phones, baseUrl })
+    // La selección manual también pasa por el filtro: alguien pudo elegir un
+    // número antes de que se verificara y resultara estar de baja. La curación
+    // decide QUIÉN va y con qué nombre; la verificación decide si ese número
+    // sigue siendo contactable.
+    const { phones: selVivas } = filtrarPhonesConWhatsapp(seleccion, verificacionesWhatsapp)
+    // Si TODO lo curado resultó estar de baja, no se manda una ficha sin
+    // dueño: se cae al camino automático, que sabe armar el contacto del
+    // titular (nombre, RUT, email) aunque no le quede ningún teléfono vivo.
+    if (selVivas.length > 0) {
+      return buildContactsFromSeleccion({
+        captacionId, ownerName, ownerRut, emails, seleccion: selVivas, phones, baseUrl,
+        verificacionesWhatsapp,
+      })
+    }
   }
   const sorted = sortPhones(phones.filter((p) => p?.numero))
   // Los teléfonos SIN parentesco son del titular; los que traen `relacion`
@@ -246,14 +344,14 @@ export function buildContacts({
     contact_name: trunc(ownerName, 200),
     phone: trunc(firstOwnerPhone?.numero, LIMITS.phone),
     email: emails[0]?.email ?? null,
-    has_whatsapp: firstOwnerPhone?.whatsapp ?? null,
+    has_whatsapp: whatsappDe(firstOwnerPhone?.numero, verificacionesWhatsapp, firstOwnerPhone?.whatsapp),
     relationship: null,
     rut: trunc(ownerRut, LIMITS.rut),
-    photo_url: dealernetImageUrl(firstOwnerPhone?.idimagen, { baseUrl }),
+    photo_url: contactPhotoUrl(firstOwnerPhone?.numero, firstOwnerPhone?.idimagen, { baseUrl, verificaciones: verificacionesWhatsapp }),
     extra_phones: ownerExtras.length
       ? ownerExtras.map((p) => ({
           phone: trunc(p.numero, LIMITS.phone),
-          has_whatsapp: p.whatsapp ?? null,
+          has_whatsapp: whatsappDe(p.numero, verificacionesWhatsapp, p.whatsapp),
           label: trunc(p.tipo ?? p.categoria, 80),
         }))
       : null,
@@ -289,10 +387,10 @@ export function buildContacts({
       contact_name: trunc(rel?.nombre, 200),
       phone: trunc(principal.numero, LIMITS.phone),
       email: null,
-      has_whatsapp: principal.whatsapp ?? null,
+      has_whatsapp: whatsappDe(principal.numero, verificacionesWhatsapp, principal.whatsapp),
       relationship: trunc(rel?.relacion, LIMITS.relationship),
       rut: trunc(rut, LIMITS.rut),
-      photo_url: dealernetImageUrl(principal.idimagen, { baseUrl }),
+      photo_url: contactPhotoUrl(principal.numero, principal.idimagen, { baseUrl, verificaciones: verificacionesWhatsapp }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.numero, LIMITS.phone),
@@ -318,7 +416,10 @@ export function buildContacts({
  * Se agrupan por persona: varios teléfonos de un mismo contacto van como
  * `extra_phones` suyos, no como contactos repetidos.
  */
-function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, seleccion, phones = [], baseUrl }) {
+function buildContactsFromSeleccion({
+  captacionId, ownerName, ownerRut, emails, seleccion, phones = [], baseUrl,
+  verificacionesWhatsapp = null,
+}) {
   const ownerRutNorm = ownerRut ? String(ownerRut).replace(/\./g, '').trim().toUpperCase() : null
   // La selección guardada (smartbc_contactos) no trae `idimagen` -- solo lo
   // que hace falta para armar el contacto (nombre, RUT, parentesco). La foto
@@ -365,14 +466,14 @@ function buildContactsFromSeleccion({ captacionId, ownerName, ownerRut, emails, 
       contact_name: trunc(principal.name ?? (esTitular ? ownerName : null), 200),
       phone: trunc(principal.phone, LIMITS.phone),
       email: esTitular ? (emails[0]?.email ?? null) : null,
-      has_whatsapp: principal.has_whatsapp ?? null,
+      has_whatsapp: whatsappDe(principal.phone, verificacionesWhatsapp, principal.has_whatsapp),
       relationship: esTitular ? null : trunc(principal.relationship, LIMITS.relationship),
       rut: trunc(principal.rut ?? (esTitular ? ownerRut : null), LIMITS.rut),
-      photo_url: dealernetImageUrl(idimagenPorNumero.get(principal.phone), { baseUrl }),
+      photo_url: contactPhotoUrl(principal.phone, idimagenPorNumero.get(principal.phone), { baseUrl, verificaciones: verificacionesWhatsapp }),
       extra_phones: extras.length
         ? extras.slice(0, LIMITS.extraPhones).map((p) => ({
             phone: trunc(p.phone, LIMITS.phone),
-            has_whatsapp: p.has_whatsapp ?? null,
+            has_whatsapp: whatsappDe(p.phone, verificacionesWhatsapp, p.has_whatsapp),
             label: trunc(p.label ?? p.relationship, 80),
           }))
         : null,
@@ -639,6 +740,11 @@ export function buildCaptacionPayload(bundle, {
     phones, emails, relacionados,
     seleccion: asArray(cap.smartbc_contactos),
     baseUrl,
+    // Mapa { "+56...": { tiene_whatsapp, verificado_at } } de la verificación
+    // en vivo (migración 0095). Con él, ningún número que sepamos de baja
+    // llega al CRM: el equipo contacta por WhatsApp y un número muerto le
+    // hace perder el intento.
+    verificacionesWhatsapp: asObject(cap.whatsapp_verificaciones),
   })
   const photoItems = buildPhotos({ photos, storedPhotos, selectedPhotoUrls: selected })
 

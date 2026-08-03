@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 
 import type { ParcelPick } from '@/components/map/ListingMatchMap'
-import { PhoneRow, RelacionadosTable, useCopy } from '@/components/chile/DealerFicha'
+import { PhoneRow, RelacionadosTable, useCopy, VerificarSeleccionButton } from '@/components/chile/DealerFicha'
 // Misma lógica de parentesco que usa el envío al CRM: una sola definición.
 import { duenoDeTelefono, personasDeLaFicha } from '@/lib/smartbc/relaciones.mjs'
 import { DuenosRolPicker } from '@/components/chile/DuenosRolPicker'
@@ -544,6 +544,16 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
     })
   }, [duenoDelTelefono])
 
+  // Quita de la selección los números que la verificación dejó como "sin
+  // WhatsApp". Es lo que hace que, tras verificar, queden marcados SOLO los
+  // contactables — y que eso sea justo lo que viaja al CRM.
+  const descartarSeleccionados = useCallback((numeros: string[]) => {
+    const fuera = new Set(numeros.map((n) => n.replace(/\D/g, '')))
+    setSeleccion((prev) => Object.fromEntries(
+      Object.entries(prev).filter(([numero]) => !fuera.has(numero.replace(/\D/g, '')))
+    ))
+  }, [])
+
   // Cambio de nombre desde la fila. Con `opcion` el nombre se eligió de la
   // lista y se sabe exactamente de quién es el número; escrito a mano no, así
   // que no viaja el RUT de nadie —mejor sin RUT que con el de otro.
@@ -755,7 +765,16 @@ export default function CaptacionDetail({ captacion, onChange, autoAdvance = fal
                   los teléfonos marcados. La selección se guarda con el envío,
                   así que la sincronización automática posterior no vuelve a
                   meter los que se descartaron aquí. */}
+              {/* Verificar ANTES de enviar: se marcan los teléfonos que
+                  interesan, se verifican contra WhatsApp y los que estén de
+                  baja se desmarcan solos — al CRM va solo lo contactable. */}
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--c-border-strong)] mt-2">
+                <VerificarSeleccionButton
+                  phones={Object.keys(seleccion)}
+                  onDescartar={descartarSeleccionados}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={enviarASmart}
                   disabled={enviando || nSeleccionados === 0}

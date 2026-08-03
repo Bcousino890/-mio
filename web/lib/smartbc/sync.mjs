@@ -81,6 +81,12 @@ SELECT cap.*,
        -- oficial contra el que se compara lo que declaró el anuncio (ver
        -- buildProvenanceNote, discrepancia de superficie).
        sr.superficie_terreno_m2   AS sii_superficie_terreno_m2,
+       -- Verificación en vivo de WhatsApp de los teléfonos de ESTA captación
+       -- (migración 0095), como mapa { "+56...": {tiene_whatsapp, verificado_at} }.
+       -- Con esto el mapper deja fuera los números que sabemos de baja: el
+       -- equipo contacta por WhatsApp, así que un número muerto en la ficha
+       -- del CRM es un intento perdido. Solo se miran verificaciones 'ok'.
+       wa.map AS whatsapp_verificaciones,
        s.payload_hash,
        s.last_payload,
        s.external_id AS synced_external_id,
@@ -89,6 +95,24 @@ SELECT cap.*,
   LEFT JOIN smartbc_sync_cl s ON s.captacion_id = cap.id
   LEFT JOIN property_cl p     ON p.id = cap.property_cl_id
   LEFT JOIN sii_roles_cl sr   ON sr.sii_comuna_code = cap.sii_comuna_code AND sr.rol = cap.sii_rol
+  LEFT JOIN LATERAL (
+    SELECT jsonb_object_agg(
+             v.phone_e164,
+             jsonb_build_object(
+               'tiene_whatsapp', v.tiene_whatsapp,
+               -- tiene_foto decide si al CRM va la foto verificada (la de
+               -- hoy) o la copia de DealerNet (sin fecha).
+               'tiene_foto', v.tiene_foto,
+               'verificado_at', v.verificado_at
+             )
+           ) AS map
+      FROM whatsapp_verificaciones_cl v
+     WHERE v.estado = 'ok'
+       AND v.phone_e164 IN (
+         SELECT '+' || regexp_replace(tel->>'numero', '\\D', '', 'g')
+           FROM jsonb_array_elements(COALESCE(cap.phones, '[]'::jsonb)) tel
+       )
+  ) wa ON true
   LEFT JOIN LATERAL (
     SELECT c.name, c.region
       FROM chile_comunas c

@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import {
   buildCaptacionPayload,
   buildContacts,
+  filtrarPhonesConWhatsapp,
   buildFeatures,
   buildListings,
   buildNotes,
@@ -969,4 +970,168 @@ test('el hash no depende del orden de las claves', () => {
   const a = { external_id: 'x', price: 1, currency: 'clp' }
   const b = { currency: 'clp', price: 1, external_id: 'x' }
   assert.equal(payloadHash(a), payloadHash(b))
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filtro de WhatsApp verificado (migración 0095).
+//
+// La regla del equipo: al CRM no viaja ningún número que SEPAMOS que no está
+// en WhatsApp — se contacta por ahí, y un número de baja es un intento
+// perdido. La asimetría importa tanto como el filtro: "sin verificar todavía"
+// no puede tratarse como "no tiene", o el CRM se queda sin contactos mientras
+// el verificador se pone en marcha.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VERIF_OK = { tiene_whatsapp: true, verificado_at: '2026-08-01T10:00:00Z' }
+const VERIF_NO = { tiene_whatsapp: false, verificado_at: '2026-08-01T10:00:00Z' }
+
+test('filtrarPhonesConWhatsapp descarta solo los verificados SIN WhatsApp', () => {
+  const phones = [
+    { numero: '+56912345678' },  // verificado: sí
+    { numero: '+56987654321' },  // verificado: no
+    { numero: '+56911112222' },  // sin verificar
+  ]
+  const { phones: quedan, descartados } = filtrarPhonesConWhatsapp(phones, {
+    '+56912345678': VERIF_OK,
+    '+56987654321': VERIF_NO,
+  })
+  assert.deepEqual(quedan.map((p) => p.numero), ['+56912345678', '+56911112222'])
+  assert.deepEqual(descartados, ['+56987654321'])
+})
+
+test('sin verificaciones el filtro es inerte (no vacía el CRM antes de vincular el verificador)', () => {
+  const phones = [{ numero: '+56912345678' }, { numero: '+56987654321' }]
+  assert.deepEqual(filtrarPhonesConWhatsapp(phones, {}).phones, phones)
+  assert.deepEqual(filtrarPhonesConWhatsapp(phones, null).phones, phones)
+})
+
+test('el filtro cruza el número aunque venga con otro formato', () => {
+  const { phones: quedan } = filtrarPhonesConWhatsapp(
+    [{ numero: '56 9 8765 4321' }],
+    { '+56987654321': VERIF_NO }
+  )
+  assert.equal(quedan.length, 0)
+})
+
+test('si el mejor teléfono del titular está de baja, viaja el siguiente vivo', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [
+      { numero: '+56912345678', categoria: 'probable', calidad: 9, whatsapp: true },
+      { numero: '+56987654321', categoria: 'alternativo', calidad: 4, whatsapp: true },
+    ],
+    emails: [],
+    relacionados: [],
+    // El "mejor" según DealerNet resultó estar de baja en la verificación.
+    verificacionesWhatsapp: { '+56912345678': VERIF_NO, '+56987654321': VERIF_OK },
+  })
+  assert.equal(contacts[0].phone, '+56987654321')
+  assert.equal(contacts[0].has_whatsapp, true)
+  // Y el muerto tampoco se cuela como extra.
+  assert.equal(contacts[0].extra_phones, null)
+})
+
+test('has_whatsapp lo manda la verificación, no la bandera sin fecha de DealerNet', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    // DealerNet dice que no; la verificación en vivo dice que sí.
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, whatsapp: false }],
+    emails: [],
+    relacionados: [],
+    verificacionesWhatsapp: { '+56912345678': VERIF_OK },
+  })
+  assert.equal(contacts[0].has_whatsapp, true)
+})
+
+test('si TODOS los teléfonos están de baja, el titular viaja sin teléfono (no con uno muerto)', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, whatsapp: true }],
+    emails: [{ email: 'maria@ejemplo.cl', categoria: 'probable' }],
+    relacionados: [],
+    verificacionesWhatsapp: { '+56912345678': VERIF_NO },
+  })
+  // La ficha del CRM conserva al dueño (nombre, RUT, email) — lo que no lleva
+  // es un número al que nadie va a contestar.
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].contact_type, 'owner')
+  assert.equal(contacts[0].contact_name, 'María Pérez')
+  assert.equal(contacts[0].phone, null)
+  assert.equal(contacts[0].email, 'maria@ejemplo.cl')
+})
+
+test('la selección manual también pasa por el filtro', () => {
+  const seleccion = [
+    { phone: '+56912345678', name: 'María Pérez', is_owner: true, has_whatsapp: true },
+    { phone: '+56987654321', name: 'Juan Soto', relationship: 'Cónyuge', has_whatsapp: true },
+  ]
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [],
+    emails: [],
+    relacionados: [],
+    seleccion,
+    verificacionesWhatsapp: { '+56987654321': VERIF_NO },
+  })
+  assert.deepEqual(contacts.map((c) => c.phone), ['+56912345678'])
+})
+
+test('si la selección entera queda de baja, no se manda una ficha sin dueño', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', whatsapp: true }],
+    emails: [],
+    relacionados: [],
+    seleccion: [{ phone: '+56912345678', name: 'María Pérez', is_owner: true }],
+    verificacionesWhatsapp: { '+56912345678': VERIF_NO },
+  })
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].contact_type, 'owner')
+  assert.equal(contacts[0].phone, null)
+})
+
+test('la foto que viaja al CRM es la verificada en WhatsApp, no la copia de DealerNet', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    baseUrl: 'https://crm.cremme.es',
+    verificacionesWhatsapp: {
+      '+56912345678': { tiene_whatsapp: true, tiene_foto: true, verificado_at: '2026-08-01T10:00:00Z' },
+    },
+  })
+  // Con sello de fecha: SmartBC re-aloja las fotos al recibirlas, y con una
+  // URL fija se quedaría con la primera para siempre aunque el contacto la cambie.
+  assert.equal(
+    contacts[0].photo_url,
+    'https://crm.cremme.es/api/chile/whatsapp-foto?phone=%2B56912345678&v=2026-08-01T10%3A00%3A00Z'
+  )
+})
+
+test('si la foto de WhatsApp no es visible, viaja la de DealerNet', () => {
+  const contacts = buildContacts({
+    captacionId: CAP_ID,
+    ownerName: 'María Pérez',
+    ownerRut: '12345678-9',
+    phones: [{ numero: '+56912345678', categoria: 'probable', calidad: 9, idimagen: '13387802' }],
+    emails: [],
+    relacionados: [],
+    baseUrl: 'https://crm.cremme.es',
+    // Está en WhatsApp, pero su foto es privada (o aún no se pudo bajar).
+    verificacionesWhatsapp: { '+56912345678': { tiene_whatsapp: true, tiene_foto: false } },
+  })
+  assert.equal(contacts[0].photo_url, 'https://crm.cremme.es/api/chile/dealernet-imagen?id=13387802&size=200')
 })

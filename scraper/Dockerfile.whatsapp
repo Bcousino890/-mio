@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Imagen del worker de verificación de WhatsApp (whatsapp-verify-worker.mjs).
+#
+# Separada de scraper/Dockerfile a propósito: son dos procesos con vidas
+# distintas. El worker de Anuncios se reinicia con cada deploy sin consecuencias;
+# este mantiene una SESIÓN de WhatsApp vinculada por QR, y reiniciarlo de más
+# es exactamente el tipo de comportamiento que Meta mira con lupa. Con imagen
+# propia se puede redeployar uno sin tocar al otro.
+#
+# Sin Chromium ni Playwright: Baileys habla el protocolo de WhatsApp Web por
+# WebSocket directamente (~500 MB de RAM menos que una solución con navegador
+# headless), que es lo que permite meterlo en el CX33 compartido.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim
+WORKDIR /app
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY lib/whatsapp-verify-cl.mjs ./lib/
+COPY whatsapp-verify-worker.mjs ./
+
+# La sesión vive acá y DEBE ser un volumen: si se pierde, hay que volver a
+# escanear el QR — y cada re-vinculación es un evento más en el historial del
+# número verificador.
+ENV WA_VERIFY_AUTH_DIR=/app/wa-auth
+VOLUME ["/app/wa-auth"]
+
+CMD ["node", "whatsapp-verify-worker.mjs"]
