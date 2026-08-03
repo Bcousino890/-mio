@@ -28,6 +28,16 @@ export interface VerificacionWhatsapp {
   verificado_at: string | null
   foto_cambiada_at: string | null
   revalidar_pedido: boolean
+  /** Últimos cambios conocidos, de lo más nuevo a lo más viejo. */
+  historial: CambioWhatsapp[]
+}
+
+export interface CambioWhatsapp {
+  tiene_whatsapp: boolean | null
+  tiene_foto: boolean | null
+  /** 'alta' | 'whatsapp' | 'foto' */
+  cambios: string[]
+  verificado_at: string
 }
 
 function normalizar(input: unknown): string[] {
@@ -85,8 +95,27 @@ export async function POST(request: NextRequest) {
       `SELECT estado, numero_e164, conectado_at, ultimo_error FROM whatsapp_verificador_cl WHERE id = true`
     )
 
+    // Historial (migración 0096): responde "¿este número TENÍA WhatsApp
+    // cuando lo captamos?" — lo que importa cuando una ficha de hace meses no
+    // contesta: si el número murió o si nunca estuvo. Solo los últimos
+    // cambios de cada número; el archivo completo se consulta por SQL.
+    const { rows: hist } = await pool.query(
+      `SELECT phone_e164, tiene_whatsapp, tiene_foto, cambios, verificado_at
+         FROM (SELECT h.*, row_number() OVER (PARTITION BY h.phone_e164
+                                              ORDER BY h.verificado_at DESC) AS rn
+                 FROM whatsapp_verificaciones_hist_cl h
+                WHERE h.phone_e164 = ANY($1::text[])) x
+        WHERE rn <= 5
+        ORDER BY phone_e164, verificado_at DESC`,
+      [phones]
+    )
+
     const verificaciones: Record<string, VerificacionWhatsapp> = {}
-    for (const r of rows) verificaciones[r.phone_e164] = r
+    for (const r of rows) verificaciones[r.phone_e164] = { ...r, historial: [] }
+    for (const h of hist) {
+      const v = verificaciones[h.phone_e164]
+      if (v) v.historial.push(h)
+    }
 
     return NextResponse.json({
       success: true,

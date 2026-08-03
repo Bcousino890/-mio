@@ -190,6 +190,45 @@ copia de DealerNet. La URL lleva la fecha del último check (`&v=`) porque
 SmartBC re-aloja las fotos al recibirlas: con una URL fija se quedaría con la
 primera para siempre aunque el contacto cambie la suya.
 
+## El historial: quién tenía WhatsApp y foto, y desde cuándo no
+
+`whatsapp_verificaciones_cl` guarda el estado ACTUAL — cada pasada del worker
+pisa la anterior. El rastro vive en `whatsapp_verificaciones_hist_cl`
+(migración 0096), que responde la pregunta que importa cuando una captación de
+hace meses no contesta: **¿este número tenía WhatsApp cuando lo captamos, o
+nunca lo tuvo?**
+
+Se escribe **una fila por cambio**, no por pasada (verificar 30 veces lo mismo
+no es información):
+
+| `cambios` | Cuándo |
+|---|---|
+| `{alta}` | Primera verificación del número |
+| `{whatsapp}` | Ganó o perdió WhatsApp |
+| `{foto}` | Cambió la foto (sha256 distinto) |
+
+Cada fila de tipo `foto` conserva **la imagen de ese momento**, así que se
+puede ver la foto que el contacto tenía antes. Una fila por cambio de registro
+no duplica la imagen: ya está guardada en su propia fila.
+
+Un `estado = 'error'` (caída de red) **no** escribe historial: un fallo nuestro
+no es un cambio del contacto.
+
+En la ficha, un número verificado sin WhatsApp dice en el tooltip desde cuándo
+lo perdió (`lo tuvo hasta el 12-10-2026`). Para consultas más amplias:
+
+```sql
+-- Historia completa de un número
+SELECT verificado_at, cambios, tiene_whatsapp, tiene_foto
+  FROM whatsapp_verificaciones_hist_cl
+ WHERE phone_e164 = '+56995429258' ORDER BY verificado_at DESC;
+
+-- Qué números perdieron WhatsApp este mes (se cayeron de las campañas)
+SELECT DISTINCT phone_e164 FROM whatsapp_verificaciones_hist_cl
+ WHERE 'whatsapp' = ANY(cambios) AND tiene_whatsapp = false
+   AND verificado_at >= date_trunc('month', now());
+```
+
 ## Límites conocidos
 
 - **"Sin foto" y "foto restringida a contactos" son indistinguibles.** Ambas
@@ -208,6 +247,7 @@ primera para siempre aunque el contacto cambie la suya.
 | Archivo | Qué es |
 |---|---|
 | `db/migrations/0095_whatsapp_verificacion_cl.sql` | Tablas `whatsapp_verificaciones_cl` y `whatsapp_verificador_cl` |
+| `db/migrations/0096_whatsapp_historial_cl.sql` | `whatsapp_verificaciones_hist_cl` — el historial de cambios |
 | `scraper/lib/whatsapp-verify-cl.mjs` | Lógica: cola, ritmo, persistencia, lectura de la foto |
 | `scraper/lib/whatsapp-verify-cl.test.mjs` | Tests (incluido el ritmo) |
 | `scraper/whatsapp-verify-worker.mjs` | Cableado con Baileys y bucle |

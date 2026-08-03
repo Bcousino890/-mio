@@ -213,11 +213,16 @@ export function WhatsappBadge({ phone, indWhatsapp }: { phone: string; indWhatsa
   }
 
   if (verificado && !verificacion!.tiene_whatsapp) {
+    // Si alguna vez SÍ lo tuvo, se dice desde cuándo no: para una captación de
+    // hace meses, "el número murió en octubre" y "nunca estuvo en WhatsApp"
+    // llevan a decisiones distintas.
+    const baja = verificacion!.historial?.find((h) => h.cambios?.includes('whatsapp') && h.tiene_whatsapp === false)
+    const tuvo = baja ? ` · lo tuvo hasta el ${new Date(baja.verificado_at).toLocaleDateString('es-CL')}` : ''
     // Dato caro de conseguir y fácil de perder de vista: DealerNet puede
     // seguir marcando este número como WhatsApp años después de la baja.
     return (
       <span
-        title={`Verificado el ${fecha}: este número NO está en WhatsApp${indWhatsapp ? ' (DealerNet lo marca como que sí — su dato está desactualizado)' : ''}`}
+        title={`Verificado el ${fecha}: este número NO está en WhatsApp${tuvo}${indWhatsapp ? ' (DealerNet lo marca como que sí — su dato está desactualizado)' : ''}`}
         className="text-[9px] px-1 py-0.5 rounded bg-slate-900/60 text-slate-500 border border-slate-800"
       >
         sin WhatsApp

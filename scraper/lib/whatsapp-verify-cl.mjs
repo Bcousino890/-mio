@@ -175,6 +175,17 @@ export async function verifyPhoneCl(phoneE164, deps) {
  *
  * Un resultado con `estado: 'error'` NO pisa la última foto buena conocida:
  * se conserva lo que había y solo se anota el fallo.
+ *
+ * Además deja rastro en whatsapp_verificaciones_hist_cl (migración 0096) para
+ * poder responder "¿este número TENÍA WhatsApp cuando lo captamos?" — la
+ * pregunta que importa cuando una ficha de hace meses no contesta: si el
+ * número murió o si nunca estuvo. Se escribe una fila por CAMBIO (alta, cambio
+ * de registro, cambio de foto), no por pasada: verificar 30 veces lo mismo no
+ * es información.
+ *
+ * Todo va en UNA sentencia con CTEs: las CTE `prev`/`up` ven el estado ANTES
+ * del upsert, así que la comparación es atómica y no hay ventana en la que dos
+ * pasadas concurrentes escriban historial de más (o de menos).
  */
 export async function saveVerificationCl(client, result) {
   if (result.estado === 'error') {
@@ -194,7 +205,11 @@ export async function saveVerificationCl(client, result) {
 
   const foto = result.foto ?? null
   const { rows } = await client.query(
-    `INSERT INTO whatsapp_verificaciones_cl
+    `WITH prev AS (
+       SELECT tiene_whatsapp, foto_sha256
+         FROM whatsapp_verificaciones_cl WHERE phone_e164 = $1
+     ), up AS (
+     INSERT INTO whatsapp_verificaciones_cl
        (phone_e164, tiene_whatsapp, jid, tiene_foto, foto_mime, foto_bytes, foto_sha256,
         foto_cambiada_at, estado, error, intentos, verificado_at, revalidar_pedido_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7::text IS NULL THEN NULL ELSE $8::timestamptz END,
@@ -219,8 +234,44 @@ export async function saveVerificationCl(client, result) {
        intentos = whatsapp_verificaciones_cl.intentos + 1,
        verificado_at = EXCLUDED.verificado_at,
        revalidar_pedido_at = NULL
-     RETURNING (xmax = 0) AS insertado,
-               foto_cambiada_at = verificado_at AS foto_cambiada`,
+     RETURNING phone_e164, tiene_whatsapp, jid, tiene_foto, foto_mime, foto_bytes,
+               foto_sha256, verificado_at, (xmax = 0) AS insertado,
+               foto_cambiada_at = verificado_at AS foto_cambiada
+     ), calc AS (
+       -- El estado nuevo (up) junto al viejo (prev), para no repetir la
+       -- comparación en cada rama de abajo.
+       SELECT up.*,
+              EXISTS (SELECT 1 FROM prev) AS habia,
+              (SELECT tiene_whatsapp FROM prev) IS DISTINCT FROM up.tiene_whatsapp AS cambio_wa,
+              (up.foto_sha256 IS NOT NULL
+               AND (SELECT foto_sha256 FROM prev) IS DISTINCT FROM up.foto_sha256) AS cambio_foto
+         FROM up
+     ), hist AS (
+       INSERT INTO whatsapp_verificaciones_hist_cl
+         (phone_e164, tiene_whatsapp, jid, tiene_foto, foto_mime, foto_bytes,
+          foto_sha256, cambios, verificado_at)
+       SELECT phone_e164, tiene_whatsapp, jid, tiene_foto,
+              -- La foto solo se copia al historial cuando ES la novedad. Si la
+              -- fila existe por un cambio de registro, la imagen ya está
+              -- guardada en su propia fila anterior: duplicarla sería pagar
+              -- los bytes dos veces por el mismo dato.
+              CASE WHEN cambio_foto THEN foto_mime END,
+              CASE WHEN cambio_foto THEN foto_bytes END,
+              CASE WHEN cambio_foto THEN foto_sha256 END,
+              -- Qué disparó la fila. 'alta' solo la primera vez; después,
+              -- exactamente lo que cambió respecto de la pasada anterior.
+              CASE WHEN NOT habia THEN ARRAY['alta']
+                   ELSE ARRAY[]::text[]
+                     || CASE WHEN cambio_wa THEN ARRAY['whatsapp'] ELSE ARRAY[]::text[] END
+                     || CASE WHEN cambio_foto THEN ARRAY['foto'] ELSE ARRAY[]::text[] END
+              END,
+              verificado_at
+         FROM calc
+        WHERE NOT habia OR cambio_wa OR cambio_foto
+       RETURNING 1
+     )
+     SELECT up.insertado, up.foto_cambiada, (SELECT count(*) FROM hist)::int AS historial
+       FROM up`,
     [
       result.phone_e164,
       result.tiene_whatsapp ?? null,
@@ -232,7 +283,32 @@ export async function saveVerificationCl(client, result) {
       result.verificado_at,
     ]
   )
-  return { guardado: true, fotoCambiada: Boolean(rows[0]?.foto_cambiada) }
+  return {
+    guardado: true,
+    fotoCambiada: Boolean(rows[0]?.foto_cambiada),
+    // true si esta pasada dejó rastro en el historial (alta o cambio real).
+    historial: (rows[0]?.historial ?? 0) > 0,
+  }
+}
+
+/**
+ * Historial de un número, de lo más nuevo a lo más viejo: cuándo se verificó
+ * por primera vez, cuándo ganó o perdió WhatsApp y cuándo cambió de foto.
+ *
+ * No devuelve los bytes de las fotos antiguas (están en la tabla, pero pesan y
+ * casi nunca se necesitan en la misma consulta): quien las quiera las pide por
+ * `id`.
+ */
+export async function historialPhoneCl(client, phoneE164, { limit = 20 } = {}) {
+  const { rows } = await client.query(
+    `SELECT id, tiene_whatsapp, tiene_foto, foto_sha256, cambios, verificado_at
+       FROM whatsapp_verificaciones_hist_cl
+      WHERE phone_e164 = $1
+      ORDER BY verificado_at DESC
+      LIMIT $2`,
+    [phoneE164, limit]
+  )
+  return rows
 }
 
 /**

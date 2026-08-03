@@ -22,6 +22,15 @@ export interface VerificacionWhatsapp {
   verificado_at: string | null
   foto_cambiada_at: string | null
   revalidar_pedido: boolean
+  /** Últimos cambios: alta, ganó/perdió WhatsApp, cambió de foto (0096). */
+  historial?: CambioWhatsapp[]
+}
+
+export interface CambioWhatsapp {
+  tiene_whatsapp: boolean | null
+  tiene_foto: boolean | null
+  cambios: string[]
+  verificado_at: string
 }
 
 export interface EstadoVerificador {
