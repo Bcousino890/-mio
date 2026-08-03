@@ -1,0 +1,7 @@
+# Centinela: tocar este archivo y pushear a main dispara
+# .github/workflows/whatsapp-verify-up.yml, que levanta el worker de
+# verificación de WhatsApp en el VPS y deja WA_VERIFY_ENABLED=1 en su .env.
+#
+# Levantarlo NO vincula ningún número: publica un QR y espera a que alguien lo
+# escanee desde Configuración → Verificador de WhatsApp.
+2026-08-03 · primer arranque

@@ -1,0 +1,88 @@
+name: Levantar verificador de WhatsApp
+
+# Enciende el worker whatsapp-verify en el VPS y deja el flag puesto para que
+# los deploys siguientes lo mantengan vivo.
+#
+# NO vincula ningún número por sí solo: el worker arranca, publica un QR y
+# espera. Vincular sigue siendo un acto humano — escanear ese QR desde
+# Configuración → Verificador de WhatsApp. Ver docs/WHATSAPP-VERIFICACION.md:
+# se vincula un número REAL que Meta puede banear, así que va uno sacrificable.
+#
+# Se dispara con el centinela `infra/.whatsapp-verify-up` (mismo patrón que el
+# resto de workflows operativos del repo, porque la API no permite
+# workflow_dispatch acá). Para volver a lanzarlo: tocar ese archivo y pushear.
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/.whatsapp-verify-up'
+
+concurrency:
+  group: whatsapp-verify-up
+  cancel-in-progress: false
+
+jobs:
+  levantar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Construir y levantar whatsapp-verify
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT || 22 }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s << 'EOF'
+            set -e
+            cd /opt/casafari
+
+            # El flag es lo que hace que deploy.sh lo mantenga vivo en cada
+            # despliegue. Idempotente: si ya está, no duplica la línea.
+            if grep -qE '^WA_VERIFY_ENABLED=' .env; then
+              sed -i 's/^WA_VERIFY_ENABLED=.*/WA_VERIFY_ENABLED=1/' .env
+            else
+              echo 'WA_VERIFY_ENABLED=1' >> .env
+            fi
+            echo "✅ WA_VERIFY_ENABLED=1 en .env"
+
+            COMPOSE="docker compose -p casafari --env-file /opt/casafari/.env -f /opt/casafari/infra/docker-compose.yml --profile whatsapp"
+
+            echo "── Migraciones de la verificación (0095/0096) ────────"
+            for m in 0095_whatsapp_verificacion_cl 0096_whatsapp_historial_cl; do
+              docker exec -i casafari-pg psql -U casafari -d casafari -q \
+                -f "/migrations/$m.sql" >/dev/null 2>&1 \
+                && echo "  ✅ $m" || echo "  ⚠ $m (ya aplicada o error — ver panel)"
+            done
+
+            echo ""
+            echo "── Construyendo imagen ───────────────────────────────"
+            $COMPOSE build whatsapp-verify
+
+            echo ""
+            echo "── Levantando ───────────────────────────────────────"
+            $COMPOSE up -d --no-deps whatsapp-verify
+
+            echo ""
+            echo "── Esperando a que publique el QR ───────────────────"
+            for i in $(seq 1 12); do
+              sleep 5
+              estado=$(docker exec -i casafari-pg psql -U casafari -d casafari -tAc \
+                "SELECT estado || '|' || (qr IS NOT NULL) FROM whatsapp_verificador_cl WHERE id = true" 2>/dev/null || echo "?")
+              echo "  [$i] $estado"
+              case "$estado" in *"|t") echo "  ✅ QR publicado"; break;; esac
+              case "$estado" in conectado*) echo "  ✅ Ya vinculado"; break;; esac
+            done
+
+            echo ""
+            echo "── Últimos logs del worker ──────────────────────────"
+            docker logs --tail 25 casafari-whatsapp-verify 2>&1 || true
+
+            echo ""
+            echo "👉 Ahora: Configuración → Verificador de WhatsApp → \"Ver QR\" y escanear"
+            echo "   con el TELÉFONO DEL NÚMERO SACRIFICABLE (nunca el corporativo)."
+          EOF
