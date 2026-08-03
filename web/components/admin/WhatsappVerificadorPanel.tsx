@@ -15,7 +15,7 @@
 // nunca el corporativo.
 
 import { useCallback, useEffect, useState } from 'react'
-import { MessageCircle, Loader2, CheckCircle2, AlertCircle, QrCode } from 'lucide-react'
+import { MessageCircle, Loader2, AlertCircle, QrCode } from 'lucide-react'
 
 interface EstadoVerificador {
   success: boolean
@@ -44,6 +44,9 @@ const ROTULO: Record<string, { texto: string; clase: string }> = {
 export default function WhatsappVerificadorPanel() {
   const [data, setData] = useState<EstadoVerificador | null>(null)
   const [cargando, setCargando] = useState(true)
+  // El QR se pide, no se muestra de entrada: vincula un número real y no tiene
+  // por qué estar a la vista de cualquiera que abra Configuración.
+  const [mostrarQr, setMostrarQr] = useState(false)
 
   const refrescar = useCallback(async () => {
     try {
@@ -58,14 +61,20 @@ export default function WhatsappVerificadorPanel() {
 
   useEffect(() => { void refrescar() }, [refrescar])
 
-  // Mientras hay un QR en pantalla hay que repreguntar rápido: el que se ve
-  // caduca en ~60 s y el worker publica el siguiente.
-  const esperando = data?.estado === 'esperando_qr' || data?.estado === 'conectando'
+  const conectado = data?.estado === 'conectado'
+
+  // Con el QR a la vista hay que repreguntar rápido: el código caduca en ~60 s
+  // y el worker publica el siguiente. El resto del tiempo, cada 30 s — solo
+  // cambian los contadores.
   useEffect(() => {
-    const ms = esperando ? 4_000 : 30_000
+    const ms = mostrarQr && !conectado ? 4_000 : 30_000
     const id = setInterval(() => { void refrescar() }, ms)
     return () => clearInterval(id)
-  }, [esperando, refrescar])
+  }, [mostrarQr, conectado, refrescar])
+
+  // Al vincularse, el QR ya no sirve: el bloque se cierra solo en vez de
+  // quedarse con un código muerto en pantalla.
+  useEffect(() => { if (conectado) setMostrarQr(false) }, [conectado])
 
   const rotulo = ROTULO[data?.estado ?? 'desvinculado'] ?? ROTULO.desvinculado
 
@@ -94,52 +103,85 @@ export default function WhatsappVerificadorPanel() {
         </div>
       )}
 
-      {/* ── El QR: esto es lo que se escanea ── */}
-      {data?.qr_data_url && (
-        <div className="mb-3 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3">
-          <div className="flex items-center gap-1.5 mb-2">
-            <QrCode size={13} className="text-amber-400" />
-            <p className="text-[11px] font-semibold text-amber-300">Escanear para vincular</p>
-          </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={data.qr_data_url}
-            alt="QR de vinculación de WhatsApp"
-            className="w-64 h-64 rounded-lg bg-white p-2 mx-auto"
-          />
-          <ol className="mt-2 text-[11px] text-slate-400 space-y-0.5 list-decimal list-inside">
-            <li>En el teléfono del número verificador: WhatsApp → Ajustes</li>
-            <li>Dispositivos vinculados → Vincular un dispositivo</li>
-            <li>Apuntar a este código</li>
-          </ol>
-          <p className="mt-2 text-[10px] text-slate-500">
-            El código caduca en ~60 s; se renueva solo. Si no aparece uno nuevo, revisar
-            que el contenedor <code>whatsapp-verify</code> esté levantado.
-          </p>
+      {/* ── Conectado o no, en una línea ── */}
+      {data?.success && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <span className={`inline-flex items-center gap-1.5 text-xs ${conectado ? 'text-emerald-400' : 'text-slate-400'}`}>
+            <span className={`w-2 h-2 rounded-full ${
+              conectado ? 'bg-emerald-500' : data.estado === 'baneado' ? 'bg-red-500' : 'bg-slate-600'
+            }`} />
+            {conectado
+              ? `Conectado${data.numero_e164 ? ` · ${data.numero_e164}` : ''}`
+              : data.estado === 'baneado' ? 'Número baneado' : 'No conectado'}
+          </span>
+
+          {/* El QR no se muestra de entrada: es un código que vincula un
+              número real y no tiene por qué estar a la vista de cualquiera
+              que abra Configuración. Se pide. */}
+          {!conectado && (
+            <button
+              onClick={() => setMostrarQr((v) => !v)}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-emerald-800/60 text-emerald-300 hover:bg-emerald-950/30 transition-colors"
+            >
+              <QrCode size={12} />
+              {mostrarQr ? 'Ocultar QR' : 'Ver QR'}
+            </button>
+          )}
+          {conectado && (
+            <span className="text-[10px] text-slate-500">
+              {data.checks_hoy ?? 0} verificaciones hoy
+            </span>
+          )}
         </div>
       )}
 
-      {/* Sin QR: la causa nº 1 es que el contenedor no está corriendo. El
-          latido lo distingue de "está levantado y aún no emitió el código",
-          que es cuestión de segundos. */}
-      {!data?.qr_data_url && data?.success && data.estado !== 'conectado' && (
-        data.latido ? (
-          <p className="text-[11px] text-amber-400 mb-3 inline-flex items-center gap-1.5">
-            <Loader2 size={12} className="animate-spin" />
-            Worker activo, esperando que WhatsApp emita el código…
-          </p>
-        ) : (
-          <div className="text-[11px] text-slate-400 mb-3 space-y-1">
-            <p>El worker no está corriendo — por eso no hay QR. Para levantarlo en el VPS:</p>
-            <code className="block text-slate-300 bg-slate-900/60 border border-slate-700 rounded px-2 py-1 overflow-x-auto">
-              docker compose -p casafari --env-file ../.env --profile whatsapp up -d whatsapp-verify
-            </code>
-            <p>
-              O deja <code className="text-slate-300">WA_VERIFY_ENABLED=1</code> en el{' '}
-              <code className="text-slate-300">.env</code> del VPS y cada deploy lo mantendrá vivo.
+      {/* ── El QR: esto es lo que se escanea ── */}
+      {mostrarQr && !conectado && (
+        <div className="mb-3 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3">
+          {data?.qr_data_url ? (
+            <>
+              <div className="flex items-center gap-1.5 mb-2">
+                <QrCode size={13} className="text-amber-400" />
+                <p className="text-[11px] font-semibold text-amber-300">Escanear para vincular</p>
+              </div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={data.qr_data_url}
+                alt="QR de vinculación de WhatsApp"
+                className="w-64 h-64 rounded-lg bg-white p-2 mx-auto"
+              />
+              <ol className="mt-2 text-[11px] text-slate-400 space-y-0.5 list-decimal list-inside">
+                <li>En el teléfono del número verificador: WhatsApp → Ajustes</li>
+                <li>Dispositivos vinculados → Vincular un dispositivo</li>
+                <li>Apuntar a este código</li>
+              </ol>
+              <p className="mt-2 text-[10px] text-slate-500">
+                El código caduca en ~60 s y se renueva solo mientras esta pantalla esté abierta.
+              </p>
+            </>
+          ) : data?.latido ? (
+            // Levantado y a segundos de emitir el código: solo hay que esperar.
+            <p className="text-[11px] text-amber-400 inline-flex items-center gap-1.5">
+              <Loader2 size={12} className="animate-spin" />
+              Worker activo, esperando que WhatsApp emita el código…
             </p>
-          </div>
-        )
+          ) : (
+            // Sin latido: el contenedor no está corriendo. Es la causa nº 1 de
+            // "no aparece el QR", y llevan a acciones opuestas — por eso se
+            // distinguen en vez de dejar girando un spinner eterno.
+            <div className="text-[11px] text-slate-400 space-y-1">
+              <p className="text-amber-300">El worker no está corriendo — por eso no hay QR.</p>
+              <p>Levantarlo en el VPS:</p>
+              <code className="block text-slate-300 bg-slate-900/60 border border-slate-700 rounded px-2 py-1 overflow-x-auto">
+                docker compose -p casafari --env-file ../.env --profile whatsapp up -d whatsapp-verify
+              </code>
+              <p>
+                O deja <code className="text-slate-300">WA_VERIFY_ENABLED=1</code> en el{' '}
+                <code className="text-slate-300">.env</code> del VPS y cada deploy lo mantendrá vivo.
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       {data?.estado === 'baneado' && (
@@ -148,15 +190,6 @@ export default function WhatsappVerificadorPanel() {
           <span>
             Meta baneó el número verificador. Hay que rotar a otro número sacrificable:
             borrar el volumen <code>wa-auth</code> y volver a vincular.
-          </span>
-        </div>
-      )}
-
-      {data?.estado === 'conectado' && (
-        <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 mb-2">
-          <CheckCircle2 size={13} />
-          <span>
-            Vinculado{data.numero_e164 ? ` con ${data.numero_e164}` : ''} · {data.checks_hoy ?? 0} verificaciones hoy
           </span>
         </div>
       )}

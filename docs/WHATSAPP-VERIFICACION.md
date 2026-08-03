@@ -85,8 +85,15 @@ inmediatamente.
    ```
 
 5. **Escanear el QR en `Configuración` → panel “Verificador de WhatsApp”**
-   (`/settings`). Ahí sale el código, ya renderizado, y se refresca solo cada
-   4 s mientras espera — el QR caduca en ~60 s y el worker emite uno nuevo.
+   (`/settings`). El panel dice de entrada si está **Conectado** (con el número)
+   o **No conectado**; el código se pide con el botón **“Ver QR”** — no está a
+   la vista de cualquiera que abra Configuración, porque vincula un número real.
+   Con el QR abierto, la pantalla repregunta cada 4 s: el código caduca en ~60 s
+   y el worker emite uno nuevo. Al vincularse, el bloque se cierra solo.
+
+   Si al pulsar “Ver QR” no hay código, el panel distingue las dos causas: el
+   worker levantado y a segundos de emitirlo, o el contenedor apagado — en cuyo
+   caso da el comando exacto para levantarlo.
 
    En el teléfono del número verificador: WhatsApp → Ajustes → Dispositivos
    vinculados → Vincular un dispositivo → apuntar a la pantalla.
