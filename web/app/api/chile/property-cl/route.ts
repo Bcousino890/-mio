@@ -675,12 +675,19 @@ export async function PATCH(request: NextRequest) {
           // confianza: lo confirmó un humano). NO pisa latitude/longitude —
           // el pin declarado por el anuncio sigue intacto; esto es la capa
           // "resuelta" (rol_matriz + dirección exacta + parcela catastral).
+          // comuna_id también se actualiza aquí: sin esto, una ficha con el
+          // pin corregido a mano (máxima confianza posible) podía quedar con
+          // rol confirmado y aun así "Sin comuna" en la grilla para siempre
+          // — el dedup periódico solo la fija a partir del texto de comuna
+          // que declaró el anuncio, y ese campo puede venir vacío o sin match
+          // en chile_comunas. La parcela bajo el pin SÍ sabe su comuna.
           await pool.query(
             `UPDATE property_cl SET
                rol_matriz = $2, rol_confidence = 1, matched_parcel_id = $3,
-               exact_address = COALESCE($4, exact_address), updated_at = now()
+               exact_address = COALESCE($4, exact_address),
+               comuna_id = COALESCE($5, comuna_id), updated_at = now()
              WHERE id = $1`,
-            [id, rol.rol, rol.parcel_id, rol.direccion],
+            [id, rol.rol, rol.parcel_id, rol.direccion, rol.comuna_id],
           )
           crm = await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)
         } else {
