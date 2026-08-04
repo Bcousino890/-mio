@@ -21,8 +21,15 @@ import { parsePropertyCodeQuery } from '@/lib/property-code-query'
 //     (cada uno con su corredora, precio, estado y URL).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// "recent" antepone las fichas CON precio: un anuncio recién visto que todavía
+// no tiene precio ni UF (p.ej. "precio a consultar" de lujo, o comuna sin
+// resolver aún) es indistinguible en la tarjeta de un dato roto — un "—" y
+// "Sin comuna" en las primeras posiciones de la grilla, aunque el dato sea
+// legítimo. Ordenar esos casos DESPUÉS de los completos (mismo criterio de
+// recencia dentro de cada grupo) evita que tapen la parte de arriba sin
+// esconderlos de la lista.
 const SORT_CLAUSES: Record<string, string> = {
-  recent: 'p.last_seen_at DESC',
+  recent: '(p.canonical_price IS NOT NULL OR p.canonical_price_uf IS NOT NULL) DESC, p.last_seen_at DESC',
   price_asc: 'p.canonical_price ASC NULLS LAST',
   price_desc: 'p.canonical_price DESC NULLS LAST',
   corredoras: 'p.corredora_count DESC, p.last_seen_at DESC',
@@ -33,7 +40,7 @@ const SORT_CLAUSES: Record<string, string> = {
 // daría un orden incoherente con lo que se ve en la tarjeta (dos anuncios de la
 // misma ficha comparten agregado pero muestran precios distintos).
 const SORT_CLAUSES_UNGROUPED: Record<string, string> = {
-  recent: 'l.last_seen_at DESC',
+  recent: '(l.price IS NOT NULL OR l.price_uf IS NOT NULL) DESC, l.last_seen_at DESC',
   price_asc: 'l.price ASC NULLS LAST',
   price_desc: 'l.price DESC NULLS LAST',
   corredoras: 'p.corredora_count DESC, l.last_seen_at DESC',
@@ -668,12 +675,19 @@ export async function PATCH(request: NextRequest) {
           // confianza: lo confirmó un humano). NO pisa latitude/longitude —
           // el pin declarado por el anuncio sigue intacto; esto es la capa
           // "resuelta" (rol_matriz + dirección exacta + parcela catastral).
+          // comuna_id también se actualiza aquí: sin esto, una ficha con el
+          // pin corregido a mano (máxima confianza posible) podía quedar con
+          // rol confirmado y aun así "Sin comuna" en la grilla para siempre
+          // — el dedup periódico solo la fija a partir del texto de comuna
+          // que declaró el anuncio, y ese campo puede venir vacío o sin match
+          // en chile_comunas. La parcela bajo el pin SÍ sabe su comuna.
           await pool.query(
             `UPDATE property_cl SET
                rol_matriz = $2, rol_confidence = 1, matched_parcel_id = $3,
-               exact_address = COALESCE($4, exact_address), updated_at = now()
+               exact_address = COALESCE($4, exact_address),
+               comuna_id = COALESCE($5, comuna_id), updated_at = now()
              WHERE id = $1`,
-            [id, rol.rol, rol.parcel_id, rol.direccion],
+            [id, rol.rol, rol.parcel_id, rol.direccion, rol.comuna_id],
           )
           crm = await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)
         } else {

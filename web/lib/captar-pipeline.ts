@@ -1034,6 +1034,7 @@ export async function findRolAtPoint(lat: number, lng: number): Promise<RolAtPoi
 export interface ResolvedRol {
   rol: string
   comuna_name: string
+  comuna_id: string
   sii_comuna_code: string
   parcel_id: string
   geojson: unknown
@@ -1050,7 +1051,7 @@ export interface ResolvedRol {
  * mapa igual que el visor de catastro. */
 export async function resolveRolAtPoint(lat: number, lng: number): Promise<ResolvedRol | null> {
   const { rows } = await pool.query(
-    `SELECT p.id AS parcel_id, p.rol, cc.name AS comuna_name, cc.sii_comuna_code,
+    `SELECT p.id AS parcel_id, p.rol, p.comuna_id, cc.name AS comuna_name, cc.sii_comuna_code,
             ST_AsGeoJSON(p.geom)::json AS geojson
      FROM cadastre_parcels_cl p
      JOIN chile_comunas cc ON cc.id = p.comuna_id
@@ -1070,6 +1071,7 @@ export async function resolveRolAtPoint(lat: number, lng: number): Promise<Resol
     // TGR, el enlace ficha↔captación y la dirección exacta se comparan literal.
     rol: sii?.rol ?? normalizeClRol(parcel.rol),
     comuna_name: parcel.comuna_name,
+    comuna_id: parcel.comuna_id,
     sii_comuna_code: parcel.sii_comuna_code,
     parcel_id: parcel.parcel_id,
     geojson: parcel.geojson,

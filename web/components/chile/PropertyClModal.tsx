@@ -149,10 +149,14 @@ export const clpShort = (v: number | null) => {
 // en UF, y mostrar la conversión al peso exacto ($571.827.060) daba una
 // precisión falsa con pinta de dato de debug. Se muestra "UF 14.000" (lo que
 // realmente dice el aviso) y el equivalente en CLP redondeado como referencia.
+//
+// Sin precio ni UF (frecuente en avisos de lujo recién vistos, "precio a
+// consultar") clp() devolvía un "—" pelado, indistinguible de un dato roto.
+// "Consultar precio" deja claro que es el estado real del aviso.
 export const priceMain = (p: Property) =>
   p.canonical_price_uf != null
     ? `UF ${Math.round(Number(p.canonical_price_uf)).toLocaleString('es-CL')}`
-    : clp(p.canonical_price)
+    : p.canonical_price != null ? clp(p.canonical_price) : 'Consultar precio'
 export const priceAlt = (p: Property) =>
   p.canonical_price_uf != null && p.canonical_price ? `≈ ${clpShort(p.canonical_price)}` : null
 
