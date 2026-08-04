@@ -5,7 +5,7 @@ import {
   linkCaptacionToProperty, lookupSiiDireccion,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
-import { scrapeAndUpsertListingCl, type ScrapeResult } from '@/lib/scrape-listing-cl'
+import { scrapeFromQuery, type ScrapeResult } from '@/lib/scrape-listing-cl'
 import { parsePropertyCodeQuery } from '@/lib/property-code-query'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -303,10 +303,9 @@ export async function GET(request: NextRequest) {
     }
     if (operation && operation !== 'all' && !buscandoPorCodigo) conditions.push(`${F.operation} = ${addParam(operation)}`)
     if (comunaName) conditions.push(`c.name ILIKE ${addParam(`%${comunaName}%`)}`)
-    // Si `q` es un código/URL de Portal Inmobiliario y no aparece en la
-    // búsqueda, se usa más abajo para scrapearlo en vivo (ver bloque tras la
-    // consulta principal).
-    let qMlcId: string | null = null
+    // ¿Lo escrito da alguna URL que descargar si la búsqueda no encuentra
+    // nada? (ver el bloque de scraping tras la consulta principal).
+    let qDescargable = false
     if (q) {
       // Acepta CUALQUIERA de las formas en que se nombra un inmueble (ver
       // lib/property-code-query.ts, que es quien las distingue):
@@ -319,7 +318,10 @@ export async function GET(request: NextRequest) {
       //     seller_reference), y
       //   - la URL de la web propia de una corredora.
       const parsed = parsePropertyCodeQuery(q)
-      qMlcId = parsed.scrapeable ? parsed.mlcId : null
+      // Un anuncio del portal se puede pedir por código; el de la web de una
+      // corredora solo por su URL. Un código interno suelto no tiene dónde ir
+      // a buscarse, y por eso no cuenta como descargable.
+      qDescargable = parsed.scrapeable || parsed.listingUrl !== null
 
       // Prefijo de la tabla de anuncios: sin agrupar la fila YA es el anuncio;
       // agrupando hay que mirar los anuncios de la ficha con un EXISTS.
@@ -512,16 +514,18 @@ export async function GET(request: NextRequest) {
 
     const result = await pool.query(query, dataParams)
 
-    // Búsqueda por código/URL de Portal Inmobiliario sin resultados: se
-    // scrapea la ficha EN VIVO (no depende del barrido 24/7 ni de la cola de
-    // dedup, ver scrape-listing-cl.ts) y se devuelve ya creada — "si no está,
-    // se trae". Solo aplica cuando `q` identificó un MLC-id real: un código
-    // interno suelto sin match ("5495") no tiene URL que scrapear.
-    if (!id && q && qMlcId && result.rows.length === 0) {
-      const scraped: ScrapeResult = await scrapeAndUpsertListingCl(q).catch((e): ScrapeResult => ({
+    // Búsqueda por código/URL sin resultados: se trae la ficha EN VIVO (no
+    // depende del barrido 24/7 ni de la cola de dedup, ver
+    // scrape-listing-cl.ts) y se devuelve ya creada — "si no está, se trae".
+    // Vale tanto para Portal Inmobiliario como para la ficha en la web propia
+    // de una corredora; `scrapeFromQuery` elige por lo escrito. Lo único que
+    // no se puede traer es un código interno suelto sin match ("5495"): no
+    // tiene ninguna URL detrás.
+    if (!id && q && qDescargable && result.rows.length === 0) {
+      const scraped: ScrapeResult = (await scrapeFromQuery(q).catch((e): ScrapeResult => ({
         ok: false,
-        error: e instanceof Error ? e.message : 'Error al scrapear el anuncio',
-      }))
+        error: e instanceof Error ? e.message : 'Error al traer el anuncio',
+      }))) ?? { ok: false, error: 'No hay ninguna URL que descargar para ese código' }
       if (scraped.ok) {
         const fresh = await fetchPropertyClRowById(scraped.propertyId)
         if (fresh) {

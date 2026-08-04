@@ -614,10 +614,11 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
       .then(d => {
         if (d.success && Array.isArray(d.data)) {
           setItems(d.data); setTotal(d.total); setTotalPages(d.total_pages); setStats(d.stats ?? null)
-          // No estaba en la base: se scrapeó en vivo desde el portal (ver
-          // /api/chile/property-cl, bloque `q` sin resultados).
-          if (d.scraped) showToast('Propiedad no encontrada en la base — se trajo en vivo desde el portal')
-          else if (d.scrape_error) showToast(`No se pudo traer la propiedad del portal: ${d.scrape_error}`, false)
+          // No estaba en la base: se trajo en vivo del sitio de origen —
+          // Portal Inmobiliario o la web propia de la corredora, según la URL
+          // (ver /api/chile/property-cl, bloque `q` sin resultados).
+          if (d.scraped) showToast('Propiedad no encontrada en la base — se trajo en vivo desde su sitio')
+          else if (d.scrape_error) showToast(`No se pudo traer la propiedad: ${d.scrape_error}`, false)
         }
         else { setItems([]); setTotal(0); setTotalPages(1); setStats(null) }
       })
@@ -717,7 +718,8 @@ export default function PropiedadesChileClient({ initialParams = {} }: { initial
                 '· el número con prefijo (MLC-2107783039)\n' +
                 '· el código interno del CRM (PI-2607-21087)\n' +
                 '· el código interno de la corredora\n' +
-                'Busca en venta y arriendo y también en anuncios ya retirados. Si no está en la base, se trae en vivo del portal.'}
+                '· la URL de la ficha en la web propia de una corredora\n' +
+                'Busca en venta y arriendo y también en anuncios ya retirados. Si no está en la base, se trae en vivo del sitio.'}
               className="w-full bg-slate-800 border border-slate-700 text-slate-100 pl-9 pr-8 py-2 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500" />
             {codeInput && <button onClick={() => setCodeInput('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"><X size={14} /></button>}
           </div>
