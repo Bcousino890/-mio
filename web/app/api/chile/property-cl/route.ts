@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import {
-  extractListing, setRolFromPin, resolveRolAtPoint, findCrmCaptacionByRol,
+  extractListing, setRolFromPin, resolveRolAtPoint, resolveRolByRol, findCrmCaptacionByRol,
   linkCaptacionToProperty, lookupSiiDireccion,
   type ResolvedRol, type CrmCaptacion,
 } from '@/lib/captar-pipeline'
@@ -599,7 +599,7 @@ async function findListingSourceUrl(propertyId: string): Promise<string | null> 
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, latitude, longitude, source_url, smart_crm } = body ?? {}
+    const { id, latitude, longitude, source_url, smart_crm, rol_override, rol_override_comuna } = body ?? {}
 
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ success: false, error: 'Falta id' }, { status: 400 })
@@ -651,10 +651,18 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'property_cl no encontrada' }, { status: 404 })
     }
 
-    // Resolver el rol SII de la parcela BAJO el pin corregido y COMPLETAR la
-    // ficha del inmueble con esa info real (rol, dirección exacta, parcela). El
-    // pin arrastrado a mano ES la ubicación real, así que el rol se resuelve por
-    // geometría (point-in-polygon sobre el catastro), no por matching de texto.
+    // Resolver el rol SII del inmueble y COMPLETAR la ficha con esa info real
+    // (rol, dirección exacta, parcela) — de dos formas:
+    //
+    //   · Normalmente por GEOMETRÍA (point-in-polygon bajo el pin arrastrado):
+    //     el pin arrastrado a mano ES la ubicación real.
+    //   · Si viene `rol_override` (el equipo ya eligió un resultado del
+    //     buscador de la ficha — /api/chile/sii-search — porque el predio
+    //     está subdividido en varias unidades casi idénticas y contiguas,
+    //     "CASA-A", "CASA-B"…, y el pin no alcanza a distinguirlas), ESE rol
+    //     manda: no se re-deriva por geometría, o el point-in-polygon sobre
+    //     dónde quedó el pin pisaría justo la elección manual que se acaba
+    //     de hacer.
     let rol: ResolvedRol | null = null
     let crm: CrmCaptacion | null = null
     let captacion: { id: string; sii_rol: string | null; comuna_name: string | null } | null = null
@@ -662,12 +670,25 @@ export async function PATCH(request: NextRequest) {
 
     if (!clearing) {
       try {
-        rol = await resolveRolAtPoint(latitude, longitude)
+        if (typeof rol_override === 'string' && rol_override.trim()) {
+          const comunaOverride = typeof rol_override_comuna === 'string' ? rol_override_comuna.trim() : ''
+          if (!comunaOverride) {
+            captacionError = 'rol_override requiere rol_override_comuna'
+          } else {
+            rol = await resolveRolByRol(comunaOverride, rol_override.trim())
+            if (!rol) captacionError = `El rol ${rol_override} no existe en la ficha SII ni en el catastro de la comuna ${comunaOverride}`
+          }
+        } else {
+          rol = await resolveRolAtPoint(latitude, longitude)
+          if (!rol) captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
+        }
         if (rol) {
-          // Persistir el rol confirmado a mano en la ficha canónica (máxima
-          // confianza: lo confirmó un humano). NO pisa latitude/longitude —
-          // el pin declarado por el anuncio sigue intacto; esto es la capa
-          // "resuelta" (rol_matriz + dirección exacta + parcela catastral).
+          // Persistir el rol confirmado (a mano por el pin, o a mano por
+          // búsqueda) en la ficha canónica (máxima confianza: lo confirmó un
+          // humano). NO pisa latitude/longitude — el pin declarado por el
+          // anuncio sigue intacto; esto es la capa "resuelta" (rol_matriz +
+          // dirección exacta + parcela catastral, si el catastro ya la tiene
+          // digitalizada por unidad).
           await pool.query(
             `UPDATE property_cl SET
                rol_matriz = $2, rol_confidence = 1, matched_parcel_id = $3,
@@ -676,11 +697,9 @@ export async function PATCH(request: NextRequest) {
             [id, rol.rol, rol.parcel_id, rol.direccion],
           )
           crm = await findCrmCaptacionByRol(rol.rol, rol.sii_comuna_code)
-        } else {
-          captacionError = 'No se encontró parcela SII bajo el pin (catastro sin cargar en esa zona)'
         }
       } catch (e) {
-        captacionError = e instanceof Error ? e.message : 'Error al resolver el rol bajo el pin'
+        captacionError = e instanceof Error ? e.message : 'Error al resolver el rol'
       }
 
       // Si además tenemos la URL del aviso cuya ubicación se está corrigiendo,
