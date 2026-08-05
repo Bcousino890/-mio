@@ -1,7 +1,7 @@
 # Plan — Localizador de Propiedades con IA (Chile)
 
-**v1.2 · 2026-08-05** · Estado: aprobado, pendiente de implementación
-*(v1.1: aprendizaje continuo, límite temporal de Open Buildings, Dedup 2.0, departamentos. v1.2: números reales — 73 captadas confirmadas y ~15.000 anuncios totales —, pestaña "Entrenar" de confirmación rápida con active learning, y aprendizaje desde las uniones manuales de corredoras)*
+**v1.3 · 2026-08-05** · Estado: aprobado, pendiente de implementación
+*(v1.1: aprendizaje continuo, límite temporal de Open Buildings, Dedup 2.0, departamentos. v1.2: números reales — 73 captadas confirmadas y ~15.000 anuncios totales —, pestaña "Entrenar" con active learning, aprendizaje desde uniones manuales. v1.3: cuadro maestro de fases con modelo por tarea y esfuerzo, y Fase 0 ampliada a "bases sólidas": nada roto antes de construir encima)*
 
 Anuncio de Portal Inmobiliario → propiedad exacta → **ROL SII**, al estilo Lystos (ES) / PropertyRadar (US), con presupuesto mínimo.
 
@@ -63,7 +63,27 @@ Principio de costes: **señales gratis primero, visión al final, todo cacheado*
 
 ## 4. Fases
 
-### Fase 0 — Fix bug pHash (quick win, sin migración)
+### Cuadro maestro — orden de ejecución, modelo por tarea y esfuerzo
+
+| Orden | Fase | Qué entrega | Modelo que lo ejecuta en producción | Esfuerzo dev | Depende de |
+|---|---|---|---|---|---|
+| 1º | **F0 Bases sólidas** | Nada roto: pHash encendido, S3 verificado, tests | Ninguno (dHash con `sharp`, determinista) | **S** (1-2 días) | — |
+| 2º | **F1 Localizador determinista** | `rol_matriz` automático por clúster, RM completa | Ninguno (SQL/PostGIS + log-odds) | **L** (3-5 días) | F0 |
+| 3º | **F7a+b Etiquetas + pestaña Entrenar** | Corpus de entrenamiento creciendo desde el día 1 | Ninguno (UI + SQL) | **M** (3-4 días) | F1 |
+| 4º | **F2 NLP de texto** | Calle/nº/condominio/hitos desde descripciones | `qwen3-8b` (AI_MODEL_CHEAP), temperature 0 | **M** (2-3 días) | F1 |
+| 5º | **F3 Visión + OCR de fotos** | Piscina/techo/estilo/nº de casa por anuncio, cacheado | `gemini-2.5-flash-lite` (AI_MODEL_WORKHORSE) | **M** (2-3 días) | F1, cache |
+| 6º | **F4 Huellas de techo** | Footprint por parcela (área/forma/orientación) | Ninguno (PostGIS + Open Buildings) | **M** (2-3 días) | F1 |
+| 7º | **F5 Desempate visual + cola revisión** | Foto↔satélite en empates; UI de revisión | `gemini-2.5-flash-lite` | **L** (3-4 días) | F2-F4 |
+| 8º | **F7c Calibración continua** | Pesos aprendidos de tus decisiones (cron semanal) | Regresión logística local (CPU, sin API) | **M** (2-3 días) | F7a+b, >300 etiquetas |
+| 9º | **F8 Dedup 2.0** | Señales nuevas de par (ROL, OCR, NLP, visual) | Reutiliza cache de F2/F3 (coste $0) | **M** (2-3 días) | F2, F3, F5 |
+| 10º | **F6 Embeddings pgvector** | Near-dups que el pHash pierde; fachada↔Street View | SigLIP/CLIP por lotes nocturnos (CPU VPS) | **M** (2-3 días) | corpus >1.500 |
+| 11º | **F9 Departamentos** | >95% a nivel edificio + lista corta de unidades | Los mismos de F2/F3/F5 | **L** (4-5 días) | F1-F5 estables |
+
+Esfuerzo: S = pequeño, M = medio, L = grande (días de desarrollo con Claude). **Regla transversal de calidad**: cada fase entrega con (a) su test `.test.mjs`/unitario con deps inyectadas — patrón ya usado en el repo —, (b) migraciones idempotentes (`IF NOT EXISTS`, re-ejecutables), (c) su gate de precisión medido con `eval-locator-cl.mjs` antes de pasar a la siguiente, y (d) sin tocar decisiones humanas existentes (`decided_by='human'` y `manual_property_lock` siempre se respetan — mismo principio que ya rige el dedup).
+
+**Desarrollo con Claude**: fases S/M rutinarias (F0, F4, F7a, F6) las puede implementar Sonnet 5 (rápido y barato); la lógica crítica de scoring, calibración y los merges del embudo (F1, F5, F7c, F8, F9) conviene hacerla con Opus/Fable 5 y pasar `/code-review` antes de cada push. En producción **ningún paso usa modelos caros**: el más costoso es flash-lite.
+
+### Fase 0 — Bases sólidas: nada roto antes de construir encima (sin migración)
 
 `scraper/lib/upsert-listing-cl.mjs:196-239` no escribe `cover_phash`/`photo_phashes` (columnas de `0028`), por lo que la señal `photos_match: 0.50` del dedup (`score-pair-cl.mjs:114`) llega siempre vacía y la triangulación por pHash de `identity-resolution-cl.mjs` no aporta.
 
@@ -71,8 +91,14 @@ Principio de costes: **señales gratis primero, visión al final, todo cacheado*
 - Nuevo `scraper/lib/phash-backfill-cl.mjs` (fallback si `HETZNER_S3_*` no está configurado — hoy `worker-cl.mjs:390` deshabilita media-sync sin credenciales): lotes de ~50 listings activos con `photo_phashes = '{}'`, máx 12 fotos c/u con `calculatePhashBatch()` de `phash.mjs`, escribe hashes y descarta buffers (cero almacenamiento). + test `.test.mjs` con deps inyectadas.
 - Registrar en `worker-cl.mjs`: cola `phash-backfill-cl`, cron `*/20 * * * *` (patrón `dedup-cluster-cl`).
 
-**Valor propio**: el dedup fusiona anuncios cross-corredora por foto → clústeres más ricos para todas las fases siguientes.
-**Verificación**: >90% de listings activos con phashes en 1 semana; delta de merges de `property_cl`; muestra manual de 20 pares nuevos.
+**Además, saneamiento de la base (todo lo detectado como roto o nunca probado):**
+- **Credenciales `HETZNER_S3_*` en el VPS** (acción del usuario, guiada): sin ellas `media-sync-cl` está deshabilitado y las fotos quedan solo como URLs — el cache por `content_hash` de F3 y los embeddings de F6 las necesitan persistidas.
+- **`hetzner-s3.mjs` probado contra el bucket real** (la capa de I/O nunca se validó, solo con cliente simulado): subir/leer/borrar un objeto de prueba y verificar dedup por `content_hash` end-to-end.
+- **Verificación de `listing_match_cl`**: confirmar con datos reales que la señal `photos_match` empieza a llegar poblada tras el fix (query de control en `/chile/anuncios-health`).
+- Smoke test de los cimientos que el plan reutiliza: `normalizar_rol_cl()` (formatos con/sin ceros), `resolveRolAtPoint()` en las 4 comunas con polígonos, y `findSiiCandidatesV3()` con un anuncio conocido.
+
+**Valor propio**: el dedup fusiona anuncios cross-corredora por foto → clústeres más ricos para todas las fases siguientes, y ninguna fase posterior se construye sobre algo roto.
+**Verificación**: >90% de listings activos con phashes en 1 semana; delta de merges de `property_cl`; muestra manual de 20 pares nuevos; media-sync subiendo fotos reales al bucket.
 
 ### Fase 1 — Localizador determinista a nivel clúster (cierra H11, coste $0)
 
