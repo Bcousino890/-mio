@@ -18,11 +18,13 @@ type Target = {
   notes: string | null
   last_failure_at: string | null; consecutive_failures: number
   live_portal_total: number | null; live_probed_at: string | null
+  live_bloqueo_antibot?: boolean
   cadencia: string
 }
 type Via = {
   via: 'directo' | 'evomi'; ok: boolean; http_status?: number; elapsed_ms: number
-  has_nordic_blob?: boolean; portal_total?: number | null; error?: string; veredicto: string
+  has_nordic_blob?: boolean; bloqueo_antibot?: boolean; tipo_respuesta?: string
+  portal_total?: number | null; error?: string; veredicto: string
 }
 type Diagnostico = {
   success: boolean; proxy_configurado: boolean
@@ -252,6 +254,14 @@ export default function AnunciosHealthClient() {
             {(() => {
               const bloqueados = data.targets.filter(x => (x.consecutive_failures ?? 0) > 0)
               if (bloqueados.length > 0) {
+                // Si el motivo ya se conoce —el portal está sirviendo su pantalla
+                // de verificación— el banner lo dice en vez de mandar a un
+                // diagnóstico a averiguarlo. Es el caso que dejó el barrido 5h
+                // parado detrás de un "respuesta no reconocida" que no orientaba
+                // a nada.
+                const porAntibot = bloqueados.filter(
+                  x => /antibot|tráfico sospechoso/i.test(x.notes ?? '') || x.live_bloqueo_antibot
+                )
                 return (
                   <div className="rounded-xl border px-4 py-3 mb-4 flex items-start gap-3 text-sm bg-rose-500/10 border-rose-500/30 text-rose-200">
                     <XCircle size={18} className="mt-0.5 shrink-0" />
@@ -260,10 +270,19 @@ export default function AnunciosHealthClient() {
                         El barrido está bloqueado en {bloqueados.length} de {data.targets.length} objetivos
                       </span>
                       <span className="text-slate-400"> · no consiguen leer ni una página · último anuncio visto {fresh}</span>
-                      <div className="text-[12px] text-rose-200/80 mt-1">
-                        No consumen cadencia: se reintentan solos cada 15 min hasta destrabarse.
-                        Pulsa <span className="font-semibold">Diagnosticar red</span> para ver si el problema es el proxy o el portal.
-                      </div>
+                      {porAntibot.length > 0 ? (
+                        <div className="text-[12px] text-rose-200/80 mt-1">
+                          Mercado Libre está devolviendo su pantalla de verificación de <span className="font-semibold">tráfico sospechoso</span> en {porAntibot.length} de ellos:
+                          contesta HTTP 200 pero sin un solo anuncio. No es el proxy ni el parser — es la reputación de la IP de salida.
+                          Cada reintento sale por otra IP residencial (se reintentan solos cada 15 min, sin consumir cadencia);
+                          si no se destraba, hay que cambiar de pool o de geo en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.
+                        </div>
+                      ) : (
+                        <div className="text-[12px] text-rose-200/80 mt-1">
+                          No consumen cadencia: se reintentan solos cada 15 min hasta destrabarse.
+                          Pulsa <span className="font-semibold">Diagnosticar red</span> para ver si el problema es el proxy o el portal.
+                        </div>
+                      )}
                     </div>
                   </div>
                 )

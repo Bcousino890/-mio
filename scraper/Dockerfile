@@ -47,5 +47,9 @@ COPY scraper/backfill-anuncios-cl.mjs ./
 # TypeScript del CRM y sus imports con alias (@/lib/db), que aquí no resuelven.
 COPY web/lib/smartbc/*.mjs /app/web/lib/smartbc/
 COPY web/lib/rol-format.mjs /app/web/lib/
+# pi-respuesta.mjs: lo importa lib/fetch.mjs para saber si lo que devolvió Portal
+# Inmobiliario es una página scrapeable o su pantalla antibot. Sin esta línea el
+# worker no arranca (MODULE_NOT_FOUND) y se cae TODO el barrido.
+COPY web/lib/pi-respuesta.mjs /app/web/lib/
 
 CMD ["node", "worker-cl.mjs"]

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
+import { clasificarHtmlPi, veredictoPi, PI_ANTIBOT, type TipoRespuestaPi } from '@/lib/pi-respuesta'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/anuncios-health/probe — sonda de red desde la VPS hacia Portal
@@ -10,12 +11,21 @@ import { ProxyAgent, fetch as undiciFetch } from 'undici'
 // una sonda que solo probaba el camino directo no medía lo que el worker hace de
 // verdad — podía decir "OK" mientras el barrido llevaba un día parado porque el
 // proxy rechazaba las credenciales. Probando las dos, el veredicto separa los
-// tres problemas que se veían todos igual (`circuit_open` a secas) y que tienen
+// problemas que se veían todos igual (`circuit_open` a secas) y que tienen
 // arreglos distintos:
 //   · el proxy no responde / rechaza credenciales → arreglar Evomi (Configuración)
 //   · el portal bloquea la IP de la VPS (403)      → hace falta el proxy
+//   · pantalla antibot de Mercado Libre con 200    → la IP está señalada: hay que
+//     rotar la salida del residencial (no es ni el proxy ni el parser)
 //   · 200 sin el blob `__NORDIC_RENDERING_CTX__`   → variante ligera: el parser
 //     saca 0 aunque el HTTP diga 200 (el fallo mudo que dejaba barridos en 0)
+//
+// El veredicto lo decide clasificarHtmlPi, el MISMO criterio que usa el worker
+// para dar una página por buena (web/lib/pi-respuesta.mjs). Antes esta sonda
+// tenía su propia regla —"¿contiene __NORDIC_RENDERING_CTX__?"— y por eso mentía
+// exactamente cuando más falta hacía: la pantalla antibot también trae ese
+// marcador, así que el panel decía "OK — Evomi recibe la variante con blob (se
+// puede scrapear)" mientras el barrido llevaba horas sin leer una sola página.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const dynamic = 'force-dynamic'
@@ -36,6 +46,9 @@ type Via = {
   html_bytes?: number
   elapsed_ms: number
   has_nordic_blob?: boolean
+  /** Qué llegó de verdad: página útil, pantalla antibot, variante ligera… */
+  tipo_respuesta?: TipoRespuestaPi
+  bloqueo_antibot?: boolean
   poly_cards?: number
   distinct_mlc_ids?: number
   portal_total?: number | null
@@ -76,24 +89,26 @@ async function sondear(via: 'directo' | 'evomi', proxyUrl?: string): Promise<Via
       ...(proxyUrl ? { dispatcher: new ProxyAgent(proxyUrl) } : {}),
     })
     const html = await res.text()
-    const hasBlob = html.includes('__NORDIC_RENDERING_CTX__')
+    const { usable, tipo } = clasificarHtmlPi(html)
     const totalMatch = html.match(/"total"\s*:\s*(\d+)/)
     const etiqueta = via === 'directo' ? 'la VPS' : 'Evomi'
     return {
       via,
-      ok: hasBlob,
+      ok: usable,
       http_status: res.status,
       html_bytes: html.length,
       elapsed_ms: Date.now() - started,
-      has_nordic_blob: hasBlob,
+      has_nordic_blob: html.includes('__NORDIC_RENDERING_CTX__'),
+      tipo_respuesta: tipo,
+      bloqueo_antibot: tipo === PI_ANTIBOT,
       poly_cards: (html.match(/poly-card/g) || []).length,
       distinct_mlc_ids: new Set(html.match(/MLC\d{10,}/g) || []).size,
       portal_total: totalMatch ? Number(totalMatch[1]) : null,
-      veredicto: hasBlob
-        ? `OK — ${etiqueta} recibe la variante con blob (se puede scrapear)`
-        : res.status !== 200
-          ? `BLOQUEO — HTTP ${res.status} por ${etiqueta}`
-          : `VARIANTE LIGERA — 200 sin blob por ${etiqueta}: el parser sacaría 0`,
+      // Un HTTP distinto de 200 se cuenta antes que el contenido: ahí el código
+      // ES el diagnóstico (403 = la IP vetada, 429 = demasiadas peticiones).
+      veredicto: !usable && res.status !== 200
+        ? `BLOQUEO — HTTP ${res.status} por ${etiqueta}`
+        : veredictoPi(tipo, etiqueta),
     }
   } catch (e) {
     const motivo = motivoDeError(e)
@@ -121,13 +136,21 @@ export async function GET() {
 
   // El worker barre por proxy, así que el estado del pipeline lo manda `evomi`;
   // `directo` sirve para saber si el problema es del proxy o del portal.
+  //
+  // El bloqueo antibot va en su propia rama y NO se mezcla con "el proxy no
+  // sirve": son diagnósticos opuestos. Si Evomi conecta y el portal contesta con
+  // la pantalla de verificación, el proxy está perfecto —credenciales, cuota y
+  // host incluidos— y mandar al usuario a revisarlos es hacerle perder el rato.
+  // Lo que falla es la REPUTACIÓN de la IP de salida.
   const veredicto = evomi.ok
     ? (directo.ok
         ? 'Todo en orden: el barrido puede pedir páginas por Evomi (y el directo también responde).'
         : 'El barrido funciona por Evomi. El acceso directo desde la VPS no sirve — por eso hace falta el proxy.')
-    : directo.ok
-      ? `El proxy Evomi NO sirve ahora mismo (${evomi.error ?? evomi.veredicto}), pero el portal SÍ responde directo desde la VPS. Revisa las credenciales/cuota en Configuración → Proxy (Evomi CL); mientras tanto el barrido usa el rescate directo.`
-      : `Ni por Evomi ni directo se consigue una página útil. Evomi: ${evomi.error ?? evomi.veredicto}. Directo: ${directo.error ?? directo.veredicto}.`
+    : evomi.bloqueo_antibot
+      ? `Mercado Libre le está sirviendo a la IP que sale por Evomi su pantalla de verificación de "tráfico sospechoso": responde HTTP 200 pero sin un solo anuncio. NO es el proxy ni las credenciales — es la reputación de esa IP de salida${directo.bloqueo_antibot ? ', y la IP de la VPS recibe el mismo bloqueo' : ''}. El barrido reintenta solo y cada intento sale por otra IP residencial; si el bloqueo persiste en todos, hay que cambiar de pool o de geo en Configuración → Proxy (Evomi CL).`
+      : directo.ok
+        ? `El proxy Evomi NO sirve ahora mismo (${evomi.error ?? evomi.veredicto}), pero el portal SÍ responde directo desde la VPS. Revisa las credenciales/cuota en Configuración → Proxy (Evomi CL); mientras tanto el barrido usa el rescate directo.`
+        : `Ni por Evomi ni directo se consigue una página útil. Evomi: ${evomi.error ?? evomi.veredicto}. Directo: ${directo.error ?? directo.veredicto}.`
 
   return NextResponse.json({
     success: true,

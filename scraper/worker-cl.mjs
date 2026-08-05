@@ -271,6 +271,13 @@ export async function handleDiscoveryHeadJob(dbClient, data, deps = {}) {
   const res = await scan(dbClient, data.target, { enqueueDetail: enq })
   if (res.enqueued > 0) {
     console.log(`[altas] ${data.target.comuna_name} ${data.target.operation}: ${res.enqueued} nuevas en ${res.pages} pág.`)
+  } else if (res.pages === 0 && res.reason && !/404/.test(res.reason)) {
+    // El barrido de cabecera es el que descubre las altas cada 30 min, y hasta
+    // ahora solo hablaba cuando encontraba algo. Si el portal devolvía un
+    // bloqueo, no leía ni una página y NADIE lo decía: el silencio se veía igual
+    // que un rato tranquilo sin publicaciones nuevas. El 404 se excluye porque
+    // ahí sí es normal (comuna sin inventario para ese tipo/operación).
+    console.warn(`[altas] ${data.target.comuna_name} ${data.target.operation}: ni una página leída (${res.reason})`)
   }
   return res
 }

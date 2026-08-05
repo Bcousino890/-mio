@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { motivoDeCurl, proxyUrl } from './fetch.mjs'
+import { motivoDeCurl, proxyUrl, evaluarRespuestaPi } from './fetch.mjs'
+import { isInfraFailure } from './resilient-fetch.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Clasificación de fallos de red del scraper. El objetivo de estos tests es que
@@ -58,4 +59,51 @@ test('las credenciales de Evomi se leen del .env en caliente, no del entorno con
   assert.equal(proxyUrl('portalinmobiliario'), 'http://portales3:clave@core-residential.evomi.com:1000')
   // Otros perfiles (Idealista/España) no tocan Evomi: su ruta queda intacta.
   assert.equal(proxyUrl('idealista'), null)
+})
+
+// ── ¿Sirve el 200 que devolvió Portal Inmobiliario? ──────────────────────────
+
+const relleno = 'x'.repeat(600)
+// Pantalla antibot de Mercado Libre, tal como llega: HTTP 200, con el marcador
+// Nordic (¡también lo lleva!) y sin initialState. Ver web/lib/pi-respuesta.mjs.
+const HTML_ANTIBOT = `<html data-assets-prefix="https://http2.mlstatic.com/frontend-assets/suspicious-traffic-frontend/"><head>
+<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={"appProps":{"pageProps":{"siteId":"MLC"}}}</script>
+</head><body><a href="/gz/account-verification">verificar</a>${relleno}</body></html>`
+const HTML_UTIL = `<html><head><script id="__NORDIC_RENDERING_CTX__">_n.ctx.r={"appProps":{"pageProps":{"initialState":{"results":[]}}}}</script></head><body>${relleno}</body></html>`
+
+test('un 200 con la pantalla antibot deja de contar como página buena', () => {
+  // El agujero que tuvo el barrido 5 h parado: el filtro era "¿trae el marcador
+  // Nordic?" y la pantalla de bloqueo lo trae, así que entraba como `ok: true`.
+  const r = evaluarRespuestaPi({ ok: true, status: 200, html: HTML_ANTIBOT })
+  assert.equal(r.ok, false)
+  assert.equal(r.bloqueo_antibot, true)
+  assert.match(r.reason, /antibot|tráfico sospechoso/i)
+})
+
+test('el bloqueo antibot se reintenta: es lo que hace rotar de IP al residencial', () => {
+  // Sin esto el barrido pedía la página UNA vez y se rendía. Como fallo de
+  // infraestructura, withResilience la vuelve a pedir con backoff y cada intento
+  // sale por otra IP del pool — que es la única forma real de destrabarse.
+  const r = evaluarRespuestaPi({ ok: true, status: 200, html: HTML_ANTIBOT })
+  assert.equal(isInfraFailure(r), true)
+})
+
+test('una página con initialState pasa intacta', () => {
+  const original = { ok: true, status: 200, html: HTML_UTIL }
+  assert.equal(evaluarRespuestaPi(original), original)
+})
+
+test('una respuesta ya fallida se devuelve tal cual: un 404 sigue siendo un 404', () => {
+  // Importa de verdad: el 404 es el final natural de la paginación de una comuna.
+  // Convertirlo en otra cosa rompería la detección de bajas (y lo reintentaría).
+  const cuatroCientosCuatro = { ok: false, status: 404, reason: 'HTTP 404' }
+  assert.equal(evaluarRespuestaPi(cuatroCientosCuatro), cuatroCientosCuatro)
+  assert.equal(isInfraFailure(cuatroCientosCuatro), false)
+})
+
+test('la variante ligera sigue detectándose, y no se confunde con el bloqueo', () => {
+  const r = evaluarRespuestaPi({ ok: true, status: 200, html: `<html><body>${relleno}</body></html>` })
+  assert.equal(r.ok, false)
+  assert.equal(r.bloqueo_antibot, false)
+  assert.match(r.reason, /ligera/i)
 })
