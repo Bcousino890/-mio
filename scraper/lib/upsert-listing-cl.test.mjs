@@ -47,6 +47,93 @@ test('los placeholders SQL ($N) del INSERT calzan 1:1 con params.length', async 
   assert.equal(maxPlaceholder, client.inserted.params.length);
 });
 
+/**
+ * Resuelve QUÉ VALOR acaba de verdad en cada columna del INSERT: empareja la
+ * lista de columnas con la de VALUES y sustituye cada $N por params[N-1].
+ *
+ * Contar placeholders (el test de arriba) NO basta y por eso este bug vivió
+ * cinco días en producción: al añadir price_usd/usd_rate/usd_rate_date EN MEDIO
+ * de la lista de columnas, el total siguió cuadrando mientras 19 columnas
+ * pasaban a recibir el valor de la de al lado. Postgres solo se quejó de las que
+ * además cambiaban de tipo — `invalid input syntax for type numeric:
+ * "2026-08-05"`, que era usd_rate recibiendo uf_rate_date— y las demás se
+ * guardaron mal en silencio.
+ */
+function valoresPorColumna(sqlCrudo, params) {
+  // Fuera los comentarios SQL: el INSERT lleva varios, y sus comas partirían la
+  // lista de columnas en trozos que no son columnas.
+  const sql = sqlCrudo.replace(/--[^\n]*/g, '');
+  const cuerpo = sql.slice(sql.indexOf('INSERT INTO listings_cl ('));
+  const columnas = cuerpo.slice(cuerpo.indexOf('(') + 1, cuerpo.indexOf(') VALUES'))
+    .split(',').map((c) => c.trim()).filter(Boolean);
+  const tras = cuerpo.slice(cuerpo.indexOf(') VALUES') + ') VALUES'.length);
+  const valores = tras.slice(tras.indexOf('(') + 1, tras.indexOf(')\n'))
+    .split(',').map((v) => v.trim()).filter(Boolean);
+  assert.equal(columnas.length, valores.length, 'el INSERT tiene distinto nº de columnas que de valores');
+  const mapa = new Map();
+  columnas.forEach((col, i) => {
+    const v = valores[i];
+    mapa.set(col, v.startsWith('$') ? params[Number(v.slice(1)) - 1] : v);
+  });
+  return mapa;
+}
+
+test('cada columna del INSERT recibe SU valor, no el de la de al lado', async () => {
+  const client = makeClient();
+  await upsertListingCl(client, {
+    ...BASE_PARSED,
+    price: 5000, currency: 'UF',              // fuerza conversión → uf_rate + uf_rate_date
+    photos: ['https://foto/1.jpg'], photos_total_count: 12,
+    has_video: true, video_modal_url: 'https://vm/x', advertiser_logo: 'https://logo/x.png',
+    parser_version: 7,
+  }, { ufRate: 39000, ufRateDate: '2026-08-05', scrapedAt: new Date('2026-08-05T22:00:00Z') });
+
+  const v = valoresPorColumna(client.inserted.sql, client.inserted.params);
+
+  // El descuadre exacto que reventaba en producción: una FECHA en una columna
+  // numérica. uf_rate_date es la fecha; usd_rate es numeric y no la lleva.
+  assert.equal(v.get('uf_rate_date'), '2026-08-05');
+  assert.equal(v.get('uf_rate'), 39000);
+  assert.notEqual(v.get('usd_rate'), '2026-08-05');
+
+  // Y el resto de la zona que se había corrido entera.
+  assert.equal(v.get('external_id'), 'MLC-1');
+  assert.equal(v.get('currency'), 'UF');
+  assert.equal(v.get('bedrooms'), 3);
+  assert.equal(v.get('bathrooms'), 2);
+  assert.equal(v.get('square_meters'), 100);
+  assert.equal(v.get('property_type'), 'casa');
+  assert.equal(v.get('address'), 'Av X 123');
+  assert.equal(v.get('latitude'), -33.4);
+  assert.equal(v.get('longitude'), -70.5);
+  assert.equal(v.get('description'), 'desc');
+  assert.equal(v.get('photos'), JSON.stringify(['https://foto/1.jpg']));
+  assert.equal(v.get('photos_total_count'), 12);
+  assert.equal(v.get('advertiser_logo'), 'https://logo/x.png');
+  assert.equal(v.get('parser_version'), 7);
+});
+
+test('ninguna columna numérica del INSERT recibe algo que Postgres no acepte como número', async () => {
+  // Guardia genérica: aunque alguien reordene y los nombres de arriba dejen de
+  // cuadrar, una fecha o un JSON metidos en una columna numeric se cazan aquí en
+  // el test y no con la cola de fichas atascada.
+  const NUMERICAS = ['price', 'price_uf', 'price_usd', 'usd_rate', 'uf_rate',
+    'latitude', 'longitude', 'bedrooms', 'bathrooms', 'square_meters', 'photos_total_count', 'parser_version'];
+  const client = makeClient();
+  await upsertListingCl(client, { ...BASE_PARSED, price: 5000, currency: 'UF', photos_total_count: 9 },
+    { ufRate: 39000, ufRateDate: '2026-08-05', usdRate: 950, usdRateDate: '2026-08-05' });
+
+  const v = valoresPorColumna(client.inserted.sql, client.inserted.params);
+  for (const col of NUMERICAS) {
+    const valor = v.get(col);
+    if (valor == null) continue;
+    assert.ok(
+      typeof valor === 'number',
+      `la columna numérica ${col} recibe ${JSON.stringify(valor)}, que no es un número`
+    );
+  }
+});
+
 test('has_video y video_modal_url se persisten en el INSERT', async () => {
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, has_video: true, video_modal_url: 'https://vm.example/video' });
@@ -63,11 +150,11 @@ test('sin video/logo/posted_days_ago en el parseo → defaults null/false (no re
   // Por posición absoluta ($N), no contando desde el final: añadir un campo
   // nuevo al INSERT desplazaba el final y rompía este test sin que nada
   // estuviera mal de verdad.
-  const param = (n) => client.inserted.params[n - 1];
-  assert.equal(param(31), false); // has_video
-  assert.equal(param(32), null); // video_modal_url
-  assert.equal(param(33), null); // advertiser_logo
-  assert.equal(param(34), null); // portal_first_seen_at
+  const col = valoresPorColumna(client.inserted.sql, client.inserted.params);
+  assert.equal(col.get('has_video'), false);
+  assert.equal(col.get('video_modal_url'), null);
+  assert.equal(col.get('advertiser_logo'), null);
+  assert.equal(col.get('portal_first_seen_at'), null);
 });
 
 test('photos_total_count (el total que declara el portal) se persiste', async () => {
@@ -76,7 +163,7 @@ test('photos_total_count (el total que declara el portal) se persiste', async ()
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 24 });
   assert.match(client.inserted.sql, /photos_total_count/);
-  assert.equal(client.inserted.params[34], 24); // $35
+  assert.equal(valoresPorColumna(client.inserted.sql, client.inserted.params).get('photos_total_count'), 24);
   // Y al refrescar no se pisa con null un total que ya se conocía.
   assert.match(client.inserted.sql, /photos_total_count = COALESCE\(EXCLUDED\.photos_total_count, listings_cl\.photos_total_count\)/);
 });
@@ -207,12 +294,12 @@ test('anuncio en una moneda que el esquema no acepta → se guarda igual, sin pr
   await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'EUR' });
 
   const sql = client.inserted.sql;
-  const param = (n) => client.inserted.params[n - 1]; // $N → params[N-1]
+  const param = (n) => valoresPorColumna(client.inserted.sql, client.inserted.params).get(n);
   // La moneda que llega a la base es una de las dos que el CHECK permite.
-  assert.ok(['CLP', 'UF', 'USD'].includes(param(13)));
+  assert.ok(['CLP', 'UF', 'USD'].includes(param('currency')));
   // Y el importe NO se copia: 450.000 euros no son 450.000 pesos.
-  assert.equal(param(9), null);  // price (CLP)
-  assert.equal(param(10), null); // price_uf
+  assert.equal(param('price'), null);
+  assert.equal(param('price_uf'), null);
   // Pero la ficha entra: es lo que se estaba perdiendo entera.
   assert.match(sql, /INSERT INTO listings_cl/);
   assert.ok(client.inserted.params.includes('Test Corredora'));
@@ -221,14 +308,16 @@ test('anuncio en una moneda que el esquema no acepta → se guarda igual, sin pr
 test('CLP y UF siguen pasando intactas', async () => {
   const clp = makeClient();
   await upsertListingCl(clp, { ...BASE_PARSED, price: 500_000_000, currency: 'CLP' });
-  assert.equal(clp.inserted.params[12], 'CLP'); // $13
-  assert.equal(clp.inserted.params[8], 500_000_000); // $9 price
+  const vClp = valoresPorColumna(clp.inserted.sql, clp.inserted.params);
+  assert.equal(vClp.get('currency'), 'CLP');
+  assert.equal(vClp.get('price'), 500_000_000);
 
   const uf = makeClient();
   await upsertListingCl(uf, { ...BASE_PARSED, price: 12_000, currency: 'UF' }, { ufRate: 40_000, ufRateDate: '2026-07-30' });
-  assert.equal(uf.inserted.params[12], 'UF');
-  assert.equal(uf.inserted.params[9], 12_000); // $10 price_uf
-  assert.equal(uf.inserted.params[8], 480_000_000); // $9 price = 12.000 × 40.000
+  const vUf = valoresPorColumna(uf.inserted.sql, uf.inserted.params);
+  assert.equal(vUf.get('currency'), 'UF');
+  assert.equal(vUf.get('price_uf'), 12_000);
+  assert.equal(vUf.get('price'), 480_000_000); // 12.000 × 40.000
 });
 
 // ─── una respuesta parcial del portal no puede borrar fotos ──────────────────
@@ -250,7 +339,7 @@ test('un re-scrapeo que trae MENOS fotos no pisa las que ya había', async () =>
   const parciales = guardadas.slice(0, 9);
   const { changeType } = await upsertListingCl(client, { ...BASE_PARSED, photos: parciales, photos_total_count: 29 });
 
-  assert.equal(JSON.parse(client.inserted.params[24]).length, 14); // $25 = photos
+  assert.equal(JSON.parse(valoresPorColumna(client.inserted.sql, client.inserted.params).get('photos')).length, 14); // $25 = photos
   assert.notEqual(changeType, 'updated'); // tampoco se registra un cambio que no hubo
 });
 
@@ -266,13 +355,13 @@ test('si el vendedor borra fotos de verdad, el set nuevo SÍ entra', async () =>
     },
   });
   await upsertListingCl(client, { ...BASE_PARSED, photos: guardadas.slice(0, 2), photos_total_count: 2 });
-  assert.equal(JSON.parse(client.inserted.params[24]).length, 2);
+  assert.equal(JSON.parse(valoresPorColumna(client.inserted.sql, client.inserted.params).get('photos')).length, 2);
 });
 
 test('una ficha nueva guarda lo que traiga, sin nada con qué comparar', async () => {
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, photos: ['a', 'b', 'c'], photos_total_count: 3 });
-  assert.equal(JSON.parse(client.inserted.params[24]).length, 3);
+  assert.equal(JSON.parse(valoresPorColumna(client.inserted.sql, client.inserted.params).get('photos')).length, 3);
 });
 
 // ─── anuncios publicados en dólares ──────────────────────────────────────────
@@ -285,19 +374,20 @@ test('anuncio en USD: se guarda el importe publicado y el CLP convertido con la 
   await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' },
     { usdRate: 950, usdRateDate: '2026-07-31' });
 
-  const param = (n) => client.inserted.params[n - 1];
-  assert.equal(param(13), 'USD');            // la moneda publicada se conserva
-  assert.equal(param(36), 450_000);          // price_usd = importe publicado
-  assert.equal(param(9), 427_500_000);       // price (CLP) = 450.000 × 950
-  assert.equal(param(37), 950);              // usd_rate usada
-  assert.equal(param(38), '2026-07-31');     // y su fecha, para poder auditarlo
+  const param = (n) => valoresPorColumna(client.inserted.sql, client.inserted.params).get(n);
+  assert.equal(param('currency'), 'USD');          // la moneda publicada se conserva
+  assert.equal(param('price_usd'), 450_000);       // importe publicado
+  assert.equal(param('price'), 427_500_000);       // CLP = 450.000 × 950
+  assert.equal(param('usd_rate'), 950);            // tasa usada
+  assert.equal(param('usd_rate_date'), '2026-07-31'); // y su fecha, para auditarlo
 });
 
 test('anuncio en USD sin tasa disponible: se guarda sin precio, nunca con uno falso', async () => {
   const client = makeClient();
   await upsertListingCl(client, { ...BASE_PARSED, price: 450_000, currency: 'USD' });
-  assert.equal(client.inserted.params[8], null);   // price (CLP)
-  assert.equal(client.inserted.params[35], 450_000); // price_usd sí se conserva
+  const sinTasa = valoresPorColumna(client.inserted.sql, client.inserted.params);
+  assert.equal(sinTasa.get('price'), null);
+  assert.equal(sinTasa.get('price_usd'), 450_000); // el importe publicado sí se conserva
 });
 
 test('anuncio en USD: mover el tipo de cambio NO es un cambio de precio', async () => {
