@@ -81,7 +81,26 @@ Principio de costes: **señales gratis primero, visión al final, todo cacheado*
 
 Esfuerzo: S = pequeño, M = medio, L = grande (días de desarrollo con Claude). **Regla transversal de calidad**: cada fase entrega con (a) su test `.test.mjs`/unitario con deps inyectadas — patrón ya usado en el repo —, (b) migraciones idempotentes (`IF NOT EXISTS`, re-ejecutables), (c) su gate de precisión medido con `eval-locator-cl.mjs` antes de pasar a la siguiente, y (d) sin tocar decisiones humanas existentes (`decided_by='human'` y `manual_property_lock` siempre se respetan — mismo principio que ya rige el dedup).
 
-**Desarrollo con Claude**: fases S/M rutinarias (F0, F4, F7a, F6) las puede implementar Sonnet 5 (rápido y barato); la lógica crítica de scoring, calibración y los merges del embudo (F1, F5, F7c, F8, F9) conviene hacerla con Opus/Fable 5 y pasar `/code-review` antes de cada push. En producción **ningún paso usa modelos caros**: el más costoso es flash-lite.
+### Desarrollo con Claude — qué modelo desarrolla cada fase y con qué esfuerzo
+
+Criterio: **Sonnet 5** para trabajo con patrón claro a seguir (rápido y barato); **Opus 5** para integración con lógica existente delicada; **Fable 5 con esfuerzo alto** solo donde un error cuesta caro (scoring, calibración, merges — un peso mal puesto une propiedades que no son la misma o confirma ROLes equivocados). Regla fija: **`/code-review` antes de cada push** en las fases marcadas 🔴.
+
+| Fase | Qué se programa | Modelo de desarrollo | Esfuerzo de razonamiento | Riesgo |
+|---|---|---|---|---|
+| F0 Bases sólidas | Fix upsert, backfill pHash, tests S3 | Sonnet 5 | Medio | 🟢 patrón existente |
+| F1 Localizador | `property-locator-cl.ts`: fusión de evidencia, integración con `captar-pipeline`/`decideMatch`, propagación a `property_cl` | **Fable 5** | **Alto** | 🔴 corazón del sistema; escribe ROLes |
+| F7a Semilla etiquetas | Migración 0104 + `seed-locator-labels-cl.mjs` | Sonnet 5 | Medio | 🟢 ETL directo |
+| F7b Pestaña Entrenar | UI + endpoint + selección active learning | Sonnet 5 (UI) / Opus 5 (selección de casos) | Medio | 🟡 UX simple, query de duda con criterio |
+| F2 NLP texto | Prompt + parser + inyección en candidatos | Opus 5 | Medio | 🟡 un prompt malo mete direcciones falsas |
+| F3 Visión+OCR | Prompt VLM + cache + agregación anti-alucinación | Opus 5 | Medio | 🟡 ídem; la agregación acota el daño |
+| F4 Footprints | Ingesta streaming (Sonnet) + señal `footprintEvidence` en scoring (Fable) | Sonnet 5 / **Fable 5** | Medio / **Alto** | 🔴 la señal toca el scoring |
+| F5 Desempate+cola | UI revisión (Sonnet) + re-score con `visual_score` (Fable) | Sonnet 5 / **Fable 5** | Medio / **Alto** | 🔴 re-score decide confirmaciones |
+| F7c Calibración | Regresión logística + reporte de pesos | **Fable 5** | **Alto** | 🔴 matemática que gobierna todo |
+| F8 Dedup 2.0 | Señales de par nuevas + guardarraíles | **Fable 5** | **Alto** | 🔴 falsos merges = fichas contaminadas |
+| F6 Embeddings | Batch SigLIP + pgvector + búsqueda | Sonnet 5 | Medio | 🟢 aislado, no decide nada solo |
+| F9 Departamentos | Generador de candidatos edificio/unidad (Fable) + UI (Sonnet) | **Fable 5** / Sonnet 5 | **Alto** / Medio | 🔴 lógica nueva de matching |
+
+En producción **ningún paso usa modelos caros**: el más costoso es flash-lite. El gasto en modelos de desarrollo se concentra una sola vez en las 6 piezas 🔴; todo lo demás es Sonnet.
 
 ### Fase 0 — Bases sólidas: nada roto antes de construir encima (sin migración)
 
