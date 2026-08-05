@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { motivoDeCurl, proxyUrl, evaluarRespuestaPi } from './fetch.mjs'
-import { isInfraFailure } from './resilient-fetch.mjs'
+import { motivoDeCurl, proxyUrl, evaluarRespuestaPi, circuitoPi } from './fetch.mjs'
+import { isInfraFailure, withResilience, _resetAllCircuits, getCircuitState } from './resilient-fetch.mjs'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Clasificación de fallos de red del scraper. El objetivo de estos tests es que
@@ -106,4 +106,52 @@ test('la variante ligera sigue detectándose, y no se confunde con el bloqueo', 
   assert.equal(r.ok, false)
   assert.equal(r.bloqueo_antibot, false)
   assert.match(r.reason, /ligera/i)
+})
+
+// ── El listado bloqueado no debe llevarse por delante a las fichas ───────────
+
+test('listado y ficha van en circuitos distintos', () => {
+  const PI = 'https://www.portalinmobiliario.com'
+  const listado = circuitoPi(`${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana/_Desde_49_OrderId_BEGINS*DESC_NoIndex_True`)
+  const ficha = circuitoPi(`${PI}/MLC-4205367480-casa-en-venta-las-condes-_JM`)
+  assert.notEqual(listado, ficha)
+  assert.match(listado, /listado/)
+  assert.match(ficha, /ficha/)
+  // Un permalink de ficha en otro subdominio sigue siendo ficha.
+  assert.match(circuitoPi('https://casa.portalinmobiliario.com/MLC-1234567890-x_JM'), /ficha/)
+  // El arriendo también es listado.
+  assert.match(circuitoPi(`${PI}/arriendo/departamento/propiedades-usadas/vitacura-metropolitana`), /listado/)
+})
+
+test('el circuito abierto del LISTADO no bloquea la descarga de fichas', async (t) => {
+  // El efecto que hubo que corregir: con un solo circuito por dominio, los
+  // bloqueos del listado lo abrían y durante el enfriamiento morían también las
+  // fichas — que el portal sí sirve. En el panel se veía como 8 objetivos
+  // fallando con `circuit_open` sin pedir una sola página, y la cola de fichas
+  // arrastrándose.
+  _resetAllCircuits()
+  t.after(() => _resetAllCircuits())
+
+  const PI = 'https://www.portalinmobiliario.com'
+  const urlListado = `${PI}/venta/casa/propiedades-usadas/las-condes-metropolitana`
+  const urlFicha = `${PI}/MLC-4205367480-casa_JM`
+  const bloqueado = async () => ({ ok: false, status: 200, reason: 'bloqueo antibot de Mercado Libre' })
+
+  // Cinco llamadas fallidas al LISTADO: cruza el umbral y abre SU circuito.
+  for (let i = 0; i < 5; i++) {
+    await withResilience(bloqueado, urlListado, { retries: 1, circuitKey: circuitoPi(urlListado) })
+  }
+  const r = await withResilience(bloqueado, urlListado, { retries: 1, circuitKey: circuitoPi(urlListado) })
+  assert.match(r.reason, /circuit_open/, 'el circuito del listado debería estar abierto');
+  assert.equal(getCircuitState(circuitoPi(urlListado)).status, 'open')
+
+  // Y la ficha, que va por otra puerta, sigue pudiendo pedirse.
+  let pedida = false
+  const ok = await withResilience(
+    async () => { pedida = true; return { ok: true, html: 'ficha' } },
+    urlFicha,
+    { retries: 1, circuitKey: circuitoPi(urlFicha) }
+  )
+  assert.equal(pedida, true, 'la ficha ni siquiera se intentó: el circuito del listado la bloqueó')
+  assert.equal(ok.ok, true)
 })

@@ -306,13 +306,54 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
  * @param {string} url
  * @param {{ useProxy?: boolean, profile?: string, retries?: number, baseBackoffMs?: number, failureThreshold?: number, cooldownMs?: number }} [options]
  */
+/**
+ * Circuito SEPARADO para el listado y para la ficha de Portal Inmobiliario.
+ *
+ * No son la misma puerta aunque compartan dominio: Mercado Libre protege con
+ * dureza las páginas de BÚSQUEDA por comuna y sirve las FICHAS con normalidad.
+ * Medido en producción con todo bloqueado: 46 fichas bajadas y parseadas bien
+ * frente a 11 bloqueos del listado, en la misma hora y por el mismo proxy.
+ *
+ * Con un circuito único por dominio, los bloqueos del listado lo abrían y
+ * durante el enfriamiento morían también las fichas — que sí habrían pasado. El
+ * panel lo enseñaba sin ambigüedad: los 8 objetivos fallando con `circuit_open`
+ * sin haber pedido una sola página, y la cola de fichas (15.882) drenando a
+ * ~50/hora en vez de a su ritmo.
+ *
+ * Exportado para test: es pura decisión sobre la URL, sin red.
+ */
+export function circuitoPi(url) {
+  let host = 'portalinmobiliario.com'
+  try {
+    host = new URL(url).hostname
+  } catch {
+    // URL rara: se agrupa igual por la clase de página, que es lo que importa.
+  }
+  // Las fichas son `…/MLC-1234567890…` (con o sin guion, con o sin slug).
+  if (/\bMLC-?\d{6,}/i.test(url)) return `${host}#ficha`
+  // El listado es `/venta/…` o `/arriendo/…` (con sus filtros `_Desde_`, etc.).
+  if (/\/(venta|arriendo)\//i.test(url)) return `${host}#listado`
+  return host
+}
+
 export function fetchHtmlResilient(url, options = {}) {
   const { useProxy, profile, ...resilienceOptions } = options
   // Portal Inmobiliario, sin useProxy explícito: directo-primero con fallback a
   // Evomi (fetchHtmlPi). Es lo que hace que el barrido ingrese datos de forma
   // fiable en vez de depender de que el residencial devuelva la variante buena.
   if (profile === 'portalinmobiliario' && useProxy === undefined) {
-    return withResilience(fetchHtmlPi, url, { ...resilienceOptions, fetchOpts: { profile } })
+    return withResilience(fetchHtmlPi, url, {
+      circuitKey: circuitoPi(url),
+      ...resilienceOptions,
+      fetchOpts: { profile },
+    })
+  }
+  if (profile === 'portalinmobiliario') {
+    return withResilience(fetchHtml, url, {
+      circuitKey: circuitoPi(url),
+      ...resilienceOptions,
+      fetchOpts: { useProxy, profile },
+    })
   }
   return withResilience(fetchHtml, url, { ...resilienceOptions, fetchOpts: { useProxy, profile } })
 }
