@@ -1,7 +1,7 @@
 # Plan — Localizador de Propiedades con IA (Chile)
 
 **v1.4 · 2026-08-05** · Estado: aprobado, pendiente de implementación
-*(v1.1: aprendizaje continuo, límite Open Buildings, Dedup 2.0, departamentos · v1.2: números reales, pestaña "Entrenar", aprendizaje desde uniones manuales · v1.3: cuadro maestro con modelo y esfuerzo, F0 "bases sólidas" · v1.4: §10 Orquestación — 4 puestos paralelos con cuentas de Claude, propiedad exclusiva de archivos, contratos congelados y orden de integración)*
+*(v1.1: aprendizaje continuo, límite Open Buildings, Dedup 2.0, departamentos · v1.2: números reales, pestaña "Entrenar", aprendizaje desde uniones manuales · v1.3: cuadro maestro con modelo y esfuerzo, F0 "bases sólidas" · v1.4: §10 Orquestación — 3 puestos paralelos con cuentas de Claude, propiedad exclusiva de archivos, contratos congelados y orden de integración)*
 
 Anuncio de Portal Inmobiliario → propiedad exacta → **ROL SII**, al estilo Lystos (ES) / PropertyRadar (US), con presupuesto mínimo.
 
@@ -100,7 +100,7 @@ Criterio: **Sonnet 5** para trabajo con patrón claro a seguir (rápido y barato
 | F6 Embeddings | Batch SigLIP + pgvector + búsqueda | Sonnet 5 | Medio | 🟢 aislado, no decide nada solo |
 | F9 Departamentos | Generador de candidatos edificio/unidad (Fable) + UI (Sonnet) | **Fable 5** / Sonnet 5 | **Alto** / Medio | 🔴 lógica nueva de matching |
 
-En producción **ningún paso usa modelos caros**: el más costoso es flash-lite. El gasto en modelos de desarrollo se concentra una sola vez en las 6 piezas 🔴; todo lo demás es Sonnet.
+En producción **ningún paso usa modelos caros**: el más costoso es flash-lite. El gasto en modelos de desarrollo se concentra una sola vez en las 6 piezas 🔴; todo lo demás es Sonnet. El reparto de estas fases entre las 3 personas del equipo está en **§10**.
 
 ### Fase 0 — Bases sólidas: nada roto antes de construir encima (sin migración)
 
@@ -357,78 +357,70 @@ Para F8-F9 (dedup 2.0 y departamentos): extender `scraper/lib/score-pair-cl.mjs`
 
 ---
 
-## 10. Orquestación — trabajo en paralelo con varias cuentas de Claude
+## 10. Orquestación — trabajo en paralelo con 3 personas
 
-Cuatro puestos que pueden avanzar **a la vez sin pisarse**, porque el reparto es por **propiedad exclusiva de archivos**, no por fases sueltas. Cada persona abre Claude Code en su cuenta, lee este documento y su brief, y trabaja SOLO en sus archivos y su rama.
+Tres puestos que avanzan **a la vez sin pisarse**, porque el reparto es por **propiedad exclusiva de archivos**, no por fases sueltas. Cada persona abre Claude Code en su cuenta, lee este plan y su brief, y trabaja SOLO en sus archivos y su rama.
+
+| Puesto | Rol | Modelo | Migraciones | Carga aprox. |
+|---|---|---|---|---|
+| **P1 — Núcleo** 🔴 | El cerebro: decide qué ROL es cada propiedad | Fable 5 (esfuerzo alto) + `/code-review` siempre | `0100` | ~13 días |
+| **P2 — Datos e IA** | El combustible: arregla lo roto, carga footprints, extrae texto y fotos | Sonnet 5 (infra) / Opus 5 (prompts) | `0101`, `0102` | ~10 días |
+| **P3 — Producto y entrenamiento** | La interfaz y el corpus: pestaña Entrenar, cola de revisión, etiquetas | Sonnet 5 (UI) / Opus 5 (active learning) | `0104` | ~9 días |
+
+`0103` queda reservada para pgvector (F6, más adelante). Los tres arrancan el día 1 sin depender unos de otros.
 
 ### 10.1 Reglas de convivencia (obligatorias para todos)
 
-1. **Rama propia por puesto**: `feat/localizador-p1-infra`, `feat/localizador-p2-nucleo`, `feat/localizador-p3-ia`, `feat/localizador-p4-ui`. PRs pequeños (una pieza por PR) contra `main`, mergeados SOLO en el orden de integración de §10.4.
-2. **Propiedad exclusiva**: cada archivo tiene UN dueño (tabla §10.2). Si necesitas cambiar un archivo ajeno, NO lo toques: pídeselo a su dueño (comentario en el PR o al coordinador). Los dos archivos más peleados ya tienen dueño fijo: `scraper/worker-cl.mjs` → P1; `web/lib/sii-match-cl-v2.ts` y `captar-pipeline.ts` → P2.
-3. **Números de migración reservados** (no negociables, así nunca chocan): P2 → `0100`; P3 → `0101`; P1 → `0102`; P4 → `0104`. La `0103` (pgvector, F6) queda libre para quien llegue a esa fase. Si alguien necesita una migración extra, pide número al coordinador ANTES de escribirla.
-4. **Contratos congelados** (§10.3): los JSON y firmas que cruzan puestos no se cambian sin avisar al coordinador. Puedes AÑADIR campos, nunca renombrar ni quitar.
-5. Cada PR entrega con: tests (`.test.mjs`/unitario, deps inyectadas), migraciones idempotentes, y `/code-review` pasado si es pieza 🔴 (ver tabla de desarrollo en §4).
+1. **Rama propia**: `feat/localizador-p1-nucleo`, `feat/localizador-p2-datos`, `feat/localizador-p3-producto`. PRs pequeños (una pieza por PR) contra `main`, mergeados en el orden de §10.4.
+2. **Propiedad exclusiva de archivos** (§10.2): cada archivo tiene UN dueño. Si necesitas cambiar uno ajeno, NO lo toques — pídeselo a su dueño en el PR. Los tres más disputados ya tienen dueño fijo: `scraper/worker-cl.mjs` → **P2**; `web/lib/sii-match-cl-v2.ts` y `captar-pipeline.ts` → **P1**; `web/lib/property-cl-merge.ts` → **P3**.
+3. **Números de migración reservados** (no negociables): P1 → `0100`; P2 → `0101` y `0102`; P3 → `0104`. Si alguien necesita una migración extra, pide número al coordinador ANTES de escribirla.
+4. **Contratos congelados** (§10.3): los JSON y firmas que cruzan puestos no se cambian sin avisar. Puedes AÑADIR campos, nunca renombrar ni quitar.
+5. Cada PR entrega con: tests (`.test.mjs`/unitario, deps inyectadas), migraciones idempotentes, y `/code-review` pasado si es pieza 🔴.
 6. **Intocable para todos**: decisiones humanas (`decided_by='human'`, `manual_property_lock`, pins manuales) y los snapshots crudos. Nada de tu código las revierte jamás.
-7. Tras cada merge a `main`, todos hacen `git fetch origin main && git rebase origin/main` antes de seguir.
+7. Tras cada merge a `main`: `git fetch origin main && git rebase origin/main` antes de seguir.
 
-### 10.2 Los 4 puestos
+### 10.2 Los 3 puestos
 
-**P1 — Infra & Datos (Sonnet 5, esfuerzo medio) — arranca YA, sin dependencias**
-- Fases: **F0 completa** (fix pHash en `media-sync-cl.mjs`, nuevo `phash-backfill-cl.mjs` + test, saneamiento S3 real, smoke tests) → **F7a** (`seed-locator-labels-cl.mjs`, cuando P4 tenga la 0104 mergeada) → **F4a** (`ingest-open-buildings-cl.mjs` streaming + migración `0102`).
-- Dueño de: `scraper/lib/media-sync-cl.mjs`, `scraper/lib/phash-backfill-cl.mjs`, `scraper/ingest-open-buildings-cl.mjs`, `scraper/seed-locator-labels-cl.mjs`, **`scraper/worker-cl.mjs`** (registra TODAS las colas nuevas, también las que pidan P2/P3 — se las piden por PR comment), migración `0102`.
-- Definición de hecho: phashes poblados >90%, bucket real probado, footprints RM cargados con la MV `parcel_footprint_stats_cl`.
+**P1 — Núcleo del localizador** · brief: `docs/localizador-briefs/P1-NUCLEO.md`
+- Fases: **F1** (migración `0100` + `property-locator-cl.ts` + endpoint + feeder + `eval-locator-cl.mjs`) → **F4b** (señal footprint en el scoring) → **F5b** (re-score visual) → **F7c** (calibración) → **F8** (dedup 2.0).
+- Dueño de: `web/lib/property-locator-cl.ts`, `web/lib/sii-match-cl-v2.ts`, `web/lib/captar-pipeline.ts`, `web/app/api/chile/property-locator/route.ts`, `scraper/lib/locator-feeder-cl.mjs`, `scraper/lib/score-pair-cl.mjs`, `scraper/lib/clustering-cl.mjs`, `scraper/calibrate-locator-cl.mjs`, `scraper/eval-locator-cl.mjs`, migración `0100`.
+- Gate: precisión de `auto_confirmed` **≥95%** en el gold set antes de cada merge que toque scoring.
 
-**P2 — Núcleo del localizador (Fable 5, esfuerzo ALTO, 🔴 /code-review siempre) — arranca YA en paralelo**
-- Fases: **F1** (migración `0100` + `web/lib/property-locator-cl.ts` + `web/app/api/chile/property-locator/route.ts` + `scraper/lib/locator-feeder-cl.mjs`*) → **F4b** (señal `footprintEvidence` en el scoring, cuando P1 tenga la MV) → **F5b** (re-score con `visual_score`) → **F7c** (`calibrate-locator-cl.mjs`) → **F8**.
-  *El feeder lo escribe P2 pero su registro en worker-cl.mjs lo hace P1.
-- Dueño de: `web/lib/property-locator-cl.ts`, `web/lib/sii-match-cl-v2.ts`, `web/lib/captar-pipeline.ts`, `scraper/lib/score-pair-cl.mjs` (F8), `scraper/calibrate-locator-cl.mjs`, `scraper/eval-locator-cl.mjs`, migración `0100`.
-- Definición de hecho por pieza: `eval-locator-cl.mjs` corriendo y precisión auto_confirmed ≥95% en el gold set antes de cada merge que toque scoring.
+**P2 — Datos e IA** · brief: `docs/localizador-briefs/P2-DATOS-E-IA.md`
+- Fases: **F0 bases sólidas** (fix pHash, backfill, saneamiento S3, smoke tests) → **`0101` cache** → **F2 NLP** → **F3 visión/OCR** → **F4a footprints** (`0102`).
+- Dueño de: `scraper/lib/media-sync-cl.mjs`, `scraper/lib/phash-backfill-cl.mjs`, `scraper/ingest-open-buildings-cl.mjs`, **`scraper/worker-cl.mjs`** (registra TODAS las colas nuevas, también las que le pida P1), `web/lib/text-clues-cl.ts`, `web/lib/photo-attrs-cl.ts`, `web/lib/visual-match-cl.ts`, migraciones `0101` y `0102`.
+- Sus módulos de IA son **funciones puras** (entra texto/fotos, sale JSON): por eso nunca chocan con el scoring de P1.
 
-**P3 — IA: prompts y extracción (Opus 5, esfuerzo medio) — arranca YA en paralelo**
-- Fases: **F2** (`web/lib/text-clues-cl.ts` + migración `0101` ai_cache) → **F3** (`web/lib/photo-attrs-cl.ts` con cache por content_hash y agregación anti-alucinación) → **F5a-visión** (ajustes de prompt de `visual-match-cl.ts` si hacen falta).
-- Dueño de: `web/lib/text-clues-cl.ts`, `web/lib/photo-attrs-cl.ts`, `web/lib/visual-match-cl.ts`, migración `0101`.
-- Clave: sus módulos son **funciones puras** — reciben textos/fotos, devuelven el JSON del contrato §10.3, no tocan el scoring ni la BD de propiedades. Así P3 nunca choca con P2: P2 las llama cuando estén.
-- Definición de hecho: precisión ≥90% en muestra manual de 50 descripciones (F2) y 50 fotos (F3); coste por llamada registrado en `ai_cache_cl`.
-
-**P4 — UI y entrenamiento (Sonnet 5; la query de active learning con Opus 5) — arranca YA con datos mock**
-- Fases: **F7b** (migración `0104` locator_labels + `web/app/chile/localizador/page.tsx` pestañas Revisión/Entrenar + `web/app/api/chile/property-locator/{[id]/confirm,entrenar}/route.ts`) → **F5a** (cola de revisión con mapa de candidatos) → extensión de `property-cl-merge.ts` para que unir/separar escriba etiquetas.
-- Dueño de: todo `web/app/chile/localizador/`, `web/app/api/chile/property-locator/[id]/confirm/` y `/entrenar/`, `web/lib/property-cl-merge.ts`, migración `0104`.
-- Empieza con **datos mock que cumplen el contrato `candidates` de §10.3** (no espera a P2); conecta el dato real cuando F1 esté en main.
-- Definición de hecho: etiquetar 25 casos en <5 min con teclado; cada "Es exacta" escribe etiqueta + confirma ROL.
+**P3 — Producto y entrenamiento** · brief: `docs/localizador-briefs/P3-PRODUCTO-ENTRENAMIENTO.md`
+- Fases: **`0104` etiquetas** → **F7a semilla** (importa captaciones confirmadas, pins manuales y todas las uniones/separaciones manuales ya hechas) → **F7b pestaña Entrenar** → **etiquetas desde merge/split futuros** → **F5a cola de revisión**.
+- Dueño de: todo `web/app/chile/localizador/`, `web/app/api/chile/property-locator/[id]/confirm/` y `/entrenar/`, `web/lib/property-cl-merge.ts`, `scraper/seed-locator-labels-cl.mjs`, migración `0104`.
+- Arranca con **datos mock** que cumplen el contrato `candidates` (§10.3) — no espera a P1; conecta el dato real cuando F1 esté en main.
 
 ### 10.3 Contratos congelados (la interfaz entre puestos)
 
-1. **`property_locator_cl`** (migración 0100, P2): columnas y estados exactamente como en §4-F1. P4 lee `status`, `evidence`, `candidates`; no escribe más que vía sus endpoints.
-2. **`candidates` jsonb** (P2 escribe, P4 pinta): `[{rol, sii_comuna_code, direccion, probability, rank, signals: {address, distance, land_area, built_area, floors, footprint, visual}, lat, lng, parcel_id}]`.
-3. **`text_clues` JSON** (P3 → P2): `{calle, numero, condominio, esquina_con, hitos:[{nombre, relacion}], sector, orientacion, pisos, piscina, rol_sii_mencionado, confianza}` — null si no aparece.
-4. **`photo_attrs` JSON** (P3 → P2): `{es_exterior, piscina:{presente, forma, posicion_relativa}, pisos_visibles, techo:{material, color}, estilo, numero_casa_ocr:{valor, confianza}, cerros_visibles, quincho, cancha, paneles_solares}` — por foto, null si no se distingue.
-5. **`ai_cache_cl`** (0101, P3) y **`locator_labels_cl`** (0104, P4): esquemas exactamente como en §4.
-6. **`parcel_footprint_stats_cl`** (0102, P1): `parcel_id, rol, comuna_id, building_count, footprint_total_m2, footprint_main_m2`.
-7. Funciones expuestas: P3 exporta `extractTextClues(texts: string[]): Promise<TextClues>` y `extractPhotoAttrs(photos: PhotoRef[]): Promise<PhotoAttrs[]>`; P2 exporta `locateProperty(propertyClId: string)`; P1 expone las colas pg-boss con los nombres de §4.
+1. **`property_locator_cl`** (0100, P1): columnas y estados exactamente como en §4-F1. P3 lee `status`, `evidence`, `candidates`; solo escribe vía sus endpoints.
+2. **`candidates` jsonb** (P1 escribe, P3 pinta): `[{rol, sii_comuna_code, direccion, probability, rank, signals:{address, distance, land_area, built_area, floors, footprint, visual}, lat, lng, parcel_id}]`.
+3. **`text_clues` JSON** (P2 → P1): `{calle, numero, condominio, esquina_con, hitos:[{nombre, relacion}], sector, orientacion, pisos, piscina, rol_sii_mencionado, confianza}` — null si no aparece.
+4. **`photo_attrs` JSON** (P2 → P1): por foto — `{es_exterior, piscina:{presente, forma, posicion_relativa}, pisos_visibles, techo:{material, color}, estilo, numero_casa_ocr:{valor, confianza}, cerros_visibles, quincho, cancha, paneles_solares}`.
+5. **`ai_cache_cl`** (0101, P2), **`parcel_footprint_stats_cl`** (0102, P2: `parcel_id, rol, comuna_id, building_count, footprint_total_m2, footprint_main_m2`) y **`locator_labels_cl`** (0104, P3): esquemas exactamente como en §4.
+6. Funciones exportadas: P2 → `extractTextClues(texts: string[]): Promise<TextClues>` y `extractPhotoAttrs(photos: PhotoRef[]): Promise<PhotoAttrs[]>`; P1 → `locateProperty(propertyClId: string)`; P2 expone las colas pg-boss con los nombres de §4.
 
 ### 10.4 Orden de integración a `main`
 
 ```
-1. P1: F0 (pHash + saneamiento)          ← desbloquea señal de fotos
-2. P2: 0100 + F1 núcleo                  ← desbloquea a P4 (dato real) y P1 (seed)
-3. P4: 0104 + pestaña Entrenar           │ 4. P3: 0101 + F2 NLP     (3 y 4 en cualquier orden)
-5. P1: seed etiquetas (F7a)              │ 6. P3: F3 visión         (5 y 6 en cualquier orden)
-7. P1: 0102 + footprints → 8. P2: señal footprint (F4b)
-9. P4: cola revisión (F5a) → 10. P2: re-score visual (F5b)
-11. P2: calibración (F7c) → 12. P2: dedup 2.0 (F8)
+1. P2: F0 bases sólidas (pHash + saneamiento)   ← desbloquea la señal de fotos
+2. P1: 0100 + F1 núcleo                         ← desbloquea el dato real de P3
+3. P3: 0104 + semilla + pestaña Entrenar   ∥   4. P2: 0101 + F2 NLP
+5. P2: F3 visión/OCR                       ∥   6. P3: etiquetas desde merge/split
+7. P2: 0102 + footprints  →  8. P1: señal footprint (F4b)
+9. P3: cola de revisión (F5a)  →  10. P1: re-score visual (F5b)
+11. P1: calibración (F7c)  →  12. P1: dedup 2.0 (F8)
 ```
 
-Coordinador (el dueño del proyecto o quien designe): asigna números de migración extra, aprueba cambios de contrato, y mergea en este orden. Si un puesto se bloquea esperando un merge, adelanta la siguiente pieza propia de su lista — cada puesto tiene siempre trabajo no bloqueado.
+Los pasos con `∥` van en cualquier orden. Si un puesto se bloquea esperando un merge, adelanta la siguiente pieza propia de su lista — los tres tienen siempre trabajo no bloqueado.
 
-### 10.5 Briefs individuales (listos para repartir)
+**Coordinador** (el dueño del proyecto o quien designe): asigna números de migración extra, aprueba cambios de contrato y mergea en este orden. Sin esa figura los contratos se erosionan en la primera semana.
 
-Cada puesto tiene su documento con tareas, archivos, contratos y criterios de "hecho":
-
-- `docs/localizador-briefs/P1-INFRA-DATOS.md`
-- `docs/localizador-briefs/P2-NUCLEO.md`
-- `docs/localizador-briefs/P3-IA-EXTRACCION.md`
-- `docs/localizador-briefs/P4-UI-ENTRENAMIENTO.md`
-
-Mensaje de arranque para cada persona (copiar/pegar)
+### 10.5 Mensaje de arranque para cada persona (copiar/pegar)
 
 > Vas a trabajar en el Localizador de Propiedades con IA del CRM. Eres el puesto **PX**: lee `docs/localizador-briefs/PX-....md` y el plan completo `docs/PLAN-LOCALIZADOR-IA-CL.md` antes de escribir código. Resumen de las reglas: configura `/model` como indique tu brief; trabaja SOLO en los archivos de los que eres dueño, en tu rama, con PRs pequeños a main; respeta los contratos de §10.3 (puedes añadir campos, nunca renombrar ni quitar); cada PR lleva tests y migraciones idempotentes, más `/code-review` si tu pieza está marcada 🔴. Nunca toques decisiones humanas (`decided_by='human'`, `manual_property_lock`, pins manuales) ni archivos de otro puesto — si necesitas un cambio ajeno, pídelo en el PR. Tras cada merge a main, haz rebase antes de seguir.
