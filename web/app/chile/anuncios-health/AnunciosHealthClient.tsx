@@ -26,10 +26,14 @@ type Via = {
   has_nordic_blob?: boolean; bloqueo_antibot?: boolean; tipo_respuesta?: string
   portal_total?: number | null; error?: string; veredicto: string
 }
+type Salida = {
+  ip_vps: string | null; ips_evomi: string[]; ips_distintas: number
+  muestras: number; rota: boolean | null; veredicto: string
+}
 type Diagnostico = {
   success: boolean; proxy_configurado: boolean
   proxy_host: string | null; proxy_user: string | null
-  vias: Via[]; veredicto: string
+  vias: Via[]; salida?: Salida; veredicto: string
 }
 type Pulse = { change_type: string; count: number }
 type Health = {
@@ -233,6 +237,21 @@ export default function AnunciosHealthClient() {
                       </div>
                     ))}
                   </div>
+                  {diag.salida && diag.salida.muestras > 0 && (
+                    <div className={`text-[11px] font-mono mt-2 px-2 py-1.5 rounded border ${
+                      diag.salida.rota === false
+                        ? 'text-amber-200 bg-amber-500/10 border-amber-500/30'
+                        : 'text-slate-300 bg-slate-800/60 border-slate-700'}`}>
+                      <span className={diag.salida.rota === false ? 'text-amber-400' : 'text-slate-500'}>
+                        {diag.salida.rota === false ? '⚠' : '·'}
+                      </span>{' '}
+                      SALIDA · {diag.salida.veredicto}
+                      <div className="text-slate-400 mt-0.5 break-words">
+                        evomi: {diag.salida.ips_evomi.join(' · ')}
+                        {diag.salida.ip_vps ? ` — vps: ${diag.salida.ip_vps}` : ''}
+                      </div>
+                    </div>
+                  )}
                   <div className="text-[11px] text-slate-400 mt-2">
                     Proxy: {diag.proxy_configurado ? `${diag.proxy_host} · usuario ${diag.proxy_user}` : 'sin credenciales en el VPS'}
                     {' — '}se configura en Configuración → Proxy (Evomi CL).
@@ -262,6 +281,14 @@ export default function AnunciosHealthClient() {
                 const porAntibot = bloqueados.filter(
                   x => /antibot|tráfico sospechoso/i.test(x.notes ?? '') || x.live_bloqueo_antibot
                 )
+                // El diagnóstico que el usuario ACABA de pulsar también cuenta.
+                // Sin esto, el panel enseñaba el veredicto correcto arriba
+                // ("bloqueo antibot") y justo debajo seguía diciendo "pulsa
+                // Diagnosticar red para ver si es el proxy o el portal": los
+                // `notes` de los objetivos son de la última corrida del barrido y
+                // pueden ser de hace horas.
+                const antibotEnVivo = diag?.vias?.some(v => v.via === 'evomi' && v.bloqueo_antibot) ?? false
+                const noRota = diag?.salida?.rota === false
                 return (
                   <div className="rounded-xl border px-4 py-3 mb-4 flex items-start gap-3 text-sm bg-rose-500/10 border-rose-500/30 text-rose-200">
                     <XCircle size={18} className="mt-0.5 shrink-0" />
@@ -270,12 +297,18 @@ export default function AnunciosHealthClient() {
                         El barrido está bloqueado en {bloqueados.length} de {data.targets.length} objetivos
                       </span>
                       <span className="text-slate-400"> · no consiguen leer ni una página · último anuncio visto {fresh}</span>
-                      {porAntibot.length > 0 ? (
+                      {porAntibot.length > 0 || antibotEnVivo ? (
                         <div className="text-[12px] text-rose-200/80 mt-1">
-                          Mercado Libre está devolviendo su pantalla de verificación de <span className="font-semibold">tráfico sospechoso</span> en {porAntibot.length} de ellos:
+                          Mercado Libre está devolviendo su pantalla de verificación de <span className="font-semibold">tráfico sospechoso</span>
+                          {porAntibot.length > 0 ? ` en ${porAntibot.length} de ellos` : ''}:
                           contesta HTTP 200 pero sin un solo anuncio. No es el proxy ni el parser — es la reputación de la IP de salida.
-                          Cada reintento sale por otra IP residencial (se reintentan solos cada 15 min, sin consumir cadencia);
-                          si no se destraba, hay que cambiar de pool o de geo en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.
+                          {noRota ? (
+                            <> Y el proxy <span className="font-semibold">no está rotando de IP</span> ({diag?.salida?.ips_evomi[0]}), así que los reintentos repiten la misma
+                            salida señalada y no se destraban solos: quita la sesión pegajosa del usuario/puerto en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.</>
+                          ) : (
+                            <> Cada reintento sale por otra IP residencial (se reintentan solos cada 15 min, sin consumir cadencia);
+                            si no se destraba, hay que cambiar de pool o de geo en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.</>
+                          )}
                         </div>
                       ) : (
                         <div className="text-[12px] text-rose-200/80 mt-1">
