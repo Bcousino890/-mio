@@ -400,9 +400,23 @@ fases, no como bloque final.
     muestra como **fallando**, con cuántos intentos lleva y desde cuándo.
   - **Botón "Diagnosticar red"** (`/api/chile/anuncios-health/probe`): pide una
     página real a Portal Inmobiliario por las DOS vías (directa y Evomi) y
-    separa los tres problemas que antes se veían todos como `circuit_open`: el
+    separa los problemas que antes se veían todos como `circuit_open`: el
     proxy no responde / el portal bloquea la IP de la VPS / llega un 200 con la
-    variante ligera (sin blob Nordic, el parser sacaría 0).
+    variante ligera (sin blob Nordic, el parser sacaría 0) / **el portal sirve su
+    pantalla antibot**.
+  - **La pantalla antibot de Mercado Libre también trae el blob Nordic**
+    (`web/lib/pi-respuesta.mjs`). A una IP señalada, Portal Inmobiliario le
+    responde HTTP 200 con la pantalla de "tráfico sospechoso"
+    (`suspicious-traffic-frontend` → `/gz/account-verification`), construida con
+    el MISMO framework Nordic — pero sin `initialState`. Mientras la señal de
+    "página buena" fue `html.includes('__NORDIC_RENDERING_CTX__')`, esa pantalla
+    pasaba por válida en los dos sitios que la miraban: el fetch del worker la
+    daba por `ok` (así que NO reintentaba, y sin reintento el residencial no
+    rotaba de IP) y la sonda del panel decía "OK — se puede scrapear" con el
+    barrido parado. Ahora se exige `initialState` y el bloqueo se nombra como lo
+    que es. **No se arregla con headers** (probado con `Sec-Fetch-*`,
+    `sec-ch-ua` y cookies): es reputación de IP, y la salida es pedir la página
+    desde otra — que es justo lo que consigue el reintento.
 - **H18 · Almacenamiento eficiente: guardar TODO, que pese poco.**
   - **Snapshot solo-al-cambiar + direccionado por contenido**: `content_hash` del
     JSON normalizado; si es idéntico al último → no se inserta fila, solo se

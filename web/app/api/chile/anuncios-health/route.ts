@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
+import { clasificarHtmlPi, PI_ANTIBOT } from '@/lib/pi-respuesta'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/chile/anuncios-health — salud del pipeline de Anuncios CL (plan · H17).
@@ -58,38 +59,53 @@ async function fetchWithTimeout(url: string, opts: { dispatcher?: InstanceType<t
   }
 }
 
+/** Resultado de la sonda en vivo: el total, o POR QUÉ no se pudo leer. */
+type SondaViva = { total: number | null; bloqueo_antibot: boolean }
+
 /**
  * Consulta el total actual de un objetivo contra Portal Inmobiliario. DIRECTO
  * primero (rápido); si el volumen sostenido del worker hace que la IP de la VPS
  * quede bloqueada (403 — visto en producción tras horas de backfill), reintenta
  * por el proxy residencial Evomi, igual que hace el worker (fetchHtmlPi).
+ *
+ * Devuelve también si lo que llegó fue la pantalla antibot de Mercado Libre. Sin
+ * ese dato, el panel solo podía marcar el total como "(viejo)" sin decir por
+ * qué: exactamente igual si el portal no contestó, si cambió la maquetación o si
+ * la IP estaba señalada. Y son tres arreglos distintos.
  */
-async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<number | null> {
+async function probeLivePortalTotal(comunaName: string, operation: string, propertyType: string): Promise<SondaViva> {
   const opSlug = operation === 'rent' ? 'arriendo' : 'venta'
   const typeSlug = propertyType || 'casa'
   const url = `https://www.portalinmobiliario.com/${opSlug}/${typeSlug}/propiedades-usadas/${comunaSlug(comunaName)}-metropolitana`
 
-  const extractTotal = async (res: Awaited<ReturnType<typeof undiciFetch>>) => {
-    if (!res.ok) return null
+  // Un 200 NO basta para creerse el número: la pantalla antibot también responde
+  // 200. Solo se lee el total de una página que el mismo criterio del worker da
+  // por scrapeable (clasificarHtmlPi).
+  const leer = async (res: Awaited<ReturnType<typeof undiciFetch>>): Promise<SondaViva> => {
+    if (!res.ok) return { total: null, bloqueo_antibot: false }
     const html = await res.text()
+    const { usable, tipo } = clasificarHtmlPi(html)
+    if (!usable) return { total: null, bloqueo_antibot: tipo === PI_ANTIBOT }
     const m = html.match(/"total"\s*:\s*(\d+)/)
-    return m ? Number(m[1]) : null
+    return { total: m ? Number(m[1]) : null, bloqueo_antibot: false }
   }
 
+  let bloqueada = false
   try {
-    const direct = await fetchWithTimeout(url)
-    const directTotal = await extractTotal(direct)
-    if (directTotal != null) return directTotal
+    const directa = await leer(await fetchWithTimeout(url))
+    if (directa.total != null) return directa
+    bloqueada = directa.bloqueo_antibot
   } catch { /* cae a proxy */ }
 
   const proxyUrl = evomiProxyUrl()
-  if (!proxyUrl) return null
+  if (!proxyUrl) return { total: null, bloqueo_antibot: bloqueada }
   try {
     const agent = new ProxyAgent(proxyUrl)
-    const proxied = await fetchWithTimeout(url, { dispatcher: agent })
-    return await extractTotal(proxied)
+    const porProxy = await leer(await fetchWithTimeout(url, { dispatcher: agent }))
+    // Manda el proxy: es la vía por la que barre el worker.
+    return { total: porProxy.total, bloqueo_antibot: porProxy.bloqueo_antibot }
   } catch {
-    return null
+    return { total: null, bloqueo_antibot: bloqueada }
   }
 }
 
@@ -267,8 +283,8 @@ export async function GET(request: Request) {
     // Sonda EN VIVO: un fetch real a Portal Inmobiliario por cada objetivo activo,
     // en paralelo, para que "Portal declara" sea el número de AHORA — no el que
     // quedó guardado la última vez que corrió un barrido (que puede tener horas).
-    const liveTotals = skipLive
-      ? targets.rows.map(() => null)
+    const liveProbes: SondaViva[] = skipLive
+      ? targets.rows.map(() => ({ total: null, bloqueo_antibot: false }))
       : await Promise.all(
           targets.rows.map((t) => probeLivePortalTotal(t.comuna, t.operation, t.property_type))
         )
@@ -312,8 +328,11 @@ export async function GET(request: Request) {
         // (consultado ahora mismo). El frontend usa live_portal_total cuando
         // está disponible; portal_reported_count queda de referencia/fallback.
         portal_reported_count: t.portal_reported_count == null ? null : num(t.portal_reported_count),
-        live_portal_total: liveTotals[i],
-        live_probed_at: liveTotals[i] != null ? probedAt : null,
+        live_portal_total: liveProbes[i].total,
+        live_probed_at: liveProbes[i].total != null ? probedAt : null,
+        // El total en vivo no se pudo leer porque el portal devolvió su pantalla
+        // de verificación: el panel lo dice en vez de dejar un "(viejo)" mudo.
+        live_bloqueo_antibot: liveProbes[i].bloqueo_antibot,
         cadencia: t.cadencia,
       })),
       // Pulso de actividad de las últimas 24h (altas, cambios de precio, bajas…).

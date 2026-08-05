@@ -220,6 +220,30 @@ test('discoverTarget: fetch que falla en página 1 → intento bloqueado, NO con
   assert.match(client.state.failure.reason, /500/)
 })
 
+test('discoverTarget: el bloqueo antibot llega al panel con su motivo, no como "respuesta no reconocida"', async () => {
+  // Antes, la pantalla de verificación de Mercado Libre entraba en el barrido
+  // como `ok: true` (lleva el marcador Nordic) y lo único que quedaba escrito era
+  // "p1 sin anuncios ni total (respuesta no reconocida)" — cierto, pero no
+  // señalaba a nada. Ahora el fetch la rechaza con su motivo y ese motivo es el
+  // que se guarda en notes, que es lo que lee el panel de salud.
+  const client = makeClient({ known: [], activeInComuna: [{ id: 'uuid-z', external_id: 'MLC-Z' }] })
+  const res = await discoverTarget(client, TARGET, {
+    fetch: async () => ({
+      ok: false, status: 200, bloqueo_antibot: true,
+      reason: 'bloqueo antibot de Mercado Libre (pantalla de "tráfico sospechoso"): la IP que pide las páginas está señalada',
+    }),
+    enqueueDetail: async () => {},
+    sleep: async () => {},
+  })
+  assert.equal(res.blocked, true)
+  assert.equal(res.completed, false)
+  assert.match(res.reason, /antibot/)
+  assert.match(client.state.failure.reason, /antibot/)
+  // Y lo de siempre: un intento bloqueado no gasta la cadencia ni da de baja nada.
+  assert.equal(client.state.stats, null)
+  assert.equal(client.state.delistedIds.length, 0)
+})
+
 test('discoverTarget: circuito abierto → bloqueado, sin peticiones y sin gastar la cadencia', async () => {
   const client = makeClient({ known: [], activeInComuna: [] })
   let llamadas = 0

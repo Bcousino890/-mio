@@ -8,12 +8,15 @@
 // (no fetch/undici): DataDome valida también el TLS fingerprint (JA3) además
 // del UA — el de curl + UA WhatsApp pasa de forma consistente.
 //
-// Portalinmobiliario (perfil 'portalinmobiliario'): no hay evidencia de un
-// anti-bot tipo DataDome (ver docs/research-portalinmobiliario-chile.md), así
-// que basta un UA de navegador normal — el truco de WhatsApp es específico de
-// Idealista y no aporta nada aquí. Pendiente de confirmar con un spike real de
-// red contra el dominio en producción (el sandbox de investigación bloqueó el
-// fetch directo).
+// Portalinmobiliario (perfil 'portalinmobiliario'): no hay un anti-bot que
+// valide el fingerprint TLS tipo DataDome (ver
+// docs/research-portalinmobiliario-chile.md), así que basta un UA de navegador
+// normal — el truco de WhatsApp es específico de Idealista y no aporta nada
+// aquí. Lo que SÍ tiene Mercado Libre es un filtro por REPUTACIÓN DE IP: a una
+// IP señalada le sirve su pantalla de "tráfico sospechoso" con HTTP 200 (ver
+// web/lib/pi-respuesta.mjs). Contra eso los headers no hacen nada —comprobado
+// con Sec-Fetch-*, sec-ch-ua y cookies—: la única salida es pedir la página
+// desde otra IP, que es justo lo que consigue el reintento por el residencial.
 //
 // IMPORTANTE: `fetchHtml(url, { useProxy })` sin `profile` debe seguir
 // comportándose EXACTAMENTE igual que antes (UA de WhatsApp) — no romper el
@@ -25,6 +28,7 @@
 import { execFile } from 'node:child_process'
 import { withResilience } from './resilient-fetch.mjs'
 import { envVivo } from './env-vivo.mjs'
+import { clasificarHtmlPi, PI_ANTIBOT } from '../../web/lib/pi-respuesta.mjs'
 
 const WHATSAPP_UA = 'WhatsApp/2.23.20.0'
 // UA de navegador moderno (Chrome de escritorio reciente). Usado para portales
@@ -217,30 +221,52 @@ const PI_SOLO_PROXY = process.env.PI_SOLO_PROXY !== '0'
 // hablar con el portal. `PI_FALLBACK_DIRECTO=0` lo desactiva.
 const PI_FALLBACK_DIRECTO = process.env.PI_FALLBACK_DIRECTO !== '0'
 
+/**
+ * ¿Sirve esta respuesta 200 de Portal Inmobiliario? Puro y exportado para test.
+ *
+ * "Éxito" para PI NO es HTTP 200, y tampoco es "trae el marcador Nordic" — que
+ * es lo que se comprobaba antes y era un AGUJERO REAL: la pantalla antibot de
+ * Mercado Libre ("tráfico sospechoso") está hecha con el mismo framework Nordic
+ * y también lleva `__NORDIC_RENDERING_CTX__`, así que pasaba el filtro como si
+ * fuera una página buena. Resultado: `ok: true` con 0 anuncios → withResilience
+ * no reintentaba, el circuit-breaker no se enteraba, el proxy residencial no
+ * rotaba de IP, y el barrido se quedaba clavado anotando "respuesta no
+ * reconocida" (visto en producción: 8 de 8 objetivos, 5 h sin ingresar nada).
+ * La comprobación de verdad está en clasificarHtmlPi (web/lib/pi-respuesta.mjs).
+ *
+ * Devolver la respuesta inservible como FALLO es lo que la destraba: es un fallo
+ * de infraestructura para resilient-fetch, así que se reintenta con backoff y —
+ * con un residencial que rota IP— el siguiente intento sale por otra salida y
+ * suele traer la buena. Antes se devolvía `ok: true` "para no disparar el
+ * circuit-breaker", y el efecto era el contrario del buscado: el barrido se
+ * anotaba como COMPLETO con 0 anuncios y se iba tan tranquilo.
+ */
+export function evaluarRespuestaPi(res) {
+  if (!res?.ok) return res
+  const { usable, tipo, motivo } = clasificarHtmlPi(res.html)
+  if (usable) return res
+  return {
+    ok: false,
+    status: res.status ?? 200,
+    reason: motivo,
+    pi_respuesta: tipo,
+    // Marca explícita para quien tenga que decidir distinto ante un bloqueo por
+    // IP (rotar salida) y ante una maquetación cambiada (arreglar el parser).
+    bloqueo_antibot: tipo === PI_ANTIBOT,
+  }
+}
+
 async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
-  // "Éxito" para PI NO es solo HTTP 200: la variante LIGERA que PI sirve a
-  // algunas IPs (p. ej. datacenter) responde 200 pero SIN el blob Nordic, y el
-  // parser saca 0. Solo cuenta como bueno si trae el blob. Así, si el directo
-  // (IP de la VPS) recibe la variante ligera, se cae a Evomi (residencial CL),
-  // que suele recibir la buena — en vez de aceptar un 200 inútil.
-  const hasBlob = (r) => r.ok && typeof r.html === 'string' && r.html.includes('__NORDIC_RENDERING_CTX__')
-  // Un 200 sin blob es una página INSERVIBLE (el parser saca 0). Antes se
-  // devolvía como `ok: true` "para no disparar el circuit-breaker", y el efecto
-  // era el contrario del buscado: el barrido se anotaba como COMPLETO con 0
-  // anuncios, marcaba last_success_at y se iba tan tranquilo — un fallo mudo.
-  // Devolviéndolo como fallo reintentable, withResilience vuelve a pedir la
-  // página y, con un residencial que rota IP, el siguiente intento suele salir
-  // por otra IP y traer la buena.
-  const ligera = (r) => ({ ok: false, status: r.status ?? 200, reason: 'sin blob Nordic (variante ligera o bloqueo)' })
+  const utilizable = (r) => r.ok && clasificarHtmlPi(r.html).usable
 
   if (PI_SOLO_PROXY) {
     const soloProxy = await fetchHtml(url, { useProxy: true, profile })
-    if (hasBlob(soloProxy)) return soloProxy
+    if (utilizable(soloProxy)) return soloProxy
 
     if (soloProxy.proxy_failed && PI_FALLBACK_DIRECTO) {
       const rescate = await fetchHtml(url, { useProxy: false, profile })
       const marca = { via: 'directo', proxy_caido: soloProxy.reason }
-      if (hasBlob(rescate)) {
+      if (utilizable(rescate)) {
         console.warn(`[fetch] proxy caído (${soloProxy.reason}) → servido DIRECTO desde la VPS`)
         return { ...rescate, ...marca }
       }
@@ -248,25 +274,25 @@ async function fetchHtmlPi(url, { profile = 'portalinmobiliario' } = {}) {
       // un 403…): esa respuesta es la real y hay que conservarla — devolver en
       // su lugar el fallo del proxy convertiría un final de paginación normal en
       // un "fallo de red" y rompería la detección de bajas.
-      if (Number(rescate.status) > 0) return rescate.ok ? { ...ligera(rescate), ...marca } : { ...rescate, ...marca }
+      if (Number(rescate.status) > 0) return { ...evaluarRespuestaPi(rescate), ...marca }
       // Ni con el rescate: se informa del fallo del PROXY, que es el arreglable.
       return { ...soloProxy, reason: `proxy: ${soloProxy.reason}` }
     }
 
-    return soloProxy.ok ? ligera(soloProxy) : soloProxy
+    return evaluarRespuestaPi(soloProxy)
   }
 
   const direct = await fetchHtml(url, { useProxy: false, profile })
-  if (hasBlob(direct)) return direct
+  if (utilizable(direct)) return direct
 
   const proxied = await fetchHtml(url, { useProxy: true, profile })
-  if (hasBlob(proxied)) return proxied
+  if (utilizable(proxied)) return proxied
 
-  // Ninguna vía trajo el blob: la página es inservible por las dos. Se devuelve
-  // como fallo (ver `ligera`) para que se reintente y, si persiste, se vea en el
-  // panel — en vez de colarse como un barrido "completo" de 0 anuncios.
-  if (proxied.ok) return ligera(proxied)
-  if (direct.ok) return ligera(direct)
+  // Ninguna vía trajo una página útil: se devuelve como fallo (ver
+  // evaluarRespuestaPi) para que se reintente y, si persiste, se vea en el panel
+  // con su motivo real — en vez de colarse como un barrido "completo" de 0.
+  if (proxied.ok) return evaluarRespuestaPi(proxied)
+  if (direct.ok) return evaluarRespuestaPi(direct)
   return direct
 }
 
