@@ -46,8 +46,12 @@ export async function GET(request: NextRequest) {
         whereClause += ' AND sii_comuna_code = $2'
       }
       params.push(limit)
+      // DISTINCT ON (rol): el mismo rol puede tener >1 fila en sii_roles_cl
+      // (reingestas con distinto padding de ceros — mismo criterio que
+      // /api/chile/sii-roles-list), y sin colapsarlas antes acá también se
+      // podía devolver el mismo rol dos veces.
       const result = await pool.query(
-        `SELECT
+        `SELECT DISTINCT ON (r.rol)
           r.id, r.sii_comuna_code, r.rol, r.direccion,
           r.avaluo_fiscal_total, r.avaluo_exento,
           r.contribucion_semestral, r.superficie_terreno_m2,
@@ -57,6 +61,8 @@ export async function GET(request: NextRequest) {
          FROM sii_roles_cl r
          LEFT JOIN chile_comunas c ON c.sii_comuna_code = r.sii_comuna_code
          WHERE ${whereClause}
+         ORDER BY r.rol, r.superficie_construida_m2 DESC NULLS LAST,
+                  (r.nombre_propietario IS NOT NULL) DESC
          LIMIT $${params.length}`,
         params
       )
@@ -71,20 +77,35 @@ export async function GET(request: NextRequest) {
         communaFilter = `AND r.sii_comuna_code = $${params.length}`
       }
 
+      // El mismo rol puede tener >1 fila en sii_roles_cl (reingestas con
+      // distinto padding de ceros). Sin deduplicar ANTES de ordenar por
+      // relevancia, un predio subdividido en varias unidades con una sola
+      // fila cada una (p. ej. "CASA-B") podía quedar fuera del LIMIT porque
+      // los duplicados de otras unidades ("CASA-A", "CASA-F"…) ocupaban los
+      // primeros puestos con el mismo avalúo/similitud — exactamente el caso
+      // real que reportó el equipo (buscó "CAM LA HUERTA 3931" y la 3686-60
+      // nunca aparecía). Se dedupe primero en un CTE (una fila por rol,
+      // quedándose con la más completa) y solo DESPUÉS se ordena por
+      // similitud — DISTINCT ON exige que el ORDER BY empiece por la misma
+      // columna (rol), así que no se puede combinar todo en una sola pasada.
       const result = await pool.query(
-        `SELECT
-          r.id, r.sii_comuna_code, r.rol, r.direccion,
-          r.avaluo_fiscal_total, r.avaluo_exento,
-          r.contribucion_semestral, r.superficie_terreno_m2,
-          r.codigo_destino_principal,
-          r.lat, r.lng,
-          c.name AS comuna_nombre,
-          similarity(unaccent_immutable(upper(coalesce(r.direccion,''))), unaccent_immutable($1)) AS sim
-         FROM sii_roles_cl r
-         LEFT JOIN chile_comunas c ON c.sii_comuna_code = r.sii_comuna_code
-         WHERE unaccent_immutable(upper(coalesce(r.direccion,''))) LIKE unaccent_immutable($2)
-         ${communaFilter}
-         ORDER BY sim DESC, r.avaluo_fiscal_total DESC NULLS LAST
+        `WITH deduped AS (
+           SELECT DISTINCT ON (r.rol)
+             r.id, r.sii_comuna_code, r.rol, r.direccion,
+             r.avaluo_fiscal_total, r.avaluo_exento,
+             r.contribucion_semestral, r.superficie_terreno_m2,
+             r.codigo_destino_principal, r.lat, r.lng
+           FROM sii_roles_cl r
+           WHERE unaccent_immutable(upper(coalesce(r.direccion,''))) LIKE unaccent_immutable($2)
+           ${communaFilter}
+           ORDER BY r.rol, r.superficie_construida_m2 DESC NULLS LAST,
+                    (r.nombre_propietario IS NOT NULL) DESC
+         )
+         SELECT d.*, c.name AS comuna_nombre,
+                similarity(unaccent_immutable(upper(coalesce(d.direccion,''))), unaccent_immutable($1)) AS sim
+         FROM deduped d
+         LEFT JOIN chile_comunas c ON c.sii_comuna_code = d.sii_comuna_code
+         ORDER BY sim DESC, d.avaluo_fiscal_total DESC NULLS LAST
          LIMIT $3`,
         params
       )
