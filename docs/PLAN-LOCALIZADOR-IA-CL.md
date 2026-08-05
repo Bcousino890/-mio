@@ -1,7 +1,7 @@
 # Plan — Localizador de Propiedades con IA (Chile)
 
-**v1.1 · 2026-08-05** · Estado: aprobado, pendiente de implementación
-*(v1.1: aprendizaje continuo con las ~15.000 props captadas, límite temporal de Open Buildings, Dedup 2.0 con el mismo stack, extensión a departamentos/edificios)*
+**v1.2 · 2026-08-05** · Estado: aprobado, pendiente de implementación
+*(v1.1: aprendizaje continuo, límite temporal de Open Buildings, Dedup 2.0, departamentos. v1.2: números reales — 73 captadas confirmadas y ~15.000 anuncios totales —, pestaña "Entrenar" de confirmación rápida con active learning, y aprendizaje desde las uniones manuales de corredoras)*
 
 Anuncio de Portal Inmobiliario → propiedad exacta → **ROL SII**, al estilo Lystos (ES) / PropertyRadar (US), con presupuesto mínimo.
 
@@ -199,15 +199,43 @@ GROUP BY p.id, p.rol, p.comuna_id;
 - Embeddings de imagen SigLIP/CLIP: en VPS 8 GB sin GPU es viable pero lento → API barata u offline por lotes nocturnos. Usos: dedup mejorado (near-duplicates que el pHash pierde: recortes, marcas de agua), búsqueda "fotos parecidas" cross-corredora, y **matching fachada ↔ Street View Static / Mapillary** (free tier) del candidato top-1 cruzando `numero_casa_ocr` + estilo/techo.
 - **Criterio de activación**: cuando el corpus etiquetado autoacumulado (captaciones confirmadas + decisiones de la cola + `listing_match_cl` decididos) supere **~1.500-2.000 casos** — ahí también se recalibran los log-odds con datos reales. Antes aporta poco frente a su coste.
 
-### Fase 7 — Aprendizaje continuo con las propiedades ya captadas (~15.000 hoy, ~30.000 previstas)
+### Fase 7 — Aprendizaje continuo + pestaña "Entrenar" (etiquetado rápido con active learning)
 
-"Que el modelo vaya entrenando" sin GPU ni gasto: el sistema **aprende de sus propios aciertos confirmados**, en tres niveles crecientes:
+**Punto de partida real**: hoy hay **~73 captadas confirmadas** (y subiendo) sobre ~15.000 anuncios/propiedades totales. El gold set inicial es pequeño — por eso el mecanismo para **crecer el corpus etiquetado rápido es parte del MVP**, no una fase tardía. Tres piezas:
 
-1. **Desde el día 1 (F1)**: las captaciones con `sii_rol` confirmado y los pins manuales SON el set de entrenamiento/validación inicial — `eval-locator-cl.mjs` mide contra ellos en cada fase.
-2. **Calibración de pesos** — nuevo `scraper/calibrate-locator-cl.mjs` (cron semanal): regresión logística simple sobre las señales guardadas (`captaciones_cl.match_signals`, `property_locator_cl.candidates`, `listing_match_cl.signals` — todas jsonb pensadas exactamente para esto) → propone pesos log-odds recalibrados para `scoreCandidateV3` y `footprintEvidence` con datos chilenos reales, en vez de los pesos a ojo actuales. Corre en el VPS en segundos (es álgebra, no deep learning). Los pesos nuevos se aplican tras revisar el reporte, nunca en caliente.
-3. **Ciclo virtuoso permanente**: cada auto-confirmación validada, cada decisión en `/chile/localizador` y cada corrección de pin alimentan el corpus → el corpus recalibra los pesos → sube la precisión → más auto-confirmaciones. Con >2.000 casos etiquetados: modelo ligero (regresión logística regularizada o gradient boosting pequeño, CPU) como scorer alternativo A/B contra el de reglas — se adopta solo si gana en el gold set.
+**a) Semilla de etiquetas — lo que ya existe se importa como entrenamiento (migración `0104_locator_labels_cl.sql`):**
 
-Entrenar una red neuronal propia sigue fuera del plan: con este volumen de datos el calibrado estadístico rinde más y cuesta $0.
+```sql
+CREATE TABLE locator_labels_cl (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind text NOT NULL CHECK (kind IN ('rol_match','pair_match')),
+  -- rol_match: ¿este clúster/anuncio es este ROL?  pair_match: ¿estos 2 anuncios son la misma propiedad?
+  property_cl_id uuid REFERENCES property_cl(id) ON DELETE CASCADE,
+  rol text, sii_comuna_code text,            -- para rol_match
+  listing_a uuid, listing_b uuid,            -- para pair_match
+  label text NOT NULL CHECK (label IN ('yes','no','unsure')),
+  source text NOT NULL CHECK (source IN
+    ('entrenar_tab','review_queue','captacion_confirmada','manual_merge','manual_split','pin_manual')),
+  signals jsonb,                             -- snapshot de señales al momento de etiquetar
+  created_at timestamptz DEFAULT now()
+);
+```
+
+Script de importación inicial (una vez): las ~73 captaciones con `sii_rol` confirmado (`source='captacion_confirmada'`), los pins manuales (`pin_manual` vía `resolveRolAtPoint`), **todas las uniones manuales de corredoras distintas ya hechas** (`property_merge_log_cl` action merge → pares `yes`; action split → pares `no`; `source='manual_merge'/'manual_split'`) y los pares de `listing_match_cl` con `decided_by='human'`. Con eso el corpus arranca en varios cientos de etiquetas, no en 73.
+
+**Y las futuras, automáticamente**: los endpoints existentes de unir/separar (`/api/chile/property-cl/merge` y `/split`, `web/lib/property-cl-merge.ts`) se extienden para que **cada unión o separación manual nueva escriba su etiqueta en `locator_labels_cl` en el momento** — el usuario entrena al sistema con su trabajo normal de todos los días, sin paso extra.
+
+**b) Pestaña "Entrenar" — confirmación rápida de casas y direcciones** (`web/app/chile/localizador/page.tsx`, pestañas "Revisión" y "Entrenar"):
+- Muestra **un caso por pantalla**: fotos del anuncio (carrusel) + mapa con la parcela candidata resaltada + dirección SII propuesta + comparación física (m² anuncio vs SII, dorms, año) → botones grandes **"✅ Es exacta" / "❌ No es" / "➡️ Ver otro candidato" / "Saltar"**, con atajos de teclado (1/2/3/espacio) para etiquetar en segundos.
+- **Active learning**: prioriza los casos donde el modelo duda (probabilidad del top-1 entre 0.5-0.9) — cada clic ahí enseña lo máximo. Intercala ~1 de cada 10 casos de alta confianza para auditar la precisión de los auto-confirmados.
+- Modo pares: cuando hay pares dedup en la zona gris (0.45-0.75), muestra dos anuncios lado a lado — "¿Son la misma propiedad?" — y alimenta `pair_match`.
+- Cada "✅ Es exacta" hace doble trabajo: guarda la etiqueta Y confirma el ROL en `property_cl` (mismo camino que la cola de revisión). Ritmo realista: 20-30 etiquetas en 5 minutos diarios ⇒ >1.000 etiquetas en un mes.
+
+**c) Calibración y ciclo virtuoso:**
+- Nuevo `scraper/calibrate-locator-cl.mjs` (cron semanal): regresión logística sobre `locator_labels_cl.signals` → propone pesos log-odds recalibrados para `scoreCandidateV3`, `footprintEvidence` y los pesos de par del dedup, con datos chilenos reales en vez de los pesos a ojo actuales. Corre en el VPS en segundos (álgebra, no deep learning); los pesos se aplican tras revisar el reporte, nunca en caliente. Con <300 etiquetas solo reporta; la calibración automática se activa al superar ~300 por tipo.
+- Cada decisión en "Entrenar", cada confirmación de la cola y cada unión/separación manual nueva escribe en `locator_labels_cl` → el corpus crece solo → recalibra → sube la precisión → más auto-confirmaciones. Con >2.000 etiquetas: modelo ligero (regresión regularizada o gradient boosting pequeño, CPU) como scorer A/B contra el de reglas — se adopta solo si gana en el gold set.
+
+Entrenar una red neuronal propia sigue fuera del plan: con este volumen el calibrado estadístico rinde más y cuesta $0.
 
 ### Fase 8 — Dedup 2.0: el mismo stack aplicado a la deduplicación
 
@@ -222,7 +250,7 @@ La dedup actual (`score-pair-cl.mjs`) usa pHash + trigram + teléfono/agencia. C
 | Embeddings de foto near-dup (recortes, marcas de agua, reencuadres que el pHash pierde) | F6 pgvector, umbral coseno | +0.45 |
 | Pistas geocodificadas cercanas (<100 m) | F2 geocoding | +0.15 |
 
-- Implementación: extender `CL_PAIR_WEIGHTS`/`CL_HARD_SIGNALS` en `score-pair-cl.mjs` leyendo de `ai_cache_cl`/`property_locator_cl` (señales ya calculadas — coste marginal $0); los pesos definitivos los calibra la Fase 7 con los pares ya decididos por humanos en `listing_match_cl`.
+- Implementación: extender `CL_PAIR_WEIGHTS`/`CL_HARD_SIGNALS` en `score-pair-cl.mjs` leyendo de `ai_cache_cl`/`property_locator_cl` (señales ya calculadas — coste marginal $0); los pesos definitivos los calibra la Fase 7 con `locator_labels_cl` — que incluye **todas las uniones y separaciones manuales ya hechas** (`property_merge_log_cl` importado como pares etiquetados) y los pares decididos por humanos en `listing_match_cl`: el sistema aprende directamente de cómo el usuario empareja props de corredoras distintas.
 - **Grafo de conocimiento**: extender el grafo `graphology` de `clustering-cl.mjs` (hoy solo anuncio↔anuncio) a nodos heterogéneos — anuncio, propiedad, ROL, corredora, teléfono, condominio/edificio — persistido como vistas sobre las tablas existentes. Usos: detectar corredoras que republican bajo varios `advertiser_id`, condominios con numeración interna propia, y consultas tipo "todas las corredoras que han publicado esta propiedad" para trazabilidad de exclusividad.
 
 ### Fase 9 — Departamentos y edificios (meta >95% a nivel edificio)
@@ -249,7 +277,7 @@ Hoy el piloto son casas; los departamentos (que ~duplicarán el stock hacia ~30.
 
 Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disponible: desempate visual estándar en todo `needs_review`.
 
-**Backfill del stock existente**: ~15.000 props hoy ⇒ ~$10-15 una sola vez (F2+F3 sobre todo el histórico, en lotes nocturnos); al crecer a ~30.000 con deptos y más comunas ⇒ <$30 one-time y el incremental mensual sigue <$10, porque el cache por `content_hash` hace que re-procesar sea ≈$0.
+**Backfill del stock existente**: ~15.000 anuncios/props hoy ⇒ ~$10-15 una sola vez (F2+F3 sobre todo el histórico, en lotes nocturnos); al crecer a ~30.000 con deptos y más comunas ⇒ <$30 one-time y el incremental mensual sigue <$10, porque el cache por `content_hash` hace que re-procesar sea ≈$0. (Las **captadas confirmadas** son hoy ~73 — ese es el gold set inicial, ver F7.)
 
 ## 6. Cómo se mide el >90% (no se promete a ciegas)
 
@@ -278,6 +306,6 @@ Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disp
 
 **Reutilizar**: `web/lib/captar-pipeline.ts` · `web/lib/sii-match-cl-v2.ts` · `web/lib/visual-match-cl.ts` · `scraper/lib/media-sync-cl.mjs` · `scraper/lib/phash.mjs` · `scraper/worker-cl.mjs` · `web/lib/rol-format.ts` · `scraper/lib/geocode-cl.mjs`.
 
-**Nuevos**: `web/lib/property-locator-cl.ts` · `web/lib/text-clues-cl.ts` · `web/lib/photo-attrs-cl.ts` · `scraper/lib/phash-backfill-cl.mjs` · `scraper/lib/locator-feeder-cl.mjs` · `scraper/ingest-open-buildings-cl.mjs` · `scraper/eval-locator-cl.mjs` · `scraper/calibrate-locator-cl.mjs` (F7) · `web/app/api/chile/property-locator/{route.ts, [id]/confirm/route.ts}` · `web/app/chile/localizador/page.tsx` · migraciones `0100`–`0103`.
+**Nuevos**: `web/lib/property-locator-cl.ts` · `web/lib/text-clues-cl.ts` · `web/lib/photo-attrs-cl.ts` · `scraper/lib/phash-backfill-cl.mjs` · `scraper/lib/locator-feeder-cl.mjs` · `scraper/ingest-open-buildings-cl.mjs` · `scraper/eval-locator-cl.mjs` · `scraper/calibrate-locator-cl.mjs` (F7) · `scraper/seed-locator-labels-cl.mjs` (F7a, importa captaciones/uniones existentes) · `web/app/api/chile/property-locator/{route.ts, [id]/confirm/route.ts, entrenar/route.ts}` · `web/app/chile/localizador/page.tsx` (pestañas Revisión + Entrenar) · migraciones `0100`–`0104`.
 
 Para F8-F9 (dedup 2.0 y departamentos): extender `scraper/lib/score-pair-cl.mjs`, `scraper/lib/clustering-cl.mjs` y reutilizar `web/lib/sii-edificio-sql.ts` + endpoints `sii-edificios`/`sii-building-units`.
