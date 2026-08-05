@@ -17,7 +17,7 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
-  Landmark, BadgeCheck, AlertTriangle, Save,
+  Landmark, BadgeCheck, AlertTriangle, Save, Search,
 } from 'lucide-react'
 import { toLatLng } from '@/lib/coords'
 import { PhoneRow, RelacionadosTable, useCopy, VerificarSeleccionButton } from '@/components/chile/DealerFicha'
@@ -571,6 +571,65 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     // declarado (si no, no se ve que hay dos hasta que se arrastra).
     setManualPin({ latitude: baseLat + 0.0004, longitude: baseLng + 0.0004 })
     setManualPinDirty(true)
+  }, [])
+
+  // ── Búsqueda manual del predio exacto ───────────────────────────────────────
+  // El pin real resuelve por geometría (point-in-polygon): en un predio
+  // subdividido en varias unidades casi idénticas y contiguas ("CASA-A",
+  // "CASA-B"… una franja junto a la otra), errar el pin por un par de metros
+  // cae en la unidad vecina. Buscar por rol o dirección deja elegir la unidad
+  // exacta sin depender de acertar el píxel — mismo buscador que /chile/catastro.
+  const [rolQuery, setRolQuery] = useState('')
+  type RolSearchResult = {
+    rol: string; direccion: string | null; avaluo_fiscal_total: number | null
+    superficie_terreno_m2: number | null; sii_comuna_code: string
+  }
+  const [rolResults, setRolResults] = useState<RolSearchResult[] | null>(null)
+  const [rolSearching, setRolSearching] = useState(false)
+  const [rolPicking, setRolPicking] = useState<string | null>(null)
+  const [rolSearchError, setRolSearchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const q = rolQuery.trim()
+    if (q.length < 3) { setRolResults(null); return }
+    let cancelled = false
+    setRolSearching(true)
+    const t = setTimeout(() => {
+      const params = new URLSearchParams({ q, limit: '8' })
+      if (p.sii_comuna_code) params.set('comuna', p.sii_comuna_code)
+      fetch(`/api/chile/sii-search?${params}`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setRolResults(d.success ? d.results : []) })
+        .catch(() => { if (!cancelled) setRolResults([]) })
+        .finally(() => { if (!cancelled) setRolSearching(false) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [rolQuery, p.sii_comuna_code])
+
+  // Fija el predio elegido a mano: resuelve su parcela gráfica (rol, geojson,
+  // centroide) y mueve el pin real ahí — así "Guardar ubicación" persiste
+  // justo la unidad buscada, no la que resulte de point-in-polygon sobre
+  // donde estuviera el pin antes.
+  const pickRolResult = useCallback(async (rol: string, siiComunaCode: string) => {
+    setRolPicking(rol)
+    setRolSearchError(null)
+    try {
+      const params = new URLSearchParams({ rol, comuna: siiComunaCode })
+      const d = await fetch(`/api/chile/rol-at-point?${params}`).then(r => r.json())
+      if (!d.success) { setRolSearchError(d.error ?? 'No se pudo resolver ese rol'); return }
+      if (!d.parcel) { setRolSearchError('Ese rol no tiene parcela gráfica en el catastro — corrígelo arrastrando el pin en el mapa'); return }
+      setResolved({ parcel: d.parcel, crm: d.crm ?? null })
+      if (d.parcel.lat != null && d.parcel.lng != null) {
+        setManualPin({ latitude: d.parcel.lat, longitude: d.parcel.lng })
+        setManualPinDirty(true)
+      }
+      setRolQuery('')
+      setRolResults(null)
+    } catch {
+      setRolSearchError('Error de red al buscar ese rol')
+    } finally {
+      setRolPicking(null)
+    }
   }, [])
 
   // ── Etapas 3 y 4 del pipeline: teléfonos (DealerNet) y dueño (TGR) ─────────
@@ -1142,6 +1201,55 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                               <div className="text-xs text-slate-500">Sin parcela SII bajo el pin (catastro sin cargar en esa zona). Arrastra el pin sobre el predio.</div>
                             ) : (
                               <div className="text-xs text-slate-500">Coloca el pin real sobre el predio para resolver su rol y dirección exacta.</div>
+                            )}
+
+                            {/* Buscador manual: un predio subdividido en varias
+                                unidades casi idénticas y contiguas (CASA-A,
+                                CASA-B…) es fácil de errar por un par de metros
+                                de pin. Buscar por rol o dirección elige la
+                                unidad exacta sin depender del pin. */}
+                            {p.sii_comuna_code && (
+                              <div className="mt-2.5 pt-2.5 border-t border-slate-700/60">
+                                <div className="relative">
+                                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-600" />
+                                  <input
+                                    value={rolQuery}
+                                    onChange={(e) => setRolQuery(e.target.value)}
+                                    placeholder="¿No es esta unidad? Busca por rol (3686-60) o dirección…"
+                                    className="w-full text-xs bg-slate-800/70 border border-slate-700 focus:border-amber-600 outline-none rounded-lg pl-7 pr-2.5 py-1.5 text-slate-200 placeholder:text-slate-600"
+                                  />
+                                </div>
+                                {rolSearchError && <div className="text-[11px] text-rose-300 mt-1.5">{rolSearchError}</div>}
+                                {rolSearching && <div className="text-[11px] text-slate-500 mt-1.5">Buscando…</div>}
+                                {rolResults && rolResults.length === 0 && !rolSearching && (
+                                  <div className="text-[11px] text-slate-500 mt-1.5">Sin coincidencias en el catastro SII.</div>
+                                )}
+                                {rolResults && rolResults.length > 0 && (
+                                  <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto">
+                                    {rolResults.map((r) => (
+                                      <button
+                                        key={`${r.sii_comuna_code}-${r.rol}`}
+                                        type="button"
+                                        onClick={() => pickRolResult(r.rol, r.sii_comuna_code)}
+                                        disabled={rolPicking != null}
+                                        className={`w-full text-left px-2.5 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
+                                          r.rol === shownRol
+                                            ? 'border-emerald-700 bg-emerald-950/20'
+                                            : 'border-slate-700 bg-slate-800/50 hover:border-amber-600/60 hover:bg-amber-950/10'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-mono text-amber-300">{r.rol}</span>
+                                          {rolPicking === r.rol
+                                            ? <RefreshCw size={11} className="animate-spin text-slate-500 shrink-0" />
+                                            : r.rol === shownRol && <span className="text-[10px] text-emerald-400 shrink-0">ya es esta</span>}
+                                        </div>
+                                        <div className="text-slate-400 truncate">{r.direccion ?? '—'}</div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
 

@@ -1080,6 +1080,61 @@ export async function resolveRolAtPoint(lat: number, lng: number): Promise<Resol
   }
 }
 
+/** Como ResolvedRol, con el centroide de la parcela gráfica — lo que necesita
+ * la ficha para mover el pin real ahí tras una búsqueda manual. */
+export interface ResolvedRolByRol extends ResolvedRol {
+  lat: number | null
+  lng: number | null
+}
+
+/**
+ * Como resolveRolAtPoint, pero resolviendo por ROL EXACTO en vez de por punto
+ * — el equivalente geométrico de selectRolManual (que hace lo mismo para una
+ * captación ya creada, ver arriba). Sirve para cuando un predio está
+ * subdividido en varias unidades casi idénticas y contiguas ("CASA-A",
+ * "CASA-B"… una franja junto a la otra): un pin arrastrado a mano cae con
+ * facilidad en la unidad vecina por un par de metros, y el equipo ya sabe —
+ * por rol o por dirección— cuál es la correcta sin depender de acertar el
+ * píxel exacto sobre una franja angosta.
+ *
+ * Devuelve también el centroide de la parcela gráfica (columna `centroid`,
+ * con `ST_Centroid(geom)` como respaldo si no está poblada): es lo que usa la
+ * ficha para mover el pin real ahí, de forma que al guardar la resolución por
+ * punto (point-in-polygon) confirme el MISMO rol que se acaba de elegir.
+ */
+export async function resolveRolByRol(siiComunaCode: string, rolRaw: string): Promise<ResolvedRolByRol | null> {
+  const rol = normalizeClRol(rolRaw)
+  const { rows } = await pool.query(
+    `SELECT p.id AS parcel_id, p.rol, cc.name AS comuna_name, cc.sii_comuna_code,
+            ST_AsGeoJSON(p.geom)::json AS geojson,
+            ST_Y(COALESCE(p.centroid, ST_Centroid(p.geom))) AS lat,
+            ST_X(COALESCE(p.centroid, ST_Centroid(p.geom))) AS lng
+     FROM cadastre_parcels_cl p
+     JOIN chile_comunas cc ON cc.id = p.comuna_id
+     WHERE cc.sii_comuna_code = $1
+       AND (p.rol = $2 OR regexp_replace(p.rol, '(^|-)0+(\\d)', '\\1\\2', 'g') = $2)
+     LIMIT 1`,
+    [siiComunaCode, rol],
+  )
+  const parcel = rows[0]
+  if (!parcel) return null
+
+  const sii = await lookupSiiRol(parcel.sii_comuna_code, parcel.rol)
+  return {
+    rol: sii?.rol ?? normalizeClRol(parcel.rol),
+    comuna_name: parcel.comuna_name,
+    sii_comuna_code: parcel.sii_comuna_code,
+    parcel_id: parcel.parcel_id,
+    geojson: parcel.geojson,
+    direccion: sii?.direccion ?? null,
+    avaluo_fiscal_total: sii?.avaluo_fiscal_total != null ? Number(sii.avaluo_fiscal_total) : null,
+    superficie_terreno_m2: sii?.superficie_terreno_m2 != null ? Number(sii.superficie_terreno_m2) : null,
+    codigo_destino_principal: sii?.codigo_destino_principal ?? null,
+    lat: parcel.lat != null ? Number(parcel.lat) : null,
+    lng: parcel.lng != null ? Number(parcel.lng) : null,
+  }
+}
+
 export interface SiiRolDatos {
   rol: string
   direccion: string | null
