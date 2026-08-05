@@ -26,6 +26,7 @@ Responder siempre en español al usuario.
 - `web/app/api/chile/` — API routes for Chile cadastral data
 - `docs/SII-ENRICHMENT-ROADMAP.md` — current enrichment plan
 - `docs/PLAN-ANUNCIOS-CL.md` — plan del módulo "Anuncios": scraping 24/7, dedup y trazabilidad de corredoras (Portal Inmobiliario, Chile)
+- `docs/PLAN-LOCALIZADOR-IA-CL.md` — plan del "Localizador de Propiedades con IA": anuncio → propiedad exacta → ROL SII (embudo NLP + visión + footprints + scoring probabilístico, RM completa)
 - `scraper/lib/sii-catastro-cl.mjs` — parser for official SII CSV files
 - `docs/SMARTBC-INTEGRACION.md` — integración con el CRM SmartBC: mapeo campo a campo y operación del sincronizador (`scraper/sync-smartbc-cl.mjs`)
 - `docs/WHATSAPP-VERIFICACION.md` — verificación en vivo de WhatsApp (número activo + foto actual) de los teléfonos de DealerNet, y el filtro que impide mandar números de baja al CRM. **Leer antes de tocar el worker**: vincula un número real de WhatsApp y puede ser baneado.
