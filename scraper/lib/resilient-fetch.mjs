@@ -162,6 +162,8 @@ export function _resetAllCircuits() {
  * @param {number} [options.baseBackoffMs]
  * @param {number} [options.failureThreshold]
  * @param {number} [options.cooldownMs]
+ * @param {string} [options.circuitKey] - agrupa el circuito por algo más fino
+ *   que el dominio (ver abajo). Por defecto, el hostname.
  * @param {object} [options.fetchOpts] - se pasan tal cual a fetchImpl
  * @returns {Promise<{ok: boolean, [k: string]: any}>}
  */
@@ -171,10 +173,18 @@ export async function withResilience(fetchImpl, url, options = {}) {
     baseBackoffMs = DEFAULTS.baseBackoffMs,
     failureThreshold = DEFAULTS.failureThreshold,
     cooldownMs = DEFAULTS.cooldownMs,
+    circuitKey = null,
     fetchOpts = {},
   } = options
 
-  const domain = domainOf(url)
+  // Un dominio puede tener partes sanas y partes bloqueadas a la vez, y
+  // entonces "¿se puede hablar con este dominio?" es la pregunta equivocada:
+  // visto en producción con Portal Inmobiliario, que bloquea las páginas de
+  // LISTADO mientras sirve las FICHAS con normalidad. Con un circuito único por
+  // dominio, los bloqueos del listado lo abrían y durante el enfriamiento se
+  // quedaban fuera las fichas, que habrían pasado — el barrido no se destrabó y
+  // encima se frenó la cola que sí avanzaba. `circuitKey` permite separarlos.
+  const domain = circuitKey || domainOf(url)
   const gate = checkCircuit(domain)
   if (!gate.allowed) {
     return {
