@@ -1394,15 +1394,27 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 )}
                                 {/* Reintentar las etapas lentas sin salir de la
-                                    ficha: es donde se quiere el teléfono. */}
+                                    ficha: es donde se quiere el teléfono.
+                                    OJO: este botón NO usa el "Otro RUT" del
+                                    picker de arriba — ese ya tiene su propio
+                                    botón "Consultar" y llama a un RUT puntual.
+                                    Este repite el pipeline automático por el
+                                    ROL (siempre el dueño actual, "Ecomsa" en
+                                    este caso) — separado con borde y texto
+                                    explícito para que no parezca "usar el RUT
+                                    que acabo de escribir arriba". */}
                                 {crmPhones.length === 0 && (
-                                  <button onClick={() => runCaptacionPipeline(shownCrm.captacion_id)} disabled={captarStage != null}
-                                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
-                                    <RefreshCw size={13} className={captarStage ? 'animate-spin' : ''} />
-                                    {captarStage === 'tgr' ? 'Buscando dueño (TGR)…'
-                                      : captarStage === 'dealernet' ? 'Buscando teléfonos (DealerNet)…'
-                                      : 'Buscar dueño y teléfonos'}
-                                  </button>
+                                  <div className="mt-3 pt-2.5 border-t border-slate-700/60">
+                                    <button onClick={() => runCaptacionPipeline(shownCrm.captacion_id)} disabled={captarStage != null}
+                                      title="Repite la búsqueda automática por el ROL (el dueño actual) — no usa el RUT puntual de arriba"
+                                      className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50">
+                                      <RefreshCw size={13} className={captarStage ? 'animate-spin' : ''} />
+                                      {captarStage === 'tgr' ? 'Buscando dueño (TGR)…'
+                                        : captarStage === 'dealernet' ? 'Buscando teléfonos (DealerNet)…'
+                                        : 'Reintentar con el dueño actual del rol'}
+                                    </button>
+                                    <p className="text-[10px] text-slate-500 mt-1">No usa el RUT puntual de arriba — repite la búsqueda por el rol.</p>
+                                  </div>
                                 )}
                                 {captarMsg && (
                                   <div className={`text-xs mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
