@@ -17,7 +17,7 @@ import {
   X, ChevronLeft, ChevronRight, BedDouble, Bath, Ruler, MapPin, ShieldCheck,
   GitCompareArrows, ExternalLink, Home, ImageOff, TrendingDown, CalendarClock,
   Building2, Trophy, Images, Video, Plus, RefreshCw, Unlink,
-  Landmark, BadgeCheck, AlertTriangle, Save,
+  Landmark, BadgeCheck, AlertTriangle, Save, Search,
 } from 'lucide-react'
 import { toLatLng } from '@/lib/coords'
 import { PhoneRow, RelacionadosTable, useCopy, VerificarSeleccionButton } from '@/components/chile/DealerFicha'
@@ -128,12 +128,22 @@ export type ResolvedParcel = {
   rol: string
   comuna_name: string
   sii_comuna_code: string
-  parcel_id: string
-  geojson: object
+  // null cuando el rol se confirmó por la ficha SII (sii_roles_cl) sin que el
+  // catastro GRÁFICO tenga todavía un polígono propio para esa unidad — ver
+  // has_graphic_parcel.
+  parcel_id: string | null
+  geojson: object | null
   direccion: string | null
   avaluo_fiscal_total: number | null
   superficie_terreno_m2: number | null
   codigo_destino_principal: string | null
+  // Presentes solo cuando la resolución fue por ROL exacto (búsqueda manual,
+  // no por punto): la coordenada de referencia del rol (centroide gráfico, o
+  // el punto de sii_roles_cl si el catastro no lo tiene subdividido) y si esa
+  // parcela tiene polígono propio dibujado.
+  lat?: number | null
+  lng?: number | null
+  has_graphic_parcel?: boolean
 }
 
 export const CRM_LABELS: Record<string, string> = { convecta: 'Convecta', ofinet: 'Ofinet', other: 'Otro CRM', unknown: '—' }
@@ -306,6 +316,15 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // ficha muestra lo YA guardado (p.rol_matriz / p.crm).
   const [resolved, setResolved] = useState<{ parcel: ResolvedParcel | null; crm: CrmInfo | null } | null>(null)
   const [resolving, setResolving] = useState(false)
+  // Rol fijado A MANO por búsqueda (no por geometría) — ver pickRolResult más
+  // abajo. Mientras esté activo, la resolución por point-in-polygon del pin
+  // NO debe pisarlo: en un predio subdividido en unidades casi idénticas
+  // ("CASA-A", "CASA-B"…) sin polígono propio por unidad en el catastro
+  // gráfico, el pin puede no caer en ningún polígono (o caer en el del
+  // predio entero sin subdividir) y la resolución automática reemplazaría la
+  // elección manual por la equivocada de nuevo. Se limpia al arrastrar el pin
+  // o al quitarlo — cualquier acción manual NUEVA sobre el pin gana.
+  const [manualRolOverride, setManualRolOverride] = useState<{ rol: string; siiComunaCode: string } | null>(null)
 
   // Vuelve a pedir la ficha al servidor y la propaga a la grilla. Es el paso
   // que faltaba: antes cada acción (marcar Smart, guardar el pin, captar)
@@ -543,15 +562,23 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     }))
   }, [listings])
 
-  // Poner/mover el pin real (arrastre, clic en el mapa o en una parcela).
+  // Poner/mover el pin real (arrastre, clic en el mapa o en una parcela): una
+  // acción manual NUEVA sobre el pin gana sobre cualquier rol fijado antes por
+  // búsqueda — vuelve a resolver por geometría.
   const handleRealPinChange = useCallback((pos: { latitude: number; longitude: number }) => {
     setManualPin(pos)
     setManualPinDirty(true)
+    setManualRolOverride(null)
   }, [])
 
   // Resolver el rol de abajo cada vez que se mueve el pin real (debounced): da
   // feedback inmediato del rol/dirección/CRM antes de "Guardar ubicación".
+  // Se salta mientras haya un rol fijado a mano por búsqueda (manualRolOverride):
+  // ese rol ya es la respuesta confirmada, y volver a resolver por geometría
+  // sobre dónde quedó el pin podría pisarlo con el rol del predio sin
+  // subdividir (o con nada, si el catastro gráfico no llega a ese punto).
   useEffect(() => {
+    if (manualRolOverride) return
     if (!manualPin) { setResolved(null); return }
     let cancelled = false
     setResolving(true)
@@ -564,7 +591,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     }, 350)
     return () => { cancelled = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manualPin?.latitude, manualPin?.longitude])
+  }, [manualPin?.latitude, manualPin?.longitude, manualRolOverride])
 
   const addManualPin = useCallback((baseLat: number, baseLng: number) => {
     // Offset pequeño para que el pin nuevo no quede exactamente encima del
@@ -572,6 +599,75 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     setManualPin({ latitude: baseLat + 0.0004, longitude: baseLng + 0.0004 })
     setManualPinDirty(true)
   }, [])
+
+  // ── Búsqueda manual del predio exacto ───────────────────────────────────────
+  // El pin real resuelve por geometría (point-in-polygon): en un predio
+  // subdividido en varias unidades casi idénticas y contiguas ("CASA-A",
+  // "CASA-B"… una franja junto a la otra), errar el pin por un par de metros
+  // cae en la unidad vecina. Buscar por rol o dirección deja elegir la unidad
+  // exacta sin depender de acertar el píxel — mismo buscador que /chile/catastro.
+  const [rolQuery, setRolQuery] = useState('')
+  type RolSearchResult = {
+    rol: string; direccion: string | null; avaluo_fiscal_total: number | null
+    superficie_terreno_m2: number | null; sii_comuna_code: string
+  }
+  const [rolResults, setRolResults] = useState<RolSearchResult[] | null>(null)
+  const [rolSearching, setRolSearching] = useState(false)
+  const [rolPicking, setRolPicking] = useState<string | null>(null)
+  const [rolSearchError, setRolSearchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const q = rolQuery.trim()
+    if (q.length < 3) { setRolResults(null); return }
+    let cancelled = false
+    setRolSearching(true)
+    const t = setTimeout(() => {
+      const params = new URLSearchParams({ q, limit: '8' })
+      if (p.sii_comuna_code) params.set('comuna', p.sii_comuna_code)
+      fetch(`/api/chile/sii-search?${params}`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setRolResults(d.success ? d.results : []) })
+        .catch(() => { if (!cancelled) setRolResults([]) })
+        .finally(() => { if (!cancelled) setRolSearching(false) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [rolQuery, p.sii_comuna_code])
+
+  // Fija el predio elegido a mano: confirma el rol por su FICHA SII (existe
+  // aunque el catastro gráfico todavía no tenga un polígono propio para esa
+  // unidad — ver resolveRolByRol) y deja el pin en la mejor referencia visual
+  // disponible. El rol elegido queda "pegado" (manualRolOverride) para que
+  // "Guardar ubicación" persista justo la unidad buscada, no la que resulte
+  // de point-in-polygon sobre donde termine el pin.
+  const pickRolResult = useCallback(async (rol: string, siiComunaCode: string) => {
+    setRolPicking(rol)
+    setRolSearchError(null)
+    try {
+      const params = new URLSearchParams({ rol, comuna: siiComunaCode })
+      const d = await fetch(`/api/chile/rol-at-point?${params}`).then(r => r.json())
+      if (!d.success) { setRolSearchError(d.error ?? 'No se pudo resolver ese rol'); return }
+      if (!d.parcel) { setRolSearchError('Ese rol no existe en la ficha SII de esa comuna'); return }
+      setResolved({ parcel: d.parcel, crm: d.crm ?? null })
+      setManualRolOverride({ rol: d.parcel.rol, siiComunaCode: d.parcel.sii_comuna_code })
+      // El pin es solo referencia visual una vez que hay un rol fijado a
+      // mano — de ahí la cadena de respaldo: centroide gráfico (si el
+      // catastro ya tiene la unidad subdividida) → punto de sii_roles_cl →
+      // el pin/declarado que ya hubiera. Sin ALGÚN punto no hay qué mandarle
+      // a "Guardar ubicación" (persiste lat/lng además del rol).
+      const lat = d.parcel.lat ?? manualPin?.latitude ?? geo?.coords.latitude ?? null
+      const lng = d.parcel.lng ?? manualPin?.longitude ?? geo?.coords.longitude ?? null
+      if (lat != null && lng != null) {
+        setManualPin({ latitude: lat, longitude: lng })
+        setManualPinDirty(true)
+      }
+      setRolQuery('')
+      setRolResults(null)
+    } catch {
+      setRolSearchError('Error de red al buscar ese rol')
+    } finally {
+      setRolPicking(null)
+    }
+  }, [manualPin, geo])
 
   // ── Etapas 3 y 4 del pipeline: teléfonos (DealerNet) y dueño (TGR) ─────────
   // Guardar la ubicación dejaba la captación en 'matched' (rol resuelto) y ahí
@@ -674,6 +770,11 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
         body: JSON.stringify({
           id: p.id, latitude: manualPin.latitude, longitude: manualPin.longitude,
           source_url: geo?.source_url ?? undefined,
+          // Rol fijado a mano por búsqueda (predio subdividido en unidades
+          // casi idénticas): que el servidor lo use directo, sin re-derivarlo
+          // por point-in-polygon sobre dónde quedó el pin.
+          rol_override: manualRolOverride?.rol ?? undefined,
+          rol_override_comuna: manualRolOverride?.siiComunaCode ?? undefined,
         }),
       })
       const data = await res.json()
@@ -701,7 +802,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
     // Encadenar dueño + teléfonos fuera del `savingPin` para que el botón se
     // libere y el progreso se muestre en su propio aviso.
     if (captacionId) await runCaptacionPipeline(captacionId)
-  }, [manualPin, p.id, geo?.source_url, refreshProperty, runCaptacionPipeline])
+  }, [manualPin, manualRolOverride, p.id, geo?.source_url, refreshProperty, runCaptacionPipeline])
 
   const removeManualPin = useCallback(async () => {
     setSavingPin(true)
@@ -713,6 +814,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
       })
       setManualPin(null)
       setManualPinDirty(false)
+      setManualRolOverride(null)
       await refreshProperty()
     } finally {
       setSavingPin(false)
@@ -1130,6 +1232,16 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   )}
                                 </div>
                                 {shownAddress && <div className="text-sm text-slate-200">{shownAddress}</div>}
+                                {/* El rol se fijó por búsqueda, no por el pin: aclarar
+                                    de dónde sale la confianza (y por qué el mapa puede
+                                    no mostrar un polígono resaltado) evita que parezca
+                                    un dato a medias. */}
+                                {manualRolOverride && (
+                                  <div className="text-[11px] text-cyan-300/90 flex items-center gap-1">
+                                    <Search size={10} /> Fijado por búsqueda
+                                    {rp?.has_graphic_parcel === false && ' · sin polígono propio en el catastro gráfico (confirmado por la ficha SII)'}
+                                  </div>
+                                )}
                                 {(rp?.superficie_terreno_m2 || rp?.avaluo_fiscal_total) && (
                                   <div className="text-xs text-slate-500">
                                     {rp?.superficie_terreno_m2 ? `Terreno ${rp.superficie_terreno_m2.toLocaleString('es-CL')} m²` : ''}
@@ -1142,6 +1254,55 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                               <div className="text-xs text-slate-500">Sin parcela SII bajo el pin (catastro sin cargar en esa zona). Arrastra el pin sobre el predio.</div>
                             ) : (
                               <div className="text-xs text-slate-500">Coloca el pin real sobre el predio para resolver su rol y dirección exacta.</div>
+                            )}
+
+                            {/* Buscador manual: un predio subdividido en varias
+                                unidades casi idénticas y contiguas (CASA-A,
+                                CASA-B…) es fácil de errar por un par de metros
+                                de pin. Buscar por rol o dirección elige la
+                                unidad exacta sin depender del pin. */}
+                            {p.sii_comuna_code && (
+                              <div className="mt-2.5 pt-2.5 border-t border-slate-700/60">
+                                <div className="relative">
+                                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-600" />
+                                  <input
+                                    value={rolQuery}
+                                    onChange={(e) => setRolQuery(e.target.value)}
+                                    placeholder="¿No es esta unidad? Busca por rol (3686-60) o dirección…"
+                                    className="w-full text-xs bg-slate-800/70 border border-slate-700 focus:border-amber-600 outline-none rounded-lg pl-7 pr-2.5 py-1.5 text-slate-200 placeholder:text-slate-600"
+                                  />
+                                </div>
+                                {rolSearchError && <div className="text-[11px] text-rose-300 mt-1.5">{rolSearchError}</div>}
+                                {rolSearching && <div className="text-[11px] text-slate-500 mt-1.5">Buscando…</div>}
+                                {rolResults && rolResults.length === 0 && !rolSearching && (
+                                  <div className="text-[11px] text-slate-500 mt-1.5">Sin coincidencias en el catastro SII.</div>
+                                )}
+                                {rolResults && rolResults.length > 0 && (
+                                  <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto">
+                                    {rolResults.map((r) => (
+                                      <button
+                                        key={`${r.sii_comuna_code}-${r.rol}`}
+                                        type="button"
+                                        onClick={() => pickRolResult(r.rol, r.sii_comuna_code)}
+                                        disabled={rolPicking != null}
+                                        className={`w-full text-left px-2.5 py-1.5 rounded-lg border text-xs transition-colors disabled:opacity-50 ${
+                                          r.rol === shownRol
+                                            ? 'border-emerald-700 bg-emerald-950/20'
+                                            : 'border-slate-700 bg-slate-800/50 hover:border-amber-600/60 hover:bg-amber-950/10'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-mono text-amber-300">{r.rol}</span>
+                                          {rolPicking === r.rol
+                                            ? <RefreshCw size={11} className="animate-spin text-slate-500 shrink-0" />
+                                            : r.rol === shownRol && <span className="text-[10px] text-emerald-400 shrink-0">ya es esta</span>}
+                                        </div>
+                                        <div className="text-slate-400 truncate">{r.direccion ?? '—'}</div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
 

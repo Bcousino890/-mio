@@ -1035,7 +1035,12 @@ export interface ResolvedRol {
   rol: string
   comuna_name: string
   sii_comuna_code: string
-  parcel_id: string
+  // null cuando el rol se confirmó por la ficha SII (sii_roles_cl) sin que el
+  // catastro GRÁFICO tenga todavía un polígono propio para él — ver
+  // resolveRolByRol: un predio subdividido en varias unidades puede existir
+  // en sii_roles_cl (texto) mucho antes de que alguien digitalice cada
+  // unidad por separado en cadastre_parcels_cl (dibujo).
+  parcel_id: string | null
   geojson: unknown
   direccion: string | null
   avaluo_fiscal_total: number | null
@@ -1080,12 +1085,94 @@ export async function resolveRolAtPoint(lat: number, lng: number): Promise<Resol
   }
 }
 
+/** Como ResolvedRol, con la coordenada de referencia del rol (centroide de la
+ * parcela gráfica si existe; si no, el punto que trae sii_roles_cl) — lo que
+ * necesita la ficha para mover el pin real ahí tras una búsqueda manual. */
+export interface ResolvedRolByRol extends ResolvedRol {
+  lat: number | null
+  lng: number | null
+  // El rol tiene polígono propio en el catastro GRÁFICO (cadastre_parcels_cl).
+  // false no invalida el rol — muchos predios subdivididos en unidades
+  // ("CASA-A", "CASA-B"…) están en la ficha SII mucho antes de que alguien
+  // digitalice cada unidad por separado — solo significa que la ficha no
+  // tiene con qué resaltar el polígono en el mapa.
+  has_graphic_parcel: boolean
+}
+
+/**
+ * Como resolveRolAtPoint, pero resolviendo por ROL EXACTO en vez de por punto
+ * — el equivalente de selectRolManual (que hace lo mismo para una captación
+ * ya creada, ver arriba) aplicado a la ficha de Propiedades. Sirve para
+ * cuando un predio está subdividido en varias unidades casi idénticas y
+ * contiguas ("CASA-A", "CASA-B"… una franja junto a la otra): un pin
+ * arrastrado a mano cae con facilidad en la unidad vecina por un par de
+ * metros, y el equipo ya sabe —por rol o por dirección— cuál es la correcta
+ * sin depender de acertar el píxel.
+ *
+ * LA FICHA SII (sii_roles_cl) MANDA, IGUAL QUE EN selectRolManual — no el
+ * catastro gráfico. Un rol subdividido puede llevar años en sii_roles_cl (el
+ * archivo plano oficial, con su propia dirección "CASA-B" y su rol exacto)
+ * mucho antes de que cadastre_parcels_cl tenga un polígono digitalizado por
+ * unidad — muchas veces esa capa solo tiene UN polígono para el predio
+ * entero sin subdividir. Exigir polígono propio rechazaba como "no existe"
+ * un rol perfectamente real y documentado. El polígono gráfico, si existe,
+ * solo se usa para resaltar la parcela en el mapa y mover el pin a su
+ * centroide — es un plus visual, no la fuente de verdad.
+ */
+export async function resolveRolByRol(siiComunaCode: string, rolRaw: string): Promise<ResolvedRolByRol | null> {
+  const rol = normalizeClRol(rolRaw)
+
+  const sii = await lookupSiiRol(siiComunaCode, rol)
+
+  const { rows } = await pool.query(
+    `SELECT p.id AS parcel_id,
+            ST_AsGeoJSON(p.geom)::json AS geojson,
+            ST_Y(COALESCE(p.centroid, ST_Centroid(p.geom))) AS lat,
+            ST_X(COALESCE(p.centroid, ST_Centroid(p.geom))) AS lng
+     FROM cadastre_parcels_cl p
+     JOIN chile_comunas cc ON cc.id = p.comuna_id
+     WHERE cc.sii_comuna_code = $1
+       AND (p.rol = $2 OR regexp_replace(p.rol, '(^|-)0+(\\d)', '\\1\\2', 'g') = $2)
+     LIMIT 1`,
+    [siiComunaCode, rol],
+  )
+  const parcel = rows[0] ?? null
+  if (!sii && !parcel) return null // ni en la ficha SII ni en el catastro gráfico: el rol no existe
+
+  const { rows: comunaRows } = await pool.query(
+    `SELECT name FROM chile_comunas WHERE sii_comuna_code = $1 LIMIT 1`,
+    [siiComunaCode],
+  )
+
+  return {
+    rol: sii?.rol ?? rol,
+    comuna_name: comunaRows[0]?.name ?? siiComunaCode,
+    sii_comuna_code: siiComunaCode,
+    parcel_id: parcel?.parcel_id ?? null,
+    geojson: parcel?.geojson ?? null,
+    direccion: sii?.direccion ?? null,
+    avaluo_fiscal_total: sii?.avaluo_fiscal_total != null ? Number(sii.avaluo_fiscal_total) : null,
+    superficie_terreno_m2: sii?.superficie_terreno_m2 != null ? Number(sii.superficie_terreno_m2) : null,
+    codigo_destino_principal: sii?.codigo_destino_principal ?? null,
+    // Preferir el centroide del polígono gráfico (más preciso cuando existe);
+    // si no hay polígono propio, el punto que declara la ficha SII — aunque
+    // ese punto puede repetirse entre unidades hermanas (todas comparten la
+    // misma dirección base), así que es solo un respaldo para tener ALGÚN
+    // pin que guardar, no una prueba geométrica de cuál unidad es.
+    lat: parcel?.lat != null ? Number(parcel.lat) : (sii?.lat != null ? Number(sii.lat) : null),
+    lng: parcel?.lng != null ? Number(parcel.lng) : (sii?.lng != null ? Number(sii.lng) : null),
+    has_graphic_parcel: parcel != null,
+  }
+}
+
 export interface SiiRolDatos {
   rol: string
   direccion: string | null
   avaluo_fiscal_total: string | number | null
   superficie_terreno_m2: string | number | null
   codigo_destino_principal: string | null
+  lat: string | number | null
+  lng: string | number | null
 }
 
 /**
@@ -1109,7 +1196,7 @@ export async function lookupSiiRol(siiComunaCode: string | null, rolRaw: string 
   const rol = normalizeClRol(rolRaw)
   const variantes = rol === rolRaw.trim() ? [rol] : [rol, rolRaw.trim()]
   const { rows } = await pool.query(
-    `SELECT rol, direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal
+    `SELECT rol, direccion, avaluo_fiscal_total, superficie_terreno_m2, codigo_destino_principal, lat, lng
      FROM sii_roles_cl
      WHERE sii_comuna_code = $1 AND rol = ANY($2::text[])
      ORDER BY (direccion IS NOT NULL) DESC,
