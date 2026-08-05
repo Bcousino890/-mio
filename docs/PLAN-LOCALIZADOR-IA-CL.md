@@ -324,6 +324,23 @@ Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disp
 
 **Backfill del stock existente**: ~15.000 anuncios/props hoy ⇒ ~$10-15 una sola vez (F2+F3 sobre todo el histórico, en lotes nocturnos); al crecer a ~30.000 con deptos y más comunas ⇒ <$30 one-time y el incremental mensual sigue <$10, porque el cache por `content_hash` hace que re-procesar sea ≈$0. (Las **captadas confirmadas** son hoy ~73 — ese es el gold set inicial, ver F7.)
 
+### Presupuesto real: $50 en total (no por mes)
+
+Con ese techo, el orden de gasto es este y **no se salta**:
+
+| Concepto | Coste | Cuándo |
+|---|---|---|
+| Backfill **solo comunas piloto** (~2-3k anuncios de Las Condes/Vitacura/Lo Barnechea/Colina) | **~$2-3** | Al terminar F3 |
+| Operación incremental (anuncios nuevos, F2+F3) | **~$3-5/mes** | Continuo |
+| Backfill del resto de la RM | ~$8-12 | **Solo después** de medir que el localizador acierta ≥90% en el piloto |
+| Desempate visual (F5) | ~$1-2/mes | Continuo |
+
+**Regla de oro**: no gastes en procesar 15.000 anuncios antes de saber que el sistema funciona con 3.000. El piloto cuesta ~$3 y responde la pregunta. Si el resultado es bueno, expandes; si no, ajustas sin haber quemado el presupuesto.
+
+Todo lo demás del plan es **$0**: footprints (datos abiertos), geocoding (Nominatim), tiles (free tier), calibración (CPU del VPS), embeddings (lotes locales). Y `ai_cache_cl` registra `cost_usd` por llamada — **monitorea ese total desde el día 1**, es tu freno de mano.
+
+Los **asientos de Claude Code para el equipo** son gasto aparte y prioritario: si el presupuesto solo alcanza para uno bueno, que sea el de P1 (núcleo). P2 y P3 pueden trabajar con Sonnet 5 en casi todo (ver la tabla de modelo por tarea en cada brief).
+
 ## 6. Cómo se mide el >90% (no se promete a ciegas)
 
 1. `node scraper/eval-locator-cl.mjs` en cada fase, contra el gold set existente (captaciones con `sii_rol` confirmado + pins manuales): precisión y cobertura por comuna, con delta por fase.
@@ -404,6 +421,27 @@ Tres puestos que avanzan **a la vez sin pisarse**, porque el reparto es por **pr
 4. **`photo_attrs` JSON** (P2 → P1): por foto — `{es_exterior, piscina:{presente, forma, posicion_relativa}, pisos_visibles, techo:{material, color}, estilo, numero_casa_ocr:{valor, confianza}, cerros_visibles, quincho, cancha, paneles_solares}`.
 5. **`ai_cache_cl`** (0101, P2), **`parcel_footprint_stats_cl`** (0102, P2: `parcel_id, rol, comuna_id, building_count, footprint_total_m2, footprint_main_m2`) y **`locator_labels_cl`** (0104, P3): esquemas exactamente como en §4.
 6. Funciones exportadas: P2 → `extractTextClues(texts: string[]): Promise<TextClues>` y `extractPhotoAttrs(photos: PhotoRef[]): Promise<PhotoAttrs[]>`; P1 → `locateProperty(propertyClId: string)`; P2 expone las colas pg-boss con los nombres de §4.
+
+### 10.3b Cobertura: las 14 piezas y su dueño
+
+Ninguna fase del plan queda huérfana. **Ola 1 (MVP)** — las 12 piezas que llevan al sistema a producción:
+
+| Pieza | Dueño | Pieza | Dueño |
+|---|---|---|---|
+| F0 Bases sólidas | P2 | F5b Re-score visual | P1 |
+| F1 Localizador | P1 | F7a Semilla de etiquetas | P3 |
+| F2 NLP texto | P2 | F7b Pestaña Entrenar | P3 |
+| F3 Visión + OCR | P2 | F7c Calibración | P1 |
+| F4a Ingesta footprints | P2 | F8 Dedup 2.0 | P1 |
+| F4b Señal footprint | P1 | F5a Cola de revisión | P3 |
+
+**Ola 2** — después de medir el MVP, nunca antes:
+
+| Pieza | Dueño | Condición de arranque |
+|---|---|---|
+| F6 Embeddings (pgvector, `0103`) | P2 | Corpus >1.500 etiquetas |
+| F9 Departamentos: matching | P1 | F1-F5 estables y medidas |
+| F9 Departamentos: UI lista corta | P3 | Tras el matching de P1 |
 
 ### 10.4 Orden de integración a `main`
 

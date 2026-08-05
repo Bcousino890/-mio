@@ -6,10 +6,29 @@
 
 Eres **P2**, el combustible del sistema: arreglas lo que está roto, cargas los datos geográficos y conviertes texto y fotos en datos estructurados. Todo lo que produces lo consume P1 para decidir. Tus módulos de IA son **funciones puras** — reciben textos o fotos y devuelven JSON, no tocan la base de propiedades — por eso nunca chocas con P1.
 
-- **Modelo**: `/model claude-sonnet-5` para infra y footprints (patrones que ya existen en el repo); `/model claude-opus-5` para los prompts de NLP y visión (un prompt malo mete direcciones falsas al scoring).
 - **Rama**: `feat/localizador-p2-datos`
 - **Migraciones reservadas**: `0101` (cache de IA) y `0102` (footprints)
 - **Arrancas el día 1**, no dependes de nadie.
+
+### Modelo y esfuerzo por tarea
+
+Casi todo tu trabajo sigue patrones que ya existen en el repo, así que **Sonnet 5 te sirve para el 80%**. Sube de modelo solo en los prompts.
+
+| Tarea | `/model` | Esfuerzo | Por qué |
+|---|---|---|---|
+| F0a fix pHash en `media-sync-cl.mjs` | `claude-sonnet-5` | Medio | Cambio acotado en un UPDATE existente |
+| F0b `phash-backfill-cl.mjs` + test | `claude-sonnet-5` | Medio | Patrón de los `.mjs` con deps inyectadas |
+| F0c saneamiento S3 y smoke tests | `claude-sonnet-5` | Medio | Verificación, no diseño |
+| `0101` cache | `claude-sonnet-5` | Bajo | DDL simple |
+| **F2 prompt de NLP** | `claude-opus-5` (o Sonnet si no hay) | **Alto** | Un prompt malo mete direcciones falsas al scoring |
+| F2 parser y wiring del cache | `claude-sonnet-5` | Medio | Código de pegamento |
+| **F3 prompt de visión/OCR** | `claude-opus-5` (o Sonnet si no hay) | **Alto** | Ídem, más la regla anti-alucinación |
+| F3 agregación por clúster | `claude-opus-5` | Medio | Decide qué atributo es "señal fuerte" |
+| F4a ingesta streaming | `claude-sonnet-5` | Medio | Stream + COPY, patrón conocido |
+| `0102` + materialized view | `claude-sonnet-5` | Medio | SQL espacial |
+| F6 embeddings (Ola 2) | `claude-sonnet-5` | Medio | Batch aislado, no decide nada solo |
+
+**Si no tienes Opus disponible**: haz los prompts con Sonnet 5 pero **valídalos con la muestra manual de 50 casos antes de dar la fase por hecha** — es el mismo control de calidad, solo que iterarás un par de vueltas más. El presupuesto manda: Opus aquí es una comodidad, no un requisito.
 
 ## Archivos de los que eres dueño
 
@@ -58,7 +77,7 @@ Tabla `ai_cache_cl`, esquema exacto en §4-F2 del plan: PK `(kind, cache_key)`, 
 
 **El cache es la pieza clave del presupuesto**: la misma foto republicada por 3 corredoras se paga al modelo **una sola vez**. Para fotos, `cache_key = content_hash` (de `stored_photos`/`media_assets_cl`, que tu propio F0 puebla; fallback a sha256 de la URL). Para textos, sha256 del texto normalizado **+ versión del prompt** (así un cambio de prompt invalida el cache automáticamente).
 
-### 3. F2 — Pistas de texto (`web/lib/text-clues-cl.ts`) · usa Opus 5
+### 3. F2 — Pistas de texto (`web/lib/text-clues-cl.ts`) · prompt con Opus 5 si lo tienes, si no Sonnet 5
 
 Una llamada por clúster: concatena títulos + descripciones + features de todos los anuncios (truncar a ~6k chars) → `AI_MODEL_CHEAP`.
 
@@ -72,7 +91,7 @@ Notas de dominio chileno: `rol_sii_mencionado` es el jackpot (algunos anuncios d
 
 **Hecho cuando**: precisión ≥90% en muestra manual de 50 descripciones reales, coste por llamada registrado.
 
-### 4. F3 — Atributos visuales y OCR (`web/lib/photo-attrs-cl.ts`) · usa Opus 5
+### 4. F3 — Atributos visuales y OCR (`web/lib/photo-attrs-cl.ts`) · prompt con Opus 5 si lo tienes, si no Sonnet 5
 
 Hasta 10 fotos por clúster → `AI_MODEL_WORKHORSE`, con cache por foto.
 
@@ -88,7 +107,7 @@ Por qué importa cada atributo: la forma de la piscina y el techo se comparan lu
 
 **Hecho cuando**: precisión ≥90% en muestra manual de 50 fotos reales, cache funcionando (segunda pasada = 0 llamadas), coste registrado.
 
-### 5. F4a — Footprints de Google Open Buildings · vuelve a Sonnet 5
+### 5. F4a — Footprints de Google Open Buildings · Sonnet 5
 
 Migración `0102`: tabla `building_footprints_cl` + materialized view `parcel_footprint_stats_cl` (esquema exacto en §4-F4 del plan).
 
@@ -106,6 +125,14 @@ Tú solo cargas los datos; la lógica que evita penalizar construcciones posteri
 El comparador fotos↔satélite ya existe y funciona (Esri z19, prompt de piscina/techo/forma/entorno, devuelve `[{rol, score: -1..1, reasons}]`). P1 lo llamará para desempatar. Si pide ajustes de prompt o de selección de fotos (usar `es_exterior` de tu F3 para elegir las mejores), son tuyos.
 
 Mejora a coordinar con P1: abstraer el proveedor de tiles tras un env `SAT_TILE_PROVIDER` — los términos de uso comercial de Esri World Imagery son un hallazgo abierto (alternativas: Mapbox Static 50k/mes, Google Static 10k/mes).
+
+### 7. Ola 2 — F6 Embeddings (solo cuando el corpus supere ~1.500 etiquetas)
+
+No lo empieces hasta que P3 confirme que hay corpus suficiente; antes aporta poco frente a su coste.
+
+Migración `0103_pgvector_embeddings_cl.sql`: extensión `vector`, `media_assets_cl.embedding vector(512)` + embedding de descripciones. Embeddings de imagen con SigLIP/CLIP **por lotes nocturnos en el VPS** (8 GB sin GPU: viable pero lento, hazlo offline y con checkpoint). Usos: near-duplicates que el pHash pierde (recortes, marcas de agua, reencuadres) y matching fachada ↔ Street View / Mapillary.
+
+Entregas la búsqueda por similitud; quien la usa en el scoring del dedup es P1 (su F8).
 
 ## Reglas que no se rompen
 

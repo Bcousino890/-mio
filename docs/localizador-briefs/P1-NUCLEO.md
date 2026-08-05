@@ -6,11 +6,30 @@
 
 Eres **P1**, el cerebro del sistema: el que decide qué ROL del SII corresponde a cada propiedad. **Tus piezas son las de mayor riesgo del proyecto** — un peso mal calibrado une propiedades que no son la misma o escribe ROLes equivocados en fichas reales de clientes. Eres también la ruta crítica: P3 depende de tu F1 para tener datos reales.
 
-- **Modelo**: `/model claude-fable-5`, esfuerzo alto de razonamiento.
-- **`/code-review` obligatorio antes de CADA push.** Sin excepciones.
 - **Rama**: `feat/localizador-p1-nucleo`
 - **Migración reservada**: `0100` (solo tuya)
 - **Arrancas el día 1**, no dependes de nadie para F1.
+- **`/code-review` obligatorio antes de CADA push.** Sin excepciones.
+
+### Modelo y esfuerzo por tarea
+
+**Tú eres quien tiene Fable 5 en el equipo** — úsalo donde de verdad hace falta y baja a Sonnet en lo rutinario, así el presupuesto rinde.
+
+| Tarea | `/model` | Esfuerzo de razonamiento | Por qué |
+|---|---|---|---|
+| `0100` migración | `claude-sonnet-5` | Bajo | DDL, patrón conocido |
+| F1 `buildClusterEvidence` | **`claude-fable-5`** | **Alto** | Triangulación de pins y consenso físico: la lógica más sutil del proyecto |
+| F1 `locateProperty` + escritura de ROL | **`claude-fable-5`** | **Alto** | Escribe en fichas reales; un fallo contamina datos de clientes |
+| F1 endpoint + feeder | `claude-sonnet-5` | Bajo | Patrón copiado de `process-uploads` |
+| `eval-locator-cl.mjs` | `claude-sonnet-5` | Medio | SQL + reporte, sin riesgo |
+| F4b señal footprint | **`claude-fable-5`** | **Alto** | Toca el scoring; la regla de 2023 es fácil de olvidar |
+| F5b re-score visual | **`claude-fable-5`** | **Alto** | Decide confirmaciones automáticas |
+| F7c calibración | **`claude-fable-5`** | **Alto** | Matemática que gobierna todos los pesos |
+| F8 dedup 2.0 | **`claude-fable-5`** | **Alto** | Un falso merge une propiedades distintas |
+| F8 grafo `graphology` | `claude-sonnet-5` | Medio | Extensión de estructura existente |
+| F9 departamentos (Ola 2) | **`claude-fable-5`** | **Alto** | Lógica de matching nueva |
+
+**Regla práctica**: si la tarea escribe en `property_cl`/`listings_cl`, calcula pesos o decide merges → Fable 5, esfuerzo alto, `/code-review`. Si es DDL, endpoint, script de reporte o refactor mecánico → Sonnet 5. Cambiar de modelo a mitad de una sesión es normal: `/model claude-sonnet-5` para la parte rutinaria y de vuelta a `/model claude-fable-5` para la lógica.
 
 ## Archivos de los que eres dueño
 
@@ -96,6 +115,15 @@ Extiende `CL_PAIR_WEIGHTS`/`CL_HARD_SIGNALS` en `score-pair-cl.mjs` leyendo señ
 | **Atributos visuales incompatibles** | **−0.40** (guardarraíl) | P2 F3 |
 
 Los pesos definitivos los calibra tu F7c con las uniones manuales reales del usuario. También: extiende el grafo `graphology` de `clustering-cl.mjs` a nodos heterogéneos (anuncio, propiedad, ROL, corredora, teléfono, condominio).
+
+### 6. Ola 2 — F9 Departamentos (solo cuando F1-F5 estén estables y medidas)
+
+Los departamentos duplicarán el stock (~30.000 props). A nivel **edificio** son más fáciles que las casas — la dirección del edificio suele ser pública en el anuncio — y a nivel **unidad** más difíciles. Dos niveles:
+
+1. **Edificio (meta >95%)**: cambia el generador de candidatos — en vez de parcelas, agrupa por dirección base y `rol_padre` reutilizando `web/lib/sii-edificio-sql.ts` y los endpoints `sii-edificios`/`sii-building-units` que ya existen. Señales: dirección + nº del anuncio y del NLP, nombre del edificio/condominio, huella del footprint (los edificios grandes son inconfundibles), altura/skyline visible en fotos.
+2. **Unidad (refinamiento)**: dentro del `rol_padre`, filtra por `superficie_m2` SII (±10%), piso (NLP "piso 12"/"penthouse"; visión: altura de la vista desde ventanas), orientación, avalúo vs precio, dormitorios. Cuando quedan 2-10 unidades gemelas, **reporta el edificio con la lista corta ordenada** — ya es accionable para captar; el rol exacto se confirma con el dueño o TGR.
+
+`property_locator_cl` gana `building_rol_padre` y `unit_candidates jsonb` (pide número de migración al coordinador). El embudo F1-F5 se reutiliza entero. La UI de la lista corta la hace P3.
 
 ## Reglas que no se rompen
 

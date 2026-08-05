@@ -6,10 +6,28 @@
 
 Eres **P3**, la interfaz y el corpus de entrenamiento. Construyes la pantalla donde el usuario confirma en segundos si una casa es la correcta — y cada clic suyo entrena al sistema. Eres además el dueño de todo el conocimiento humano acumulado: las captaciones ya confirmadas, los pins corregidos a mano y las uniones de propiedades que el usuario ya hizo.
 
-- **Modelo**: `/model claude-sonnet-5` para la UI y el ETL; `/model claude-opus-5` para la query de selección de casos (active learning, requiere criterio).
 - **Rama**: `feat/localizador-p3-producto`
 - **Migración reservada**: `0104`
 - **Arrancas el día 1** con datos mock — no esperas a P1.
+
+### Modelo y esfuerzo por tarea
+
+Tu puesto es el más barato de operar: **Sonnet 5 cubre casi todo**.
+
+| Tarea | `/model` | Esfuerzo | Por qué |
+|---|---|---|---|
+| `0104` migración | `claude-sonnet-5` | Bajo | DDL simple |
+| F7a script de semilla | `claude-sonnet-5` | Medio | ETL con mapeo cuidadoso de fuentes |
+| F7b pantalla y carrusel | `claude-sonnet-5` | Medio | UI React, patrón del repo |
+| F7b mapa con pins por corredora | `claude-sonnet-5` | Medio | Reutiliza `corredora-pin-colors.ts` |
+| F7b atajos de teclado y flujo | `claude-sonnet-5` | Medio | UX, iterar rápido |
+| **F7b query de active learning** | `claude-opus-5` (o Sonnet si no hay) | **Alto** | Elegir qué caso mostrar decide cuánto aprende el sistema |
+| F7b endpoint `/confirm` | `claude-sonnet-5` | Medio | Escribe ROL: cuida `normalizeClRol` |
+| Etiquetas desde merge/split | `claude-sonnet-5` | Medio | Extensión acotada de un endpoint |
+| F5a cola de revisión | `claude-sonnet-5` | Medio | Reutiliza endpoints existentes |
+| F9 UI de departamentos (Ola 2) | `claude-sonnet-5` | Medio | Lista corta de unidades candidatas |
+
+**Si no tienes Opus**: la query de active learning con Sonnet funciona; solo asegúrate de probar el criterio con datos reales (¿los casos que salen son de verdad los dudosos?) antes de darlo por bueno.
 
 ## Archivos de los que eres dueño
 
@@ -73,6 +91,12 @@ Así el usuario entrena al sistema con su trabajo normal, sin ningún paso extra
 ### 5. F5a — Cola de revisión (pestaña Revisión)
 
 Lista los `property_locator_cl` en estado `needs_review`: fotos del clúster, pins por corredora, candidatos dibujados sobre las parcelas, botones confirmar/rechazar. Endpoints que ya existen y debes reutilizar: `parcels-bbox`, `cadastre-geojson`, `sii-rol-detail`.
+
+### 6. Ola 2 — F9 UI de departamentos (cuando P1 tenga el matching de edificios)
+
+En departamentos el sistema no siempre puede aislar la unidad exacta: dentro de un edificio quedan 2-10 unidades gemelas del mismo piso y tipo. La UI debe mostrar **el edificio identificado + la lista corta de unidades candidatas ordenada** (con m² SII, piso estimado, orientación y avalúo de cada una), porque eso ya es accionable para captar aunque el rol exacto se confirme después con el dueño o TGR.
+
+Añade a la pestaña Entrenar el modo "elegir unidad": el usuario ve la lista corta y marca cuál es — otra fuente de etiquetas de alta calidad.
 
 ## Cómo arrancar sin esperar a nadie
 
