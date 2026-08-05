@@ -36,6 +36,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         success: result.captacion.dealernet_status === 'ok',
         captacion: result.captacion,
         error: result.captacion.dealernet_error,
+        // Teléfonos de ESTE rut puntual (sin mezclar con lo que ya hubiera):
+        // es lo que la ficha necesita mostrar para no depender del total
+        // fusionado, que no cambia si el RUT consultado ya compartía
+        // números con el dueño.
+        queried_phones: result.queried_phones ?? [],
       })
     }
 

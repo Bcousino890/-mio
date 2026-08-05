@@ -1571,6 +1571,17 @@ async function applyTgrResult(
 export interface DealernetStageResult {
   captacion: CaptacionRow
   rut_candidates?: DealernetCandidato[]
+  // Teléfonos de ESTA consulta puntual (manual=true), antes de fusionarlos
+  // con los que ya hubiera — ver finishDealernetByRut. Sin esto, la ficha
+  // solo podía mostrar el TOTAL fusionado (`captacion.phones.length`), que no
+  // dice cuáles son nuevos: si el RUT consultado ya compartía números con el
+  // dueño (p. ej. es la misma persona detrás de la sociedad), el total no
+  // cambiaba y parecía que la consulta "no encontró nada", aunque sí haya
+  // encontrado exactamente esos teléfonos para ese RUT.
+  queried_phones?: Array<{
+    numero: string; tipo: string | null; categoria: string | null
+    whatsapp: boolean | null; relacion: string | null
+  }>
 }
 
 function candidatoFullName(cand: DealernetCandidato): string {
@@ -1870,5 +1881,10 @@ export async function finishDealernetByRut(
      JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length,
      titularName ?? candidateNameHint, JSON.stringify(relacionadosJson)],
   )
-  return { captacion: rows[0] as CaptacionRow }
+  return {
+    captacion: rows[0] as CaptacionRow,
+    queried_phones: newPhonesJson.map((p) => ({
+      numero: p.numero, tipo: p.tipo, categoria: p.categoria, whatsapp: p.whatsapp, relacion: p.relacion,
+    })),
+  }
 }
