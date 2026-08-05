@@ -1,6 +1,7 @@
 # Plan — Localizador de Propiedades con IA (Chile)
 
-**v1.0 · 2026-08-05** · Estado: aprobado, pendiente de implementación
+**v1.1 · 2026-08-05** · Estado: aprobado, pendiente de implementación
+*(v1.1: aprendizaje continuo con las ~15.000 props captadas, límite temporal de Open Buildings, Dedup 2.0 con el mismo stack, extensión a departamentos/edificios)*
 
 Anuncio de Portal Inmobiliario → propiedad exacta → **ROL SII**, al estilo Lystos (ES) / PropertyRadar (US), con presupuesto mínimo.
 
@@ -176,6 +177,12 @@ GROUP BY p.id, p.rol, p.comuna_id;
 
 **Nuevo `scraper/ingest-open-buildings-cl.mjs`**: descarga HTTPS en **streaming sin descomprimir a disco** (VPS limitado): `zlib.createGunzip()` → CSV línea a línea → filtro **bbox RM** + `confidence ≥ 0.7` + `area ≥ 15 m²` → `COPY` con `pg-copy-streams`. Reanudable (checkpoint por línea) e idempotente. Tabla resultante ~1-2 GB: deja lista la expansión de comunas.
 
+**⚠️ Límite temporal (confirmado por el usuario): la inferencia de Open Buildings v3 es de mayo 2023** — construcciones posteriores no aparecen. Mitigaciones obligatorias:
+- Si `anio_construccion` SII > 2022, el anuncio dice "nueva/a estrenar" o la comuna tiene mucha obra nueva ⇒ `building_count = 0` **NO penaliza** (la señal se anula, no resta).
+- Complemento donde falte: footprints de **OSM** (Chile tiene buena cobertura urbana) y **Microsoft South America Building Footprints** (ODbL, imágenes 2020-2021) — mismo esquema de tabla, columna `source` los distingue.
+- Opcional: dataset **Open Buildings 2.5D Temporal** (series 2016-2023 con altura estimada de edificio) — útil además como proxy de nº de pisos para la señal de footprint.
+- El desempate visual (F5) usa tiles satelitales actuales, así que las construcciones post-2023 siempre tienen un camino de verificación.
+
 **Integración**: extender `SiiCandidateRow` (`sii-match-cl-v2.ts:43-62`) con las stats (LEFT JOIN a la MV por `normalizar_rol_cl(rol)`+comuna, poblado en `findSiiCandidatesV3`); nueva señal `footprintEvidence()` en `scoreCandidateV3`: huella esperada ≈ `sqm_construida / pisos` (pisos del anuncio, del VLM o de `sii_construcciones_cl`), tope **±0.9 log-odds** (Open Buildings tiene error de segmentación); `building_count=0` con casa construida ⇒ −0.8; forma/orientación vs `visual_attrs` como bonus leve. Jubila el `buildingFootprintRatio` débil de `aerial-signature-cl.mjs` (post-MVP).
 
 **Verificación**: correlación `footprint_main_m2` vs `superficie_construida_m2/pisos` SII en roles ya confirmados (esperable r>0.7 en casas); delta de separación log-odds top1-top2.
@@ -192,6 +199,41 @@ GROUP BY p.id, p.rol, p.comuna_id;
 - Embeddings de imagen SigLIP/CLIP: en VPS 8 GB sin GPU es viable pero lento → API barata u offline por lotes nocturnos. Usos: dedup mejorado (near-duplicates que el pHash pierde: recortes, marcas de agua), búsqueda "fotos parecidas" cross-corredora, y **matching fachada ↔ Street View Static / Mapillary** (free tier) del candidato top-1 cruzando `numero_casa_ocr` + estilo/techo.
 - **Criterio de activación**: cuando el corpus etiquetado autoacumulado (captaciones confirmadas + decisiones de la cola + `listing_match_cl` decididos) supere **~1.500-2.000 casos** — ahí también se recalibran los log-odds con datos reales. Antes aporta poco frente a su coste.
 
+### Fase 7 — Aprendizaje continuo con las propiedades ya captadas (~15.000 hoy, ~30.000 previstas)
+
+"Que el modelo vaya entrenando" sin GPU ni gasto: el sistema **aprende de sus propios aciertos confirmados**, en tres niveles crecientes:
+
+1. **Desde el día 1 (F1)**: las captaciones con `sii_rol` confirmado y los pins manuales SON el set de entrenamiento/validación inicial — `eval-locator-cl.mjs` mide contra ellos en cada fase.
+2. **Calibración de pesos** — nuevo `scraper/calibrate-locator-cl.mjs` (cron semanal): regresión logística simple sobre las señales guardadas (`captaciones_cl.match_signals`, `property_locator_cl.candidates`, `listing_match_cl.signals` — todas jsonb pensadas exactamente para esto) → propone pesos log-odds recalibrados para `scoreCandidateV3` y `footprintEvidence` con datos chilenos reales, en vez de los pesos a ojo actuales. Corre en el VPS en segundos (es álgebra, no deep learning). Los pesos nuevos se aplican tras revisar el reporte, nunca en caliente.
+3. **Ciclo virtuoso permanente**: cada auto-confirmación validada, cada decisión en `/chile/localizador` y cada corrección de pin alimentan el corpus → el corpus recalibra los pesos → sube la precisión → más auto-confirmaciones. Con >2.000 casos etiquetados: modelo ligero (regresión logística regularizada o gradient boosting pequeño, CPU) como scorer alternativo A/B contra el de reglas — se adopta solo si gana en el gold set.
+
+Entrenar una red neuronal propia sigue fuera del plan: con este volumen de datos el calibrado estadístico rinde más y cuesta $0.
+
+### Fase 8 — Dedup 2.0: el mismo stack aplicado a la deduplicación
+
+La dedup actual (`score-pair-cl.mjs`) usa pHash + trigram + teléfono/agencia. Con las piezas del localizador ya construidas, se enriquece gratis:
+
+| Señal nueva de par | Origen | Peso propuesto |
+|---|---|---|
+| **Mismo ROL localizado** (dos anuncios que resuelven al mismo `rol_matriz` con confianza alta) | F1-F5 — cierra el círculo localizador→dedup | +0.70 (casi decisoria) |
+| Mismo condominio/calle+nº extraídos por NLP | `text_clues` (F2), cacheado | +0.35 |
+| Mismo `numero_casa_ocr` | `photo_attrs` (F3) | +0.45 |
+| Atributos visuales compatibles (piscina forma, techo, estilo) / incompatibles | F3 | +0.10 / **−0.40** (guardarraíl) |
+| Embeddings de foto near-dup (recortes, marcas de agua, reencuadres que el pHash pierde) | F6 pgvector, umbral coseno | +0.45 |
+| Pistas geocodificadas cercanas (<100 m) | F2 geocoding | +0.15 |
+
+- Implementación: extender `CL_PAIR_WEIGHTS`/`CL_HARD_SIGNALS` en `score-pair-cl.mjs` leyendo de `ai_cache_cl`/`property_locator_cl` (señales ya calculadas — coste marginal $0); los pesos definitivos los calibra la Fase 7 con los pares ya decididos por humanos en `listing_match_cl`.
+- **Grafo de conocimiento**: extender el grafo `graphology` de `clustering-cl.mjs` (hoy solo anuncio↔anuncio) a nodos heterogéneos — anuncio, propiedad, ROL, corredora, teléfono, condominio/edificio — persistido como vistas sobre las tablas existentes. Usos: detectar corredoras que republican bajo varios `advertiser_id`, condominios con numeración interna propia, y consultas tipo "todas las corredoras que han publicado esta propiedad" para trazabilidad de exclusividad.
+
+### Fase 9 — Departamentos y edificios (meta >95% a nivel edificio)
+
+Hoy el piloto son casas; los departamentos (que ~duplicarán el stock hacia ~30.000 props) son en realidad **más fáciles a nivel edificio** — la dirección del edificio suele ser pública en el anuncio — y más difíciles a nivel unidad. Estrategia en dos niveles:
+
+1. **Nivel edificio (el objetivo >95%)**: infraestructura ya existente — `web/lib/sii-edificio-sql.ts` agrupa unidades por dirección base y `rol_padre`; endpoints `sii-edificios`/`sii-building-units`. Señales: dirección+nº del anuncio/NLP, nombre del edificio/condominio (F2), fachada del edificio en fotos vs Street View (F6), skyline/altura visible, `building_count` y huella del footprint (los edificios grandes son inconfundibles en Open Buildings), gastos comunes como proxy de categoría.
+2. **Nivel unidad (refinamiento)**: dentro del `rol_padre`, filtrar unidades por `superficie_m2` SII (±10%), piso (NLP: "piso 12", "penthouse"; VLM: altura de la vista desde ventanas/balcón), orientación (NLP + sombras/vista en fotos), avalúo vs precio pedido, dormitorios. Muchas veces queda un set de 2-10 unidades gemelas del mismo piso/tipo — se reporta el edificio con lista de unidades candidatas ordenadas, que ya es accionable para captación (el rol exacto se confirma con el dueño/TGR).
+- Cambios: `property_locator_cl` gana `building_rol_padre` y `unit_candidates jsonb`; el embudo F1-F5 se reutiliza entero cambiando el generador de candidatos (edificios en vez de parcelas) — sin migración estructural nueva.
+- Prerequisito por comuna: stock SII cargado (ya nacional) + geocoding de direcciones de edificios (mismo job de F1).
+
 ---
 
 ## 5. Coste por 1.000 anuncios nuevos (≈650 clústeres)
@@ -207,11 +249,13 @@ GROUP BY p.id, p.rol, p.comuna_id;
 
 Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disponible: desempate visual estándar en todo `needs_review`.
 
+**Backfill del stock existente**: ~15.000 props hoy ⇒ ~$10-15 una sola vez (F2+F3 sobre todo el histórico, en lotes nocturnos); al crecer a ~30.000 con deptos y más comunas ⇒ <$30 one-time y el incremental mensual sigue <$10, porque el cache por `content_hash` hace que re-procesar sea ≈$0.
+
 ## 6. Cómo se mide el >90% (no se promete a ciegas)
 
 1. `node scraper/eval-locator-cl.mjs` en cada fase, contra el gold set existente (captaciones con `sii_rol` confirmado + pins manuales): precisión y cobertura por comuna, con delta por fase.
 2. **Gate**: precisión de `auto_confirmed` **≥95%**; si baja, se suben umbrales antes de avanzar de fase.
-3. Expectativa honesta: >90% de acierto global es alcanzable en comunas con polígonos y anuncios con fotos+texto ricos; en comunas sin coordenadas SII el techo lo pone el geocoding del stock (por eso corre en paralelo desde F1).
+3. Expectativa honesta: >90% de acierto global es alcanzable en comunas con polígonos y anuncios con fotos+texto ricos; en comunas sin coordenadas SII el techo lo pone el geocoding del stock (por eso corre en paralelo desde F1). Para departamentos (F9) la meta es **>95% a nivel edificio** (dirección de edificio suele ser pública) con lista corta de unidades candidatas como salida accionable.
 4. E2E: migraciones en orden sobre copia; jobs verificados en logs pg-boss y `/chile/anuncios-health`; flujo completo en `/chile/localizador` con un clúster real de Las Condes → verificar `rol_matriz` en `property_cl` y `address_real` en el panel SmartBC.
 
 ## 7. Riesgos y mitigaciones
@@ -226,7 +270,7 @@ Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disp
 
 ## 8. Fuera del MVP
 
-- **Entrenar modelos propios / fine-tuning de visión**: innecesario, el embudo lo cubre. Reconsiderar solo con el corpus etiquetado de F6.
+- **Entrenar redes neuronales propias / fine-tuning de visión**: innecesario, el embudo lo cubre. El "entrenamiento" del sistema es la calibración estadística continua de la Fase 7 (regresión logística/GBM sobre CPU, coste $0) — con este volumen de datos rinde más que una red propia. Reconsiderar solo si el corpus etiquetado supera decenas de miles de casos y la calibración toca techo.
 - **Cross-view geolocalization (GeoCLIP/PIGEON)**: mediana de error ~44 km — inútil a escala de parcela. Solo investigación futura.
 - **Nuevas fuentes catastrales SII**: restricción del usuario — solo `sii_roles_cl`/`cadastre_parcels_cl` ya cargados.
 
@@ -234,4 +278,6 @@ Al volumen actual: **<$5/mes**, muy por debajo del tope de $50/mes. Palanca disp
 
 **Reutilizar**: `web/lib/captar-pipeline.ts` · `web/lib/sii-match-cl-v2.ts` · `web/lib/visual-match-cl.ts` · `scraper/lib/media-sync-cl.mjs` · `scraper/lib/phash.mjs` · `scraper/worker-cl.mjs` · `web/lib/rol-format.ts` · `scraper/lib/geocode-cl.mjs`.
 
-**Nuevos**: `web/lib/property-locator-cl.ts` · `web/lib/text-clues-cl.ts` · `web/lib/photo-attrs-cl.ts` · `scraper/lib/phash-backfill-cl.mjs` · `scraper/lib/locator-feeder-cl.mjs` · `scraper/ingest-open-buildings-cl.mjs` · `scraper/eval-locator-cl.mjs` · `web/app/api/chile/property-locator/{route.ts, [id]/confirm/route.ts}` · `web/app/chile/localizador/page.tsx` · migraciones `0100`–`0103`.
+**Nuevos**: `web/lib/property-locator-cl.ts` · `web/lib/text-clues-cl.ts` · `web/lib/photo-attrs-cl.ts` · `scraper/lib/phash-backfill-cl.mjs` · `scraper/lib/locator-feeder-cl.mjs` · `scraper/ingest-open-buildings-cl.mjs` · `scraper/eval-locator-cl.mjs` · `scraper/calibrate-locator-cl.mjs` (F7) · `web/app/api/chile/property-locator/{route.ts, [id]/confirm/route.ts}` · `web/app/chile/localizador/page.tsx` · migraciones `0100`–`0103`.
+
+Para F8-F9 (dedup 2.0 y departamentos): extender `scraper/lib/score-pair-cl.mjs`, `scraper/lib/clustering-cl.mjs` y reutilizar `web/lib/sii-edificio-sql.ts` + endpoints `sii-edificios`/`sii-building-units`.
