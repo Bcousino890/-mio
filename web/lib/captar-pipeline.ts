@@ -1677,21 +1677,43 @@ export async function lookupContactsDealernet(captacionId: string): Promise<Deal
     return { captacion: rows[0], rut_candidates: allCandidates.slice(0, 15) }
   }
 
-  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), allCandidates, candidatoFullName(chosen) || null)
+  return finishDealernetByRut(c, chosen.rut!, chosen.dv ?? computeRutDv(chosen.rut!), { allCandidates, candidateNameHint: candidatoFullName(chosen) || null })
 }
 
-/** Consulta final por RUT (productos de contactabilidad) y persistencia. */
+/**
+ * Consulta final por RUT (productos de contactabilidad) y persistencia.
+ *
+ * Dos usos MUY distintos comparten esta función:
+ *   1. Identificación PRIMARIA del dueño (desde lookupContactsDealernet, arriba):
+ *      el RUT elegido SÍ pasa a ser owner_rut, y sus candidatos/teléfonos SÍ
+ *      reemplazan lo que hubiera — es la primera vez que se identifica al dueño.
+ *   2. Consulta MANUAL a un RUT puntual (`manual: true`, desde el picker "Otro
+ *      RUT" de la ficha — /api/chile/captar/[id]/dealernet con {rut} en el
+ *      body): el equipo NO está re-identificando al dueño, está pidiendo la
+ *      contactabilidad de alguien relacionado (la persona detrás de la
+ *      sociedad dueña, un histórico, etc.). Sin distinguir los dos casos, esta
+ *      consulta pisaba owner_rut con el RUT puntual, BORRABA
+ *      owner_rut_candidates (quedaba `[]`, el picker de dueños desaparecía de
+ *      la ficha) y REEMPLAZABA los teléfonos ya encontrados del dueño real
+ *      por los de este RUT puntual — a veces ninguno, dejando la ficha peor
+ *      que antes de preguntar.
+ */
 export async function finishDealernetByRut(
   c: CaptacionRow,
   rutNum: number,
   rutDv: string,
-  allCandidates: DealernetCandidato[] = [],
-  // Nombre del titular tal como lo trajo el Buscador Múltiple, usado como
-  // respaldo cuando TGR nunca corrió (o falló): sin esto, saltarse TGR dejaba
-  // owner_name en null aunque ya hubiera RUT y teléfonos guardados — la fila
-  // se veía "sin dueño" en /chile/captacion pese a estar contactable.
-  candidateNameHint: string | null = null,
+  opts: {
+    allCandidates?: DealernetCandidato[]
+    // Nombre del titular tal como lo trajo el Buscador Múltiple, usado como
+    // respaldo cuando TGR nunca corrió (o falló): sin esto, saltarse TGR
+    // dejaba owner_name en null aunque ya hubiera RUT y teléfonos guardados
+    // — la fila se veía "sin dueño" en /chile/captacion pese a estar
+    // contactable.
+    candidateNameHint?: string | null
+    manual?: boolean
+  } = {},
 ): Promise<DealernetStageResult> {
+  const { allCandidates = [], candidateNameHint = null, manual = false } = opts
   // Este mismo RUT puede ya estar guardado (ficha del rol en /chile/catastro,
   // /chile/dealer, u otra captación) — reusar evita pagar la consulta de nuevo.
   const cached = await getCachedContactByRut(rutNum, rutDv, DEFAULT_DEALERNET_PRODUCTS)
@@ -1789,7 +1811,7 @@ export async function finishDealernetByRut(
   // Mismo teléfono puede salir de varios productos (3407/3408/3410) — se
   // deduplica igual que en la ficha Dealer (dealernet-lookup) para no repetir
   // cada número una vez por producto que lo confirmó.
-  const phonesJson = dedupePhones(phones).map((p) => ({
+  const newPhonesJson = dedupePhones(phones).map((p) => ({
     numero: p.phone_e164,
     tipo: p.clasificacion,
     categoria: p.categoria,
@@ -1800,8 +1822,31 @@ export async function finishDealernetByRut(
     relacion: p.relacion,
     ranking: p.ranking,
   }))
-  const emailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
-  const relacionadosJson = relacionados.map((r) => ({ rut: r.rut, dv: r.dv, nombre: r.nombre, relacion: r.relacion }))
+  const newEmailsJson = emails.map((e) => ({ email: e.email, categoria: e.categoria, fuente: e.product_code }))
+  const newRelacionadosJson = relacionados.map((r) => ({ rut: r.rut, dv: r.dv, nombre: r.nombre, relacion: r.relacion }))
+
+  // Combina una lista ya guardada (columna jsonb, forma sin garantías en
+  // tiempo de ejecución) con la recién consultada, sin perder lo que ya
+  // había — la clave decide qué cuenta como "el mismo" para no duplicar.
+  const mergeByKey = <T extends Record<string, unknown>>(previo: unknown, nuevos: T[], key: string): T[] => {
+    const combinados = new Map<unknown, T>()
+    for (const p of (Array.isArray(previo) ? (previo as T[]) : [])) combinados.set(p[key], p)
+    for (const p of nuevos) combinados.set(p[key], p)
+    return Array.from(combinados.values())
+  }
+
+  // owner_rut / owner_rut_candidates / phones / emails / relacionados: en la
+  // identificación PRIMARIA (manual=false) el RUT elegido SÍ es el dueño y
+  // reemplaza lo anterior. En una consulta MANUAL a un RUT puntual
+  // (manual=true) nada de eso cambia — solo se SUMAN los teléfonos/emails/
+  // relacionados nuevos a los que ya había.
+  const ownerRutFinal = manual ? (c.owner_rut ?? `${rutNum}-${rutDv}`) : `${rutNum}-${rutDv}`
+  const candidatesFinal = manual
+    ? (Array.isArray(c.owner_rut_candidates) ? c.owner_rut_candidates : [])
+    : allCandidates.slice(0, 15)
+  const phonesJson = manual ? mergeByKey(c.phones, newPhonesJson, 'numero') : newPhonesJson
+  const emailsJson = manual ? mergeByKey(c.emails, newEmailsJson, 'email') : newEmailsJson
+  const relacionadosJson = manual ? mergeByKey(c.relacionados, newRelacionadosJson, 'nombre') : newRelacionadosJson
 
   const { rows } = await pool.query(
     `UPDATE captaciones_cl SET
@@ -1821,7 +1866,7 @@ export async function finishDealernetByRut(
        stage = CASE WHEN $6::int > 0 THEN 'contact_found' ELSE stage END,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [c.id, `${rutNum}-${rutDv}`, JSON.stringify(allCandidates.slice(0, 15)),
+    [c.id, ownerRutFinal, JSON.stringify(candidatesFinal),
      JSON.stringify(phonesJson), JSON.stringify(emailsJson), phonesJson.length,
      titularName ?? candidateNameHint, JSON.stringify(relacionadosJson)],
   )

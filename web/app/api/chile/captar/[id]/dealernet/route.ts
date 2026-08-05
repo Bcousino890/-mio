@@ -28,7 +28,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
       const c = await getCaptacion(id)
       if (!c) return NextResponse.json({ success: false, error: 'Captación no encontrada' }, { status: 404 })
-      const result = await finishDealernetByRut(c, rut.num, rut.dv)
+      // manual: true — RUT puntual elegido a mano, no la identificación
+      // primaria del dueño. No debe pisar owner_rut/owner_rut_candidates ni
+      // reemplazar los teléfonos ya encontrados (ver finishDealernetByRut).
+      const result = await finishDealernetByRut(c, rut.num, rut.dv, { manual: true })
       return NextResponse.json({
         success: result.captacion.dealernet_status === 'ok',
         captacion: result.captacion,
