@@ -681,7 +681,7 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
   // confirmación documental del dueño; si falla o tarda (levanta Chromium,
   // ~30-60s) no bloquea los teléfonos que ya se guardaron arriba.
   const [captarStage, setCaptarStage] = useState<null | 'tgr' | 'dealernet'>(null)
-  const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [captarMsg, setCaptarMsg] = useState<{ ok: boolean; text: string; phones?: string[] } | null>(null)
   // RUT que se está consultando a mano desde la lista de dueños del rol.
   const [pidiendoRut, setPidiendoRut] = useState<string | null>(null)
 
@@ -702,10 +702,17 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
       const fresh = await refreshProperty()
       const crm = fresh?.crm ?? null
       if (crm) setResolved(prev => (prev ? { ...prev, crm } : prev))
-      const phones = crm?.phones?.length ?? 0
+      // Teléfonos de ESTE rut puntual — no el total fusionado con lo que ya
+      // hubiera (crm.phones.length): si el RUT consultado ya compartía
+      // números con el dueño (misma persona detrás de la sociedad, por
+      // ejemplo), el total no cambiaba y parecía "no encontró nada" aunque
+      // sí haya encontrado justo estos.
+      const queriedPhones: string[] = Array.isArray(res?.queried_phones)
+        ? res.queried_phones.map((p: { numero: string }) => p.numero)
+        : []
       setCaptarMsg(
-        phones > 0
-          ? { ok: true, text: `✓ ${phones} teléfono${phones === 1 ? '' : 's'} de ${rut}` }
+        queriedPhones.length > 0
+          ? { ok: true, text: `✓ ${queriedPhones.length} teléfono${queriedPhones.length === 1 ? '' : 's'} de ${rut}`, phones: queriedPhones }
           : { ok: false, text: res?.error ?? `Sin teléfonos para ${rut} en DealerNet` },
       )
     } finally {
@@ -1417,7 +1424,20 @@ export default function PropertyModal({ p, onClose, onRefetched, onSplit }: {
                                   </div>
                                 )}
                                 {captarMsg && (
-                                  <div className={`text-xs mt-1.5 ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
+                                  <div className="mt-1.5">
+                                    <div className={`text-xs ${captarMsg.ok ? 'text-emerald-400' : 'text-amber-400'}`}>{captarMsg.text}</div>
+                                    {/* Los números de ESTE rut puntual, explícitos — no alcanza con el
+                                        conteo si comparte teléfonos con los que ya había arriba, porque
+                                        entonces el total no cambia y parece que la consulta no encontró
+                                        nada aunque sí haya encontrado justo estos. */}
+                                    {captarMsg.phones && captarMsg.phones.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {captarMsg.phones.map((num) => (
+                                          <span key={num} className="font-mono text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/25">{num}</span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             ) : !resolving ? (
