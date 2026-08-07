@@ -355,6 +355,20 @@ export async function GET(request: Request) {
         evomi: Boolean(process.env.EVOMI_PROXY_USER && process.env.EVOMI_PROXY_HOST),
         smartproxy_cl: Boolean(process.env.SMARTPROXY_CL_USER && process.env.SMARTPROXY_CL_HOST),
       },
+      // De dónde lee el LISTADO el barrido. Es el dato que faltaba para poder
+      // interpretar todo lo de arriba: con la fuente HTML, un objetivo "fallando"
+      // con la pantalla antibot no tiene arreglo por proxy —está documentado— y
+      // lo que toca es configurar la API oficial de Mercado Libre. Con la API
+      // configurada, un objetivo que sigue fallando ya sí es un problema real
+      // que merece mirarse. Solo se reporta el HECHO de estar configurada, nunca
+      // las credenciales.
+      fuente_listado: {
+        api_ml: Boolean(process.env.ML_CLIENT_ID && process.env.ML_CLIENT_SECRET),
+        // Con la API activa las bajas las sigue firmando el HTML salvo que se
+        // autorice explícitamente (ver ML_API_BAJAS en .env.example).
+        api_ml_da_de_baja: process.env.ML_API_BAJAS === '1',
+        activa: process.env.ML_CLIENT_ID && process.env.ML_CLIENT_SECRET ? 'api-ml+html' : 'html',
+      },
       // Qué devolvieron las fichas procesadas en la última hora: "completado" no
       // implica "guardado".
       detail_outcomes: detailOutcomes,

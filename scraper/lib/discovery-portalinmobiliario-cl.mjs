@@ -7,10 +7,10 @@
 // solo barre las filas `enabled` (arranca solo con Las Condes, el resto de la RM
 // se activa con un UPDATE, sin tocar código).
 //
-// Para cada target (comuna × tipo × operación) construye la URL de listado de
-// PROPIEDADES USADAS (el plan cubre primero usadas, no proyectos), pagina con el
-// patrón real `_Desde_N` confirmado en Fase 0, extrae los anuncios con
-// parseListPage (blob Nordic) y:
+// Para cada target (comuna × tipo × operación) pide las páginas del listado de
+// PROPIEDADES USADAS (el plan cubre primero usadas, no proyectos) a la FUENTE
+// configurada —la API oficial de Mercado Libre o el HTML del portal, ver
+// discovery-fuente-cl.mjs—, las pagina hasta agotarlas y:
 //   - encola `detail:<id>` SOLO de los external_id que aún no están en
 //     listings_cl (los ya conocidos los refresca el propio ciclo de detail).
 //   - al terminar un barrido COMPLETO de la comuna, marca `delisted` los
@@ -21,15 +21,36 @@
 //     declarado por el portal, base del gate ≥90% de H17/H22).
 //
 // Toda la lógica de decisión (slug de comuna, armado de URL, terminación de la
-// paginación) es PURA y testeable sin red ni Postgres; discoverTarget inyecta
-// fetch/parse/enqueue para poder testear el barrido con páginas simuladas.
+// paginación, bisección por precio, contraste de cobertura) es PURA y testeable
+// sin red ni Postgres, y es AGNÓSTICA de la fuente: discoverTarget acepta
+// `fuente` —o `fetch`/`parse`/`enqueue` sueltos, que arman la fuente HTML— para
+// poder testear el barrido con páginas simuladas.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchHtmlResilient, SLEEP } from './fetch.mjs'
 import { parseListPage, parseListMeta } from './parse-portalinmobiliario.mjs'
 import { fold } from './chile-comunas.mjs'
+import { fuenteHtml, elegirFuente } from './discovery-fuente-cl.mjs'
 
-const PAGE_SIZE = 48 // confirmado en Fase 0: 48 resultados por página (_Desde_49, _Desde_97…)
+// De dónde salen las páginas del listado. El barrido NO sabe (ni le importa) si
+// se las sirve el HTML del portal o la API oficial de Mercado Libre: pide
+// `pedirPagina({offset, priceRange})` y recibe `{listings, meta}`. Ese desacople
+// es lo que permite dejar de depender del buscador HTML, que es la parte que
+// Mercado Libre bloquea por reputación de IP (ver discovery-fuente-cl.mjs).
+//
+// El tamaño de página lo pone la fuente: 48 en el HTML (confirmado en Fase 0 con
+// `_Desde_49`, `_Desde_97`…) y 50 en la API. Calcular el desplazamiento con una
+// constante fija se llevaría por delante la paginación de la otra.
+function fuenteDe(deps) {
+  const {
+    fetch = fetchHtmlResilient,
+    parseList = parseListPage,
+    parseMeta = parseListMeta,
+    fuente = null,
+  } = deps
+  if (fuente) return fuente
+  return elegirFuente({ html: fuenteHtml({ fetch, parseList, parseMeta, buildUrl: buildListUrl }) })
+}
 
 // Bisección por banda de precio (para comunas que superan el tope de paginación
 // del portal, ~2000). Techo alto que cubre cualquier residencial chileno; el
@@ -315,7 +336,7 @@ export async function registerTargetFailure(client, targetId, { at, reason }) {
  * agregado de todas las bandas. Devuelve el estado de esta banda.
  */
 async function sweepBand(client, ctx, priceRange, seen) {
-  const { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
+  const { fuente, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, target } = ctx
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, completed = false, reason = null
   // `blocked` = la banda no consiguió leer NI SU PRIMERA PÁGINA. Es distinto de
   // "barrido incompleto": aquí no hubo barrido, no se gastó tráfico y no hay
@@ -328,10 +349,9 @@ async function sweepBand(client, ctx, priceRange, seen) {
   let zeroNewStreak = 0
 
   for (let page = 1; page <= maxPages; page++) {
-    const offset = (page - 1) * PAGE_SIZE
-    const url = buildListUrl({ comunaSlug: ctx.slug, regionSlug: ctx.rslug, operation: target.operation, propertyType: target.property_type, offset, priceRange })
+    const offset = (page - 1) * fuente.tamanoPagina
 
-    const res = await fetch(url, { profile: 'portalinmobiliario' })
+    const res = await fuente.pedirPagina({ target, slug: ctx.slug, rslug: ctx.rslug, offset, priceRange })
     if (!res.ok) {
       // 404 = el portal se quedó SIN MÁS PÁGINAS. Es la señal natural de fin al
       // paginar (verificado en real: tras la última página con resultados, la
@@ -351,8 +371,8 @@ async function sweepBand(client, ctx, priceRange, seen) {
     }
     pages++
 
-    const meta = parseMeta(res.html)
-    const listings = parseList(res.html)
+    const meta = res.meta ?? { total: null, pageCount: null, resultsLimit: null }
+    const listings = res.listings ?? []
     if (page === 1) { portalTotal = meta.total; resultsLimit = meta.resultsLimit }
     // Página 1 que responde 200 pero no trae ni anuncios ni total: no es una
     // comuna vacía (esa contesta 404, o 200 con total=0), es una respuesta que
@@ -478,9 +498,6 @@ export async function subdividePriceBands(probe, resultsLimit, min = 0, max = PR
 
 export async function discoverTarget(client, target, deps = {}) {
   const {
-    fetch = fetchHtmlResilient,
-    parseList = parseListPage,
-    parseMeta = parseListMeta,
     enqueueDetail = async () => {},
     maxPages = 60,
     politenessMs = 1500,
@@ -489,11 +506,12 @@ export async function discoverTarget(client, target, deps = {}) {
     forceRefetch = !!target.force_refetch,
     now = () => new Date(),
   } = deps
+  const fuente = fuenteDe(deps)
 
   const slug = comunaSlug(target.comuna_name)
   const rslug = regionSlug(target.region)
   const scrapedAt = now()
-  const ctx = { fetch, parseList, parseMeta, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, forceRefetch, target, slug, rslug }
+  const ctx = { fuente, enqueueDetail, maxPages, politenessMs, sleep, includeDevelopments, forceRefetch, target, slug, rslug }
 
   const seen = new Set()
   let pages = 0, enqueued = 0, portalTotal = null, resultsLimit = null, reason = null
@@ -526,11 +544,10 @@ export async function discoverTarget(client, target, deps = {}) {
     // PRICE_CEILING_CLF); arriendo se mantiene en CLP.
     const unit = priceUnitFor(target.operation)
     const probe = async (range) => {
-      const url = buildListUrl({ comunaSlug: slug, regionSlug: rslug, operation: target.operation, propertyType: target.property_type, priceRange: range })
-      const res = await fetch(url, { profile: 'portalinmobiliario' })
+      const res = await fuente.pedirPagina({ target, slug, rslug, offset: 0, priceRange: range })
       if (!res.ok) return null
       await sleep(politenessMs)
-      return parseMeta(res.html).total
+      return res.meta?.total ?? null
     }
     const ceiling = priceCeilingFor(unit)
     // Banda ABIERTA final [techo, ∞): `max: 0` es como el propio portal escribe
@@ -578,7 +595,18 @@ export async function discoverTarget(client, target, deps = {}) {
 
   let delisted = 0
   if (exhaustive && target.comuna_id && seen.size > 0) {
-    delisted = await markDelisted(client, target, seen, scrapedAt)
+    // Dar de baja es la decisión irreversible del barrido: lo que no se vio se
+    // apaga. Se compara contra el total que declara LA FUENTE que lideró el
+    // barrido, así que solo vale si esa fuente enseña el mismo catálogo que el
+    // portal. El HTML lo es por definición; de la API no lo sabemos todavía, y
+    // si resultara ser un subconjunto, un barrido "al 100%" apagaría anuncios
+    // vivos en masa. Hasta comparar los totales de las dos en el panel, la API
+    // descubre altas y las bajas las sigue firmando el HTML (ML_API_BAJAS=1).
+    if (fuente.permiteBajas) {
+      delisted = await markDelisted(client, target, seen, scrapedAt)
+    } else {
+      reason = reason ?? `barrido por ${fuente.nombre}: altas sí, bajas no (activar con ML_API_BAJAS=1 tras comparar totales)`
+    }
   }
 
   await updateTargetStats(client, target.id, { scrapedAt, completed, listingCount: seen.size, portalTotal, reason })
@@ -589,7 +617,7 @@ export async function discoverTarget(client, target, deps = {}) {
     await client.query(`UPDATE scrape_targets_cl SET force_refetch = false, updated_at = now() WHERE id = $1`, [target.id])
   }
 
-  return { target_id: target.id, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, force_refetch: forceRefetch, completed, exhaustive, capped: base.capped, blocked: false, reason }
+  return { target_id: target.id, fuente: fuente.nombre, pages, seen: seen.size, enqueued, delisted, portal_total: portalTotal, results_limit: resultsLimit, bands: bandsUsed, force_refetch: forceRefetch, completed, exhaustive, capped: base.capped, blocked: false, reason }
 }
 
 /**
@@ -618,35 +646,32 @@ export async function discoverTarget(client, target, deps = {}) {
  */
 export async function scanHeadTarget(client, target, deps = {}) {
   const {
-    fetch = fetchHtmlResilient,
-    parseList = parseListPage,
-    parseMeta = parseListMeta,
     enqueueDetail = async () => {},
     maxPages = 3,
     politenessMs = 1500,
     sleep = SLEEP,
     includeDevelopments = false,
   } = deps
+  const fuente = fuenteDe(deps)
 
   const slug = comunaSlug(target.comuna_name)
   const rslug = regionSlug(target.region)
   let pages = 0, enqueued = 0, portalTotal = null, reason = null
 
   for (let page = 1; page <= maxPages; page++) {
-    const url = buildListUrl({
-      comunaSlug: slug, regionSlug: rslug, operation: target.operation,
-      propertyType: target.property_type, offset: (page - 1) * PAGE_SIZE, sortRecent: true,
+    const res = await fuente.pedirPagina({
+      target, slug, rslug,
+      offset: (page - 1) * fuente.tamanoPagina, sortRecent: true,
     })
-    const res = await fetch(url, { profile: 'portalinmobiliario' })
     if (!res.ok) {
       const is404 = res.status === 404 || /\b404\b/.test(res.reason ?? '')
       reason = is404 ? 'sin inventario (404)' : `fetch p${page}: ${res.reason ?? 'fallo'}`
       break
     }
     pages++
-    if (page === 1) portalTotal = parseMeta(res.html).total
+    if (page === 1) portalTotal = res.meta?.total ?? null
 
-    const listings = parseList(res.html)
+    const listings = res.listings ?? []
     const usable = includeDevelopments ? listings : listings.filter((l) => !l.is_development)
     if (usable.length === 0) break
 
@@ -662,7 +687,7 @@ export async function scanHeadTarget(client, target, deps = {}) {
     if (page < maxPages) await sleep(politenessMs)
   }
 
-  return { target_id: target.id, pages, enqueued, portal_total: portalTotal, reason }
+  return { target_id: target.id, fuente: fuente.nombre, pages, enqueued, portal_total: portalTotal, reason }
 }
 
 /**

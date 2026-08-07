@@ -36,12 +36,17 @@ type Diagnostico = {
   vias: Via[]; salida?: Salida; veredicto: string
 }
 type Pulse = { change_type: string; count: number }
+// De dónde lee el LISTADO el barrido: la API oficial de Mercado Libre o el HTML
+// del portal. Es el dato que decide qué consejo tiene sentido dar cuando algo
+// está bloqueado (ver el banner rojo más abajo).
+type FuenteListado = { api_ml: boolean; api_ml_da_de_baja: boolean; activa: string }
 type Health = {
   success: boolean; generated_at: string; totals: Totals
   targets: Target[]; activity_24h: Pulse[]
   activity_1h?: Pulse[]
   activity_timeline?: { hora: string; change_type: string; count: number }[]
   live_probed?: boolean
+  fuente_listado?: FuenteListado
 }
 
 function ago(iso: string | null): string {
@@ -188,7 +193,22 @@ export default function AnunciosHealthClient() {
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> en vivo
                 </span>
               </h1>
-              <p className="text-[11px] text-slate-500 mt-1">Se actualiza solo cada {POLL_MS / 1000}s · última lectura {data ? ago(data.generated_at) : '—'}</p>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Se actualiza solo cada {POLL_MS / 1000}s · última lectura {data ? ago(data.generated_at) : '—'}
+                {/* Por dónde entra el listado. Sin este dato, un objetivo en rojo
+                    no dice si toca revisar el proxy o si es que la API oficial
+                    todavía no está puesta — que son dos arreglos distintos. */}
+                {data?.fuente_listado ? (
+                  <span title={data.fuente_listado.api_ml
+                    ? `El listado se lee por la API oficial de Mercado Libre, con el HTML de respaldo. Bajas por API: ${data.fuente_listado.api_ml_da_de_baja ? 'sí' : 'no (las firma el HTML)'}.`
+                    : 'El listado se lee del HTML de Portal Inmobiliario, que es lo que Mercado Libre bloquea por reputación de IP. Ver docs/ANUNCIOS-CL-FUENTE-API.md.'}>
+                    {' · listado por '}
+                    <span className={data.fuente_listado.api_ml ? 'text-emerald-400' : 'text-amber-400'}>
+                      {data.fuente_listado.api_ml ? 'API de Mercado Libre' : 'HTML del portal'}
+                    </span>
+                  </span>
+                ) : null}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -289,6 +309,12 @@ export default function AnunciosHealthClient() {
                 // pueden ser de hace horas.
                 const antibotEnVivo = diag?.vias?.some(v => v.via === 'evomi' && v.bloqueo_antibot) ?? false
                 const noRota = diag?.salida?.rota === false
+                // El bloqueo antibot es por REPUTACIÓN DE IP y va contra el
+                // buscador HTML. Mientras el listado se lea por ahí, cambiar de
+                // pool o de geo solo lo aplaza unos días — está comprobado. El
+                // consejo útil es dejar de usar esa puerta: la API oficial de
+                // Mercado Libre sirve el mismo listado y no filtra por IP.
+                const porApi = data.fuente_listado?.api_ml ?? false
                 return (
                   <div className="rounded-xl border px-4 py-3 mb-4 flex items-start gap-3 text-sm bg-rose-500/10 border-rose-500/30 text-rose-200">
                     <XCircle size={18} className="mt-0.5 shrink-0" />
@@ -301,13 +327,22 @@ export default function AnunciosHealthClient() {
                         <div className="text-[12px] text-rose-200/80 mt-1">
                           Mercado Libre está devolviendo su pantalla de verificación de <span className="font-semibold">tráfico sospechoso</span>
                           {porAntibot.length > 0 ? ` en ${porAntibot.length} de ellos` : ''}:
-                          contesta HTTP 200 pero sin un solo anuncio. No es el proxy ni el parser — es la reputación de la IP de salida.
-                          {noRota ? (
-                            <> Y el proxy <span className="font-semibold">no está rotando de IP</span> ({diag?.salida?.ips_evomi[0]}), así que los reintentos repiten la misma
-                            salida señalada y no se destraban solos: quita la sesión pegajosa del usuario/puerto en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.</>
+                          contesta HTTP 200 pero sin un solo anuncio. No es el proxy ni el parser — es la reputación de la IP de salida,
+                          y solo afecta al <span className="font-semibold">buscador</span>: las fichas se bajan con normalidad.
+                          {porApi ? (
+                            <> La API oficial de Mercado Libre ya está configurada, así que el listado se lee por ahí y esto debería
+                            destrabarse solo en el próximo ciclo (≤15 min). Si sigue en rojo, el problema es otro: pulsa
+                            <span className="font-semibold"> Diagnosticar red</span>.</>
                           ) : (
-                            <> Cada reintento sale por otra IP residencial (se reintentan solos cada 15 min, sin consumir cadencia);
-                            si no se destraba, hay que cambiar de pool o de geo en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.</>
+                            <> Cambiar de pool o de geo solo lo aplaza: mientras el listado se lea del HTML, la IP que toque acabará
+                            señalada otra vez. El arreglo de fondo es leer el listado por la <span className="font-semibold">API oficial
+                            de Mercado Libre</span> — se activa creando una aplicación gratis en developers.mercadolibre.cl y poniendo
+                            su <span className="font-semibold">ML_CLIENT_ID</span> y <span className="font-semibold">ML_CLIENT_SECRET</span> en
+                            el .env (ver docs/ANUNCIOS-CL-FUENTE-API.md).
+                            {noRota ? (
+                              <> Mientras tanto, el proxy <span className="font-semibold">no está rotando de IP</span> ({diag?.salida?.ips_evomi[0]}):
+                              quita la sesión pegajosa del usuario/puerto en <span className="font-semibold">Configuración → Proxy (Evomi CL)</span>.</>
+                            ) : null}</>
                           )}
                         </div>
                       ) : (
